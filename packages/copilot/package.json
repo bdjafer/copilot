@@ -3,11 +3,30 @@
   "version": "0.0.0",
   "license": "Apache-2.0",
   "author": "Astrale",
+  "files": [
+    "dist",
+    "src"
+  ],
   "type": "module",
+  "sideEffects": false,
   "exports": {
-    ".": "./src/index.ts"
+    ".": "./src/index.ts",
+    "./testing": "./src/testing/index.ts"
+  },
+  "publishConfig": {
+    "exports": {
+      ".": {
+        "types": "./dist/index.d.ts",
+        "import": "./dist/index.js"
+      },
+      "./testing": {
+        "types": "./dist/testing.d.ts",
+        "import": "./dist/testing.js"
+      }
+    }
   },
   "scripts": {
+    "build": "BUILD_TARGET=iife vite build && vite build",
     "typecheck": "tsgo --noEmit",
     "lint": "oxlint .",
     "test": "vitest run",
@@ -15,11 +34,14 @@
   },
   "dependencies": {
     "@ai-sdk/anthropic": "^4.0.25",
+    "@standard-schema/spec": "^1.1.0",
     "ai": "^7.0.44",
+    "nanoid": "^6.0.0",
     "zod": "^4.4.3"
   },
   "devDependencies": {
     "happy-dom": "^20.11.1",
+    "vite": "^8.2.0",
     "vitest": "^4.1.10"
   }
 }
