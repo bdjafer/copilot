@@ -34,11 +34,12 @@ Out of scope (for now, explicitly deferred): protocol to local coding agents
 
 ## 1. The experience (walkthrough)
 
-1. On any page, hover an element (or select text) and press the trigger key (default:
-   `A`, configurable — only fires outside editable fields). The engine continuously
-   tracks the last-hovered element (`mouseover`); on trigger it draws a highlight
-   outline on that element so you can confirm the target (an active text selection wins
-   over hover and creates a text-mode thread).
+1. On any page, press a mode key — the extension registers two **modes** on the same
+   engine: `C` → **comment**, `A` → **ask** (only fires outside editable fields). The
+   page enters *placement mode*: elements highlight under the cursor; click to place
+   (Esc cancels). A quicker variant (configurable per mode): press while hovering to
+   place directly on the last-hovered element. An active text selection wins and
+   creates a text-mode thread.
 2. A badge is pinned to the element and a small popover composer opens. Type your
    comment, press **Send** — or dismiss (nothing is persisted until Send; a thread is
    created atomically with its first comment, an empty thread cannot exist).
@@ -202,12 +203,20 @@ a human judgment; deriving orphanhood makes recovery free). The engine keeps try
   position + listed in the panel's "unanchored" section — a copilot reply to a
   permanently-gone element is never invisible. The panel ships with the extension shell
   (M3), not as a later nice-to-have.
-- Keyboard trigger: capture-phase `keydown` on `window` from `document_start`; use
-  `event.composedPath()[0]` (not the retargeted `event.target`) to detect the real focus
-  element, and ignore plain-letter triggers when it is `input`/`textarea`/
-  `contenteditable`. A secondary `chrome.commands` shortcut (modifier combo — commands
-  can't bind a bare letter, and they fire in the SW so they round-trip to the content
-  script, losing nothing since hover state lives there) as user-remappable backup.
+- **Trigger system — modes, fully overridable.** The engine is configured with a list
+  of *modes*: `{ kind, trigger, badge? }`. `kind` is an **opaque consumer-defined
+  string** stamped on created threads (§3.5) — the engine attaches zero behavior to it;
+  the host does (that's how one engine powers "comment", "ask", or anything else).
+  `trigger` strategies: `{ key, interaction: 'pick' }` (press key → placement mode with
+  live element highlight → click to place, Esc cancels — the default) or
+  `'hover'` (press while hovering places on the last-hovered element), or `false`
+  (no built-in trigger — the host calls `engine.startPlacement(kind)` /
+  `engine.createThread(...)` programmatically). Key handling: capture-phase `keydown`
+  on `window` from `document_start`; use `event.composedPath()[0]` (not the retargeted
+  `event.target`) to detect the real focus element, and ignore plain-letter triggers
+  when it is `input`/`textarea`/`contenteditable`. A secondary `chrome.commands`
+  shortcut (modifier combo — commands can't bind a bare letter; fires in the SW and
+  round-trips to the content script) as user-remappable backup.
 
 ### 3.4 Canonical capture
 
@@ -242,6 +251,8 @@ interface Thread {
   id: string;                 // nanoid
   v: 1;
   pageKey: string;
+  kind: string;               // consumer-defined mode discriminator ('comment', 'ask', …)
+                              // opaque to comment-core; hosts key behavior on it
   anchor: AnchorDescriptor;
   capture: ElementCapture;
   status: 'open' | 'resolved';       // the ONLY lifecycle dimension
@@ -327,7 +338,14 @@ The engine is a **page-level view** over the shared `CommentStore`; the store is
 source of truth.
 
 ```ts
-const engine = createCommentEngine({ store, pageKey?, trigger?: { key: 'a' } });
+const engine = createCommentEngine({
+  store, pageKey?,
+  modes: [                                   // default: [{ kind: 'comment', trigger: { key: 'c' } }]
+    { kind: 'comment', trigger: { key: 'c' } },
+    { kind: 'ask',     trigger: { key: 'a' }, badge: { icon: '?' } },
+  ],
+});
+engine.startPlacement(kind): void;           // programmatic entry — same flow as a key trigger
 
 // Domain hooks — everything a consumer needs to build on top:
 engine.on('thread:create',  ({ thread, comment }) => {});   // Send (thread + first comment)
@@ -488,11 +506,19 @@ API key, model, system prompt (textarea), tool toggles, trigger key. Stored in
 
 The only place where the two modules meet:
 
+- **Two entrypoints, one engine**: the extension registers two modes —
+  `comment` (`C`) and `ask` (`A`). Both leave the same kind of anchored trace via the
+  engine; **the difference is entirely bridge-side behavior keyed on `thread.kind`**:
+  `comment` runs the copilot as a discussion participant (review/feedback prompt),
+  `ask` runs it as a question-answerer/actor (different system prompt, possibly
+  different tool set or model tier). Adding a third behavior later = one more mode
+  entry + one more bridge branch; `comment-core` doesn't change.
 - **Hook → trigger**: content script listens to `thread:create` / `thread:reply`
   (human-authored comments only — copilot replies must not re-trigger the copilot) and
-  sends `{ threadId, pageKey }` to the SW over `@webext-core/messaging`. The SW builds
-  the run input from `capture` + the full comment list (stateless per run — submit and
-  follow-up share one code path) and calls `copilot.trigger({ input, context })`.
+  sends `{ threadId, kind, pageKey }` to the SW over `@webext-core/messaging`. The SW
+  builds the run input from `capture` + the full comment list (stateless per run —
+  submit and follow-up share one code path) and calls
+  `copilot.trigger({ input, context })` with the kind-specific config.
 - **Tools registration** (SW side, wrapping the `CommentStore` + content-script RPC):
 
   | Tool | Runs in | Notes |
@@ -562,5 +588,6 @@ The only place where the two modules meet:
 - **Trigger loops** — the bridge must only trigger on *human* comments; the author field
   is the guard. Watch for other feedback loops as tools grow (e.g. a tool that writes
   comments).
-- To decide with user: default trigger key; text-selection mode in v1 or element-only;
-  default model (`claude-opus-5` quality-first vs `claude-haiku-4-5` latency-first).
+- To decide with user: text-selection mode in v1 or element-only; default model
+  (`claude-opus-5` quality-first vs `claude-haiku-4-5` latency-first); exact `ask`-mode
+  behavior (answer inline in thread vs modal vs page action).
