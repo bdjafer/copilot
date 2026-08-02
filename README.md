@@ -1,12 +1,18 @@
 # exp-spec
 
-Experimental Chrome extension for annotating spec pages (and any HTML page) with AI-assisted markers.
+Experimental Chrome extension for commenting on spec pages (and any HTML page) with an
+AI copilot replying in threads.
 
-Two decoupled modules:
+Two fully independent modules — each usable as a standalone library:
 
-1. **Marker engine** — drop persistent, re-anchorable markers on any element of any web page. Framework-agnostic, usable outside the extension.
-2. **Browser copilot** — a small LLM agent (in the extension) triggered by markers, with tools to read the page, manage markers, and reply in threads.
+1. **Comment engine** (`comment-core` + `comment-ui`) — persistent, re-anchorable
+   comment threads on any element of any web page: flat replies, resolve/reopen
+   lifecycle, robust to dynamic DOM. No extension, no AI required.
+2. **Copilot** (`copilot`) — a generic browser LLM agent runtime: trigger/listen API,
+   host-registered tools, background run queue. Zero knowledge of comments.
 
-Status: planning. See `PLAN.md` (on the plan branch / PR) for the full design.
+The MV3 extension is the only bridge between the two.
+
+Status: planning. See `PLAN.md` (plan branch / PR #1) for the full design.
 
 Internal tool — not intended for Chrome Web Store publication.

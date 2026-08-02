@@ -1,26 +1,31 @@
 # exp-spec — Plan
 
-> Status: **v1 — ready for review.** Technology choices are grounded in a 2026 survey of
-> the annotation/anchoring OSS landscape, Chrome built-in AI status, and MV3 architecture
-> (sources in PR description).
+> Status: **v2 — ready for review.** v2 renames the domain to **comment threads**
+> (`comment-core`), adopts the thread lifecycle best practices surveyed across Google
+> Docs / Figma / GitHub / Liveblocks / Velt / TipTap / CKEditor, and makes the copilot a
+> **fully independent module** with a generic trigger/listen API — the extension is the
+> only bridge. Technology choices are grounded in 2026 surveys of the annotation OSS
+> landscape, comment-thread domain models, Chrome built-in AI status, and MV3
+> architecture (sources in PR description).
 
 ## 0. Context & goals
 
 Internal Chrome extension (never published, minimal security constraints) to improve the
-experience of reviewing/authoring specs in the browser — but built as **two decoupled,
-independently testable modules**:
+experience of reviewing/authoring specs in the browser — built as **two independent
+modules, each usable as a standalone open-source-style library**:
 
-1. **Marker engine** (`marker-core`) — drop a persistent "marker" on any element of any
-   HTML page via a keyboard trigger, with a composer popover, robust re-anchoring across
-   reloads and dynamic DOM, and a clean hook-based API. Fully agnostic: usable via a plain
-   `<script>` tag on any page, no extension required.
-2. **Browser copilot** (`copilot`) — a small LLM agent running in the extension. When a
-   marker is submitted, the copilot receives it as context, runs a tool-using loop in the
-   background (survives page refresh), and can reply in the marker's thread, inspect the
-   page, list/read markers, or surface a modal to the user.
+1. **Comment engine** (`comment-core` + `comment-ui`) — drop a persistent **comment
+   thread** on any element of any HTML page via a keyboard trigger: composer popover,
+   flat replies, resolve/reopen lifecycle, robust re-anchoring across reloads and
+   dynamic DOM, clean hook-based API. Fully agnostic: usable via a plain `<script>` tag
+   on any page, no extension, no AI.
+2. **Copilot** (`copilot`) — a small, generic LLM agent runtime for the browser:
+   trigger/listen API, host-registered tools, background job queue. **Zero knowledge of
+   comments** — it could power any other feature.
 
-Module 2 depends on Module 1 **only through its public hooks and the shared
-`MarkerStore` interface** (§3.6–3.7). Module 1 has zero knowledge of the copilot.
+**The two modules never import each other.** The `extension` package is the only bridge:
+it forwards comment hooks into copilot triggers, registers comment-flavored tools on the
+copilot, and writes copilot output back into threads.
 
 Out of scope (for now, explicitly deferred): protocol to local coding agents
 (Claude Code / Codex), multi-user sync, auth, Chrome Web Store hardening.
@@ -33,18 +38,19 @@ Out of scope (for now, explicitly deferred): protocol to local coding agents
    `A`, configurable — only fires outside editable fields). The engine continuously
    tracks the last-hovered element (`mouseover`); on trigger it draws a highlight
    outline on that element so you can confirm the target (an active text selection wins
-   over hover and creates a text-mode marker).
-2. A badge is pinned to the element and a small popover composer opens. Type a note
-   (optional), press **Send** — or dismiss (nothing is persisted until Send).
-3. On send, the marker is persisted and the `marker:submit` hook fires. In the extension,
-   this enqueues a copilot job. The badge shows a "processing" state.
-4. You can navigate away, refresh, close the tab. The job keeps processing in the
-   background. When you come back to the page, the marker re-anchors to its element
-   (even if the element was removed and re-added, e.g. a popover) and shows the copilot's
-   reply as a thread under the marker.
-5. Clicking a badge opens the thread: read replies, send follow-ups (each follow-up
-   enqueues a new copilot job with the full thread + capture as context), delete the
-   marker. Deleting removes badge + record everywhere and cancels any in-flight job.
+   over hover and creates a text-mode thread).
+2. A badge is pinned to the element and a small popover composer opens. Type your
+   comment, press **Send** — or dismiss (nothing is persisted until Send; a thread is
+   created atomically with its first comment, an empty thread cannot exist).
+3. On send, the thread is persisted and the `thread:create` hook fires. In the
+   extension, this triggers a copilot run. The badge shows a "copilot thinking" chip.
+4. You can navigate away, refresh, close the tab. The run keeps processing in the
+   background. When you come back, the thread re-anchors to its element (even if it was
+   removed and re-added, e.g. a popover) and shows the copilot's reply in the thread.
+5. Clicking a badge opens the thread: read, **reply** (each human reply triggers a new
+   copilot run with the full thread as context), **resolve** when done, **reopen** a
+   resolved thread (explicitly, or implicitly by replying to it), or **delete**.
+   Deleting removes badge + record everywhere and cancels any in-flight run.
 
 ---
 
@@ -56,34 +62,43 @@ oxfmt, tsgo; no prettier/eslint/tsc).
 ```
 exp-spec/
   packages/
-    marker-core/     # headless engine: anchoring, storage, lifecycle, events (no UI, no extension APIs)
-    marker-ui/       # badges + composer popover + thread panel, rendered in a shadow root
-    copilot/         # agent runtime: loop, tools registry, providers, job queue (no DOM access)
-    extension/       # MV3 extension wiring everything (WXT)
+    comment-core/    # headless engine: anchoring, Thread/Comment domain, store, lifecycle, hooks
+    comment-ui/      # badges + composer popover + thread panel, rendered in a shadow root
+    copilot/         # generic agent runtime: trigger/listen, loop, tool registry, run queue
+    extension/       # MV3 extension — THE bridge wiring the two modules (WXT)
   apps/
-    demo/            # static test pages loading marker-core+ui via <script> — no extension needed
+    demo/            # static test pages loading comment-core+ui via <script> — no extension needed
   bench/             # agent-browser scenarios + site corpus for anchoring robustness
 ```
 
-Dependency rule: `extension → {marker-core, marker-ui, copilot}`;
-`marker-ui → marker-core`; `copilot → marker-core` (types + `MarkerStore` only). Nothing
-depends on `extension`.
+Dependency rule — the load-bearing one:
 
-Build discipline: `marker-core`/`marker-ui`/`copilot` never import `chrome.*` or `wxt/*`
-— storage, messaging, and transport are injected interfaces. The extension supplies
-chrome-backed adapters; the demo page supplies in-memory/localStorage ones. Core packages
-build with Vite lib mode (ESM + IIFE) so the demo loads them via `<script src>`.
+```
+extension → { comment-core, comment-ui, copilot }
+comment-ui → comment-core
+copilot    → (nothing internal)        ← NO import of comment-core, ever
+comment-core → (nothing internal)      ← NO import of copilot, ever
+```
+
+Both `comment-core` and `copilot` must make sense published standalone on npm. Anything
+that needs both sides lives in `extension` (or the demo's tiny glue).
+
+Build discipline: `comment-core`/`comment-ui`/`copilot` never import `chrome.*` or
+`wxt/*` — storage, messaging, and transport are injected interfaces. The extension
+supplies chrome-backed adapters; the demo page supplies in-memory/localStorage ones.
+Core packages build with Vite lib mode (ESM + IIFE) so the demo loads them via
+`<script src>`.
 
 ---
 
-## 3. Module 1 — Marker engine
+## 3. Module 1 — Comment engine (`comment-core`)
 
 ### 3.1 Anchoring model
 
-The hard problem: re-attach a marker to "the same element" after reload, DOM mutation, or
+The hard problem: re-attach a thread to "the same element" after reload, DOM mutation, or
 element removal/re-insertion. Research verdict (2026 survey): **text anchoring is solved
 OSS (reuse), element anchoring is not (rebuild)**. No single selector survives all of
-that, so each marker stores an **ordered fallback chain of selectors plus a fingerprint**
+that, so each thread stores an **ordered fallback chain of selectors plus a fingerprint**
 — the redundant-selector pattern proven by Chrome DevTools Recorder / `@puppeteer/replay`
 (store many independent locators, race them at resolve time), with Playwright's priority
 order (user-facing semantics — role + accessible name, `data-testid`, visible text —
@@ -113,14 +128,14 @@ interface ElementFingerprint {
 }
 ```
 
-**Resolution** (`resolve(anchor): { element, confidence } | null`): resolve selectors
-independently; every candidate is **verified against the fingerprint** with a similarity
-score (tag match required; semantic signals — role/name/data-* — weighted above
-classes/structure; text digest as final verifier). Accept above a threshold, else
+**Resolution** (`resolveAnchor(anchor): { element, confidence } | null`): resolve
+selectors independently; every candidate is **verified against the fingerprint** with a
+similarity score (tag match required; semantic signals — role/name/data-* — weighted
+above classes/structure; text digest as final verifier). Accept above a threshold, else
 continue; final fallback is a fingerprint scan over a bounded candidate set (elements of
 same tag). This mirrors Hypothesis's `maybeAssertQuote` trick: **never let a
 stale-but-valid CSS path silently attach to the wrong element** — cheap selectors are
-always checked against ground truth. Confidence is stored on the live marker so the UI
+always checked against ground truth. Confidence is exposed on the live thread so the UI
 can flag "approximately re-anchored".
 
 **Reused bricks** (all permissive licenses, content-script safe):
@@ -136,31 +151,32 @@ can flag "approximately re-anchored".
 - Storage format: **our plain TS shapes, version-tagged** (`v: 1`). The selector
   *vocabulary* borrows W3C Web Annotation concepts (quote/position/css selectors,
   redundant selector arrays), but serializing to the actual W3C JSON-LD model is pure
-  ceremony for an internal tool — skipped; a W3C exporter can be added later if interop
+  ceremony for an internal tool — skipped; an exporter can be added later if interop
   ever matters.
 
-### 3.2 Lifecycle & dynamic DOM (the key differentiator)
+### 3.2 Anchor lifecycle & dynamic DOM (the key differentiator)
 
-Markers are state machines: `anchored ⇄ orphaned`, plus `detached` (persisted but page
-not open). The engine keeps trying:
+Live threads are **`anchored ⇄ orphaned`** — a render-time condition, **never persisted**
+(CKEditor's insight: *unlinked ≠ resolved* — content removal is reversible, resolution is
+a human judgment; deriving orphanhood makes recovery free). The engine keeps trying:
 
 - One shared `MutationObserver` (subtree, childList + attributes) with debounced batches
   (`requestIdleCallback`, coalesced ~100 ms).
-- On nodes **removed**: any marker whose element is no longer connected → `orphaned`
-  (badge hidden, record kept).
-- On nodes **added**: re-run `resolve()` for all orphaned markers scoped to the added
-  subtrees first (cheap), full-document retry as idle fallback.
-- This handles the canonical hard case: marker placed on a popover's content → popover
-  closes (element removed, marker orphans) → popover reopens (subtree re-added, marker
+- On nodes **removed**: any thread whose element is no longer connected → orphaned
+  (badge dimmed/docked, record untouched).
+- On nodes **added**: re-run `resolveAnchor()` for all orphaned threads scoped to the
+  added subtrees first (cheap), full-document retry as idle fallback.
+- This handles the canonical hard case: thread placed on a popover's content → popover
+  closes (element removed, thread orphans) → popover reopens (subtree re-added, thread
   re-anchors and the badge reappears).
 - SPA navigation: wrap `history.pushState/replaceState` + `popstate` + `hashchange`;
-  on URL-key change, unload/load the page's marker set.
+  on URL-key change, unload/load the page's thread set.
 - Page key: configurable `pageKey(url)` normalizer; default `origin + pathname + query`
   **minus a denylist** of volatile params (`utm_*`, gclid, session/token-looking params)
   — internal tools routinely address documents via `?id=…`, so stripping the whole query
-  would merge distinct documents into one marker set. Hash stripped by default.
+  would merge distinct documents into one thread set. Hash stripped by default.
 
-### 3.3 Rendering (badges & popover)
+### 3.3 Rendering (badges, composer, thread panel)
 
 - All UI lives in **one shadow root** appended to `document.documentElement` (open root
   for debuggability; style fully isolated, `pointer-events: none` layer with
@@ -171,30 +187,33 @@ not open). The engine keeps trying:
   collisions). `autoUpdate` already composes the loop we'd hand-roll: capture-phase
   passive scroll listeners (catches nested scrollers), `resize`, `ResizeObserver`, and an
   `animationFrame` mode for elements moved by page JS. `IntersectionObserver` per anchor
-  to cheaply skip off-screen badges. (Note: CSS Anchor Positioning is Baseline 2026 but
+  to cheaply skip off-screen badges. (CSS Anchor Positioning is Baseline 2026 but
   `anchor-name` is tree-scoped — a shadow-root element can't anchor to an arbitrary page
-  element, so it doesn't fit; usable later for popovers anchored to our own badges.)
+  element, so it doesn't fit here.)
 - The composer uses the **`popover` attribute** (top layer — escapes every page stacking
   context, no z-index wars). Keyboard/input events bubble out of shadow roots even with
   retargeting, so the composer stops propagation at the shadow boundary (WXT's
   `isolateEvents` in the extension; manual `stopPropagation` in the standalone build).
-- Composer: minimal — textarea, Send, Dismiss; thread panel on badge click. Vanilla TS,
-  framework-free, to keep `marker-ui` embeddable anywhere.
+- Composer + thread panel: minimal — textarea, Send, Dismiss; thread view on badge click
+  with replies, Resolve/Reopen, Delete. Vanilla TS, framework-free, embeddable anywhere.
+- **Resolved threads**: badge hidden from the page by default (Figma/Docs behavior);
+  still listed in the page-corner **thread panel** ("resolved" section) where they can
+  be reopened. **Orphaned threads stay reachable**: dimmed badge docked at last-known
+  position + listed in the panel's "unanchored" section — a copilot reply to a
+  permanently-gone element is never invisible. The panel ships with the extension shell
+  (M3), not as a later nice-to-have.
 - Keyboard trigger: capture-phase `keydown` on `window` from `document_start`; use
   `event.composedPath()[0]` (not the retargeted `event.target`) to detect the real focus
   element, and ignore plain-letter triggers when it is `input`/`textarea`/
   `contenteditable`. A secondary `chrome.commands` shortcut (modifier combo — commands
   can't bind a bare letter, and they fire in the SW so they round-trip to the content
   script, losing nothing since hover state lives there) as user-remappable backup.
-- **Orphaned markers stay reachable**: an orphan is shown as a dimmed badge docked at
-  its last-known position (or in the page-corner marker panel), so a copilot reply to a
-  permanently-gone element is never invisible. The panel (list of all markers on the
-  page, incl. orphans) ships with the extension shell, not as a later nice-to-have.
 
 ### 3.4 Canonical capture
 
-At creation time the marker snapshots what it points at, so the copilot (and the user)
-always has context even if the element is gone forever:
+At creation time the thread snapshots what it points at, so any consumer (and the user)
+always has context even if the element is gone forever (Google Docs'
+`quotedFileContent` / "original content deleted" pattern):
 
 ```ts
 interface ElementCapture {
@@ -207,38 +226,84 @@ interface ElementCapture {
 }
 ```
 
-### 3.5 Marker record & thread
+### 3.5 Domain model — Thread & Comment
+
+Survey verdict: **thread-as-container wins**. Every modern comment SDK (GitHub review
+threads, Liveblocks, Velt, TipTap, CKEditor) models a `Thread` entity owning anchor +
+lifecycle, containing a **flat** list of comments; only the two oldest APIs (Google
+Drive, Figma) use comment-with-replies and both pay for it (Google structurally cannot
+delete the first message without killing the thread). Nobody nests replies. Resolution
+is a **flag + who/when**, never a status enum.
 
 ```ts
-interface MarkerRecord {
+type Author = 'user' | 'copilot';
+
+interface Thread {
   id: string;                 // nanoid
   v: 1;
   pageKey: string;
   anchor: AnchorDescriptor;
   capture: ElementCapture;
-  note: string;               // user's initial text ('' allowed)
-  thread: ThreadMessage[];    // { id, role: 'user'|'copilot'|'system', text, at }
-  status: 'submitted' | 'processing' | 'replied' | 'error';  // composer drafts are in-memory only
+  status: 'open' | 'resolved';       // the ONLY lifecycle dimension
+  resolvedAt: string | null;         // set together with status…
+  resolvedBy: Author | null;         // …and nulled together on reopen (CKEditor contract)
   createdAt: string;
   updatedAt: string;
+  // NO copilot state, NO unread, NO orphaned flag — orthogonal or derived at render time
+}
+
+interface Comment {
+  id: string;
+  threadId: string;
+  author: Author;
+  body: string;
+  createdAt: string;
+  editedAt: string | null;    // edited = timestamp; no placeholders needed single-user
 }
 ```
 
-### 3.6 Storage abstraction
+**Thread state machine:**
 
-`marker-core` only sees a store interface; reactivity is part of the contract so
-cross-tab and background updates flow to the UI. The same interface is used by the
-page-side engine **and** by the copilot in the service worker — it is the real seam
-between the two modules:
+| Transition | Trigger | Actor |
+|---|---|---|
+| *(created)* `→ open` | Send in composer — thread + first comment created **atomically** | user |
+| `open → resolved` | explicit Resolve | user (the copilot may *suggest*, never execute) |
+| `resolved → open` | explicit Reopen, **or** a *human* reply into a resolved thread (auto-reopen) | user only |
+| `* → (gone)` | Delete thread (hard), or last comment deleted (auto-GC — Liveblocks rule) | user |
+
+**Edge-case decisions** (from the survey — these are the non-obvious ones):
+
+| Case | Behavior | Rationale |
+|---|---|---|
+| Human replies to a resolved thread | **auto-reopen** (clear `resolvedAt`/`By`) | a lone user replying to their own resolved thread unambiguously means "not done" (Google models reopen as a reply-carried action) |
+| **Copilot** replies to a resolved thread | reply lands, thread **stays resolved** | GitHub semantics: a machine never flips a state the human set — a slow AI reply must not resurrect a thread resolved mid-flight |
+| Delete the first comment | allowed; thread, anchor, replies survive | the payoff of thread-as-container |
+| Delete the last remaining comment | thread auto-deletes | an empty thread is an invariant violation, not a state |
+| Delete thread while copilot is processing | run cancelled; writers guard against dead threads | never resurrect a deleted thread to receive an AI reply |
+| Resolve while copilot is processing | run finishes; reply posts **without** reopening | don't waste paid work; the stay-resolved rule makes it harmless |
+| Anchor element disappears | no DB write — render-time orphan presentation, auto-reattach when it returns | unlinked ≠ resolved |
+| Comment edits | in-place, `editedAt` stamped; hard delete (no tombstones) | placeholders preserve context *between people*; single-user tool doesn't need them — Liveblocks-style `deletedAt` soft delete is the upgrade path |
+
+Auto-reopen lives in `comment-core`'s domain helper (`appendComment(threadId, {author,
+body})` applies the author-aware rule), so every consumer gets the semantics for free.
+
+### 3.6 Store abstraction
+
+`comment-core` only sees a store interface; reactivity is part of the contract so
+cross-tab and background updates flow to the UI. Threads and comments are stored
+separately (comments keyed by `threadId`) so a comment write never rewrites the thread:
 
 ```ts
-interface MarkerStore {
-  get(id: string): Promise<MarkerRecord | null>;
-  list(pageKey: string): Promise<MarkerRecord[]>;
-  listAll(): Promise<MarkerRecord[]>;                 // copilot: cross-page view
-  put(record: MarkerRecord): Promise<void>;
-  delete(id: string): Promise<void>;
-  subscribe(pageKey: string | null, cb: (records: MarkerRecord[]) => void): () => void;
+interface CommentStore {
+  getThread(id: string): Promise<Thread | null>;
+  listThreads(pageKey: string): Promise<Thread[]>;
+  listAllThreads(): Promise<Thread[]>;
+  putThread(t: Thread): Promise<void>;
+  deleteThread(id: string): Promise<void>;          // cascades comments
+  listComments(threadId: string): Promise<Comment[]>;
+  putComment(c: Comment): Promise<void>;
+  deleteComment(id: string): Promise<void>;
+  subscribe(pageKey: string | null, cb: () => void): () => void;
 }
 ```
 
@@ -254,68 +319,120 @@ Shipped implementations:
   owned by the SW** (4.4.x runs fine in SWs), fronted by `@webext-core/proxy-service`
   RPC — at that point content scripts must go through the SW, because IndexedDB in a
   content script hits the **host page's origin** (per-site quota, eviction, "Clear site
-  data"), a documented MV3 trap. Same `MarkerStore` interface; the swap is invisible to
-  both modules.
+  data"), a documented MV3 trap. Same `CommentStore` interface; the swap is invisible.
 
-### 3.7 Public API — and the exact copilot seam
+### 3.7 Public API & hooks
 
-The engine is a **page-level view** over the shared `MarkerStore`; the store is the
-source of truth. Two contracts, cleanly split:
+The engine is a **page-level view** over the shared `CommentStore`; the store is the
+source of truth.
 
 ```ts
-// Page side (content script / demo page)
-const engine = createMarkerEngine({ store, pageKey?, trigger?: { key: 'a' } });
+const engine = createCommentEngine({ store, pageKey?, trigger?: { key: 'a' } });
 
-engine.on('marker:submit',   ({ marker }) => {});          // initial Send
-engine.on('marker:followup', ({ marker, message }) => {}); // new user message in a thread
-engine.on('marker:anchored' | 'marker:orphaned' | 'marker:click' | 'marker:deleted', ...);
+// Domain hooks — everything a consumer needs to build on top:
+engine.on('thread:create',  ({ thread, comment }) => {});   // Send (thread + first comment)
+engine.on('thread:reply',   ({ thread, comment }) => {});   // any appended comment (author on the comment)
+engine.on('thread:resolve' | 'thread:reopen' | 'thread:delete', ({ thread }) => {});
+engine.on('thread:anchored' | 'thread:orphaned' | 'thread:click', ({ thread }) => {});
 
-engine.list(): MarkerRecord[];       // this page's markers (live view)
-engine.delete(id): Promise<void>;
+// Programmatic surface (used by hosts writing on behalf of others, e.g. the extension
+// appending a copilot reply — same author-aware auto-reopen rules apply):
+engine.appendComment(threadId, { author, body }): Promise<Comment>;
+engine.resolve(threadId) / engine.reopen(threadId) / engine.delete(threadId);
+engine.listThreads(): Thread[];      // this page's threads (live view)
 engine.destroy(): void;
 ```
 
-- **The copilot never sees the engine.** Its contract is the `MarkerStore` (§3.6): it
-  reads records with `get`/`list`/`listAll` and replies by `put`-ing updated records
-  (thread append + status). Store reactivity propagates the reply to any open page —
-  including replies written while the page was closed, which appear on next load.
-- The `extension` package is the only glue: it listens to `marker:submit` /
-  `marker:followup` in the content script and forwards `{ markerId, pageKey }` to the
-  SW job queue over `@webext-core/messaging`. On the demo page, the same hooks feed a
-  trivial **echo responder** (canned reply after a delay) so Module 1 is fully
-  exercisable without the extension — and the hook contract gets tested for free.
-- Jobs are **stateless with respect to the loop**: each job rebuilds its LLM context
-  from `capture` + the full `thread`, so submit and follow-up share one code path.
+Domain helpers (`appendComment` etc.) are also exported **store-level** (no engine/DOM
+required) so a background context can apply the same rules against the raw store —
+e.g. the extension SW appending a copilot reply while the page is closed; store
+reactivity makes it appear on next load. `comment-core` knows nothing about who its
+consumers are — "copilot" is just an `Author` value.
 
 ### 3.8 Testing & robustness benchmark
 
-- Unit: anchoring/resolution/fingerprint scoring in vitest + happy-dom with synthetic DOM
-  mutations.
+- Unit: anchoring/resolution/fingerprint scoring + domain rules (auto-reopen matrix,
+  auto-GC, cascade delete) in vitest + happy-dom with synthetic DOM mutations.
 - `apps/demo`: static pages covering the scenario matrix (static page, list reorder,
   popover open/close, infinite scroll, SPA route change, attribute churn).
 - `bench/`: **agent-browser**-driven scenarios against a real-site corpus (e.g. GitHub PR
   page, MDN, Wikipedia, a Radix/shadcn demo with popovers, a React SPA) — script: place
-  markers → perturb (reload / mutate / navigate) → assert badge is on the right element.
+  threads → perturb (reload / mutate / navigate) → assert badge is on the right element.
   Output a re-anchor success-rate table per site per scenario; iterate visually with
   agent-browser screenshots. This bench is the main iteration loop for M2.
 
 ---
 
-## 4. Module 2 — Browser copilot
+## 4. Module 2 — Copilot (generic agent runtime)
 
-### 4.1 Agent runtime
+### 4.1 Independence contract: trigger/listen, host-registered everything
 
-**Vercel AI SDK (`ai`, v6+) in the background service worker** — confirmed to run
-cleanly in MV3 SWs (fetch-based, worker-runtime support; community extensions ship on
-it). Use the **`ToolLoopAgent`** abstraction (model + tools + system prompt +
-`stopWhen: stepCountIs(n)`, tool-approval hooks, streaming) — or drop to
-`generateText` + `stopWhen` if we want zero abstraction. Cap at ~8–10 steps. Not
-LangChain (nanobrowser's stack — far more machinery than a 4-tool copilot needs), and
-not a hand-rolled loop (the SDK loop costs the same to call and is better tested).
-Tools are `tool({ description, inputSchema: z.object(...), execute })` — `execute` in
-the SW messages content scripts or touches storage.
+`copilot` is a **standalone browser agent runtime** — publishable on its own, zero
+imports from `comment-core`. It knows about: providers, tools, runs. It does **not**
+know about: threads, comments, anchors, pages.
 
-### 4.2 Providers & models (config, not code)
+```ts
+const copilot = createCopilot({
+  provider,                        // AI SDK model instance (injected)
+  systemPrompt: string,
+  tools: ToolDefinition[],         // host-registered: name, description, zod schema, execute
+  runStore: RunStore,              // injected persistence for runs (memory | chrome.storage)
+});
+
+// Trigger: fire a run with an input + opaque context payload
+const handle = copilot.trigger({ input: string, context?: unknown, runId?: string });
+
+// Listen: run lifecycle events (the host bridges these wherever it wants)
+copilot.on('run:start' | 'run:step' | 'run:token' | 'run:done' | 'run:error' | 'run:cancelled', cb);
+copilot.cancel(runId);
+copilot.resumePending();           // host calls on wake — restarts stale runs
+```
+
+- **Tools are the host's.** The runtime ships with none. The extension registers
+  comment-flavored tools (§5); a different host could register totally different ones.
+- **Output is an event, not a side effect.** `run:done` carries the final text; the
+  *host* decides what to do with it (append to a thread, show a toast, ignore). Tools
+  let the model act mid-run; `run:done` is the guaranteed terminal signal.
+- `context` is opaque to the runtime — it is serialized into the prompt by a
+  host-provided `renderContext(context) => string` (default: JSON). The copilot never
+  interprets it.
+
+### 4.2 Runs — the processing state machine
+
+Survey conclusion applied: AI processing state **never pollutes the domain lifecycle**
+of whatever the host manages (exactly how GitHub keeps `isOutdated` out of resolution).
+Runs are the copilot's own records:
+
+```ts
+interface Run {
+  id: string;
+  state: 'queued' | 'processing' | 'done' | 'error' | 'cancelled';
+  input: string;
+  context?: unknown;
+  output?: string;            // set on done
+  error?: string;             // set on error; retry = a new run
+  attempts: number;
+  heartbeat: string;
+  createdAt: string;
+}
+```
+
+`queued → processing → done | error`; `→ cancelled` from queued/processing (host calls
+`cancel`, e.g. when a thread is deleted). Errors are delivery failures of one run, not
+properties of the conversation — retry is a fresh trigger.
+
+### 4.3 Agent loop
+
+**Vercel AI SDK (`ai`, v6+)** — confirmed to run cleanly in MV3 SWs (fetch-based,
+worker-runtime support; community extensions ship on it). Use the **`ToolLoopAgent`**
+abstraction (model + tools + system prompt + `stopWhen: stepCountIs(n)`, tool-approval
+hooks, streaming) — or drop to `generateText` + `stopWhen` if we want zero abstraction.
+Cap at ~8–10 steps. Not LangChain (nanobrowser's stack — far more machinery than a
+4-tool copilot needs), and not a hand-rolled loop (the SDK loop costs the same to call
+and is better tested). Tools are `tool({ description, inputSchema: z.object(...),
+execute })`.
+
+### 4.4 Providers & models (config, not code)
 
 - **Primary brain: Anthropic API, called directly from the SW.** With
   `https://api.anthropic.com/*` in `host_permissions`, extension-context requests bypass
@@ -337,60 +454,58 @@ the SW messages content scripts or touches storage.
   remote otherwise. Re-evaluate as loop runtime when native function calling hits
   stable. Skip WebLLM entirely (multi-GB, WebGPU, weak tool calling).
 
-### 4.3 Tools (initial set)
-
-| Tool | Runs in | Notes |
-|---|---|---|
-| `get_page_context` | content script | url, title, heading outline, selection |
-| `list_markers` / `read_marker` | SW (`MarkerStore`) | works even if tab closed |
-| `reply_to_marker` | SW (`MarkerStore`) | appends to thread, sets status |
-| `get_marker_element_html` | content script, fallback: stored capture | live DOM if available |
-| `show_message` | content script | toast/modal to the user on the page |
-
-DOM-touching tools go through a **typed RPC bridge**: `@webext-core/messaging`
-(protocol-map typed messages) + `@webext-core/proxy-service` (call SW-hosted services
-from content scripts as plain async functions) — actively maintained, same author as
-WXT, and WXT's officially suggested stack. If the marker's tab is gone, DOM tools
-degrade to the stored `capture`.
-
-### 4.4 Statefulness: job queue that survives the service worker
+### 4.5 Surviving the MV3 service worker
 
 MV3 service workers die: 30 s idle kill, ~5 min cap per event, and a `fetch()` whose
 response takes > 30 s to first byte can kill the SW (streaming mitigates — first token
-arrives fast). Design: jobs are **data, not promises**.
+arrives fast). Design: runs are **data, not promises** (§4.2), and the runtime stays
+host-agnostic — the MV3 specifics are host duties, documented as such:
 
-- `marker:submit` / `marker:followup` → persist `{ jobId, markerId, state, attempts,
-  heartbeat }`, then run the loop in the SW.
-- **No mid-loop checkpoint/resume — deliberately.** For 8–10-step jobs on an internal
+- **No mid-loop checkpoint/resume — deliberately.** For 8–10-step runs on an internal
   tool, resuming a half-done LLM loop is maximum fiddliness for minimum payoff. If the
-  SW dies mid-job, the watchdog **restarts the job from scratch** (costs tokens, not
-  correctness): the reply is tagged with `jobId`, so appending it is idempotent.
-- **Keepalive** while a job runs: the documented 25 s API-ping pattern
-  (`setInterval(chrome.runtime.getPlatformInfo, 25_000)`).
-- **Watchdog**: a repeating `chrome.alarms` (min 30 s period, survives SW death and
-  browser restart) restarts jobs whose heartbeat went stale — bounded by
-  `attempts <= 3`, after which the marker goes to `status: 'error'` with a system
-  message in the thread (badge shows the error state; retry = send a follow-up).
-- **Delete cancels**: deleting a marker marks its job cancelled; the loop checks marker
-  existence before every store write, so a deleted marker is never resurrected.
-- **UI updates**: the durable channel is the store (status transitions + replies via
-  `onChanged`). Token-level streaming is a best-effort `chrome.runtime` Port from SW to
-  the open page (which also extends SW lifetime); if no page is listening nothing is
-  lost — the store stays the source of truth.
-- **Escape hatch** if jobs ever exceed ~4–5 min or need robust long streaming: run the
-  LLM fetch in an **offscreen document** (no SW lifetime limits, and its messages keep
-  the SW alive) — the established pattern for AI-agent extensions. Not expected for
-  v1's short loops.
+  SW dies mid-run, `resumePending()` **restarts the run from scratch** (costs tokens,
+  not correctness): `run:done` carries `runId`, so the host's append is idempotent.
+- **Keepalive** while a run is active (host: the documented 25 s API-ping pattern,
+  `setInterval(chrome.runtime.getPlatformInfo, 25_000)`).
+- **Watchdog** (host): a repeating `chrome.alarms` (min 30 s period, survives SW death
+  and browser restart) calls `resumePending()`, which restarts runs with stale
+  heartbeats — bounded by `attempts <= 3`, then `run:error`.
+- **Streaming**: `run:token` events are best-effort (host relays over a
+  `chrome.runtime` Port to the open page — which also extends SW lifetime); `run:done`
+  via the run store is the durable channel. If no page is listening nothing is lost.
+- **Escape hatch** if runs ever exceed ~4–5 min: host the LLM fetch in an **offscreen
+  document** (no SW lifetime limits, and its messages keep the SW alive) — the
+  established pattern for AI-agent extensions. Not expected for v1's short loops.
 
-### 4.5 Configuration (options page)
+### 4.6 Configuration (options page)
 
 API key, model, system prompt (textarea), tool toggles, trigger key. Stored in
 `chrome.storage.local`. Deliberately minimal.
 
 ---
 
-## 5. Extension shell (MV3)
+## 5. Extension shell (MV3) — the bridge
 
+The only place where the two modules meet:
+
+- **Hook → trigger**: content script listens to `thread:create` / `thread:reply`
+  (human-authored comments only — copilot replies must not re-trigger the copilot) and
+  sends `{ threadId, pageKey }` to the SW over `@webext-core/messaging`. The SW builds
+  the run input from `capture` + the full comment list (stateless per run — submit and
+  follow-up share one code path) and calls `copilot.trigger({ input, context })`.
+- **Tools registration** (SW side, wrapping the `CommentStore` + content-script RPC):
+
+  | Tool | Runs in | Notes |
+  |---|---|---|
+  | `get_page_context` | content script | url, title, heading outline, selection |
+  | `list_threads` / `read_thread` | SW (`CommentStore`) | works even if tab closed |
+  | `get_thread_element_html` | content script, fallback: stored capture | live DOM if available |
+  | `show_message` | content script | toast/modal to the user on the page |
+
+  Replying is **not a tool**: the `run:done` output is the reply. The bridge appends it
+  via the store-level `appendComment(threadId, { author: 'copilot', body })` — which
+  applies the domain rules (never reopens a resolved thread) — and checks the thread
+  still exists first (deleted → drop the output). `thread:delete` → `copilot.cancel`.
 - **Scaffold: WXT** — the 2026 consensus default (active, Vite-based, manifest
   generation, `createShadowRootUi` with `cssInjectionMode: 'ui'` and `isolateEvents`
   doing exactly what §3.3 needs). Plasmo is stalled (14+ months without a release,
@@ -398,10 +513,12 @@ API key, model, system prompt (textarea), tool toggles, trigger key. Stored in
   helpers. Known WXT caveat: `all: initial` reset doesn't cover the page's `<html>`
   font-size — set an explicit `font-size` on `:host` (no rem-dependent styling).
 - Content script on `<all_urls>` (`document_start` for the key listener): instantiate
-  `marker-core` + `marker-ui` with the `chrome.storage`-backed store; expose the RPC
-  endpoints for copilot DOM tools; forward submit/follow-up hooks to the SW job queue.
-- Background SW: copilot runtime + job queue (+ store owner only if/when Dexie lands).
-- Options page: config (§4.5). Popup (later): marker list for current page.
+  `comment-core` + `comment-ui` with the `chrome.storage`-backed store; expose the RPC
+  endpoints for copilot DOM tools; forward create/reply hooks to the SW.
+- Background SW: copilot runtime + run store + watchdog.
+- Options page: config (§4.6). On the **demo page**, the bridge is replaced by a tiny
+  echo responder wired to the same hooks (canned reply after a delay) — Module 1 fully
+  exercisable without extension or AI, and the hook contract tested for free.
 
 ## 6. Reuse vs rebuild — final decisions
 
@@ -411,6 +528,7 @@ API key, model, system prompt (textarea), tool toggles, trigger key. Stored in
 | Fuzzy text anchoring | **vendor Hypothesis `annotator/anchoring` + `approx-string-match`** | only battle-tested fuzzy anchoring in existence; BSD-2/MIT; not on npm |
 | Element fingerprint + scored re-identification | **rebuild** (~300–500 LOC) | exists nowhere in OSS; Playwright priority order + puppeteer-replay redundancy pattern |
 | MutationObserver re-anchoring lifecycle | **rebuild** (~200 LOC) | the genuinely novel part; no library has it |
+| Thread/comment domain model | **rebuild, following the surveyed consensus** (thread-as-container, flat replies, flag-based resolution, separate Run entity) | comment SDKs (Liveblocks/Velt/TipTap) drag in collab infra we don't want; the model itself is small |
 | Storage format | **plain version-tagged TS records** (W3C-inspired selector vocabulary, no JSON-LD) | interop ceremony is dead weight for an internal tool |
 | Badge/popover positioning | **reuse `@floating-ui/dom`** | `autoUpdate` is exactly the tracking loop we'd hand-roll |
 | CS ⇄ SW messaging | **reuse `@webext-core/messaging` + `proxy-service`** | typed, tiny, maintained, WXT-aligned |
@@ -423,23 +541,26 @@ API key, model, system prompt (textarea), tool toggles, trigger key. Stored in
 | # | Deliverable | Proof |
 |---|---|---|
 | M0 | Scaffold: pnpm workspace, ox tooling, extension skeleton, demo page | `pnpm ci` green; extension loads |
-| M1 | `marker-core` v0 + UI: hotkey → badge + composer, localStorage, reload-safe on static pages, **demo echo responder** on the hooks | demo page walkthrough incl. Send→reply |
+| M1 | `comment-core` v0 + UI: hotkey → badge + composer + thread view (reply/resolve/reopen/delete, full domain rules), localStorage, reload-safe on static pages, **demo echo responder** on the hooks | demo walkthrough incl. Send→reply→resolve→reopen |
 | M2 | Robust anchoring: orphan/re-anchor lifecycle, SPA nav, bench harness | bench success table ≥ target on corpus |
-| M3 | Extension shell: works on any site, chrome.storage store, cross-tab, thread panel, **marker panel incl. orphans**, delete | manual run on 5 real sites |
-| M4 | Copilot MVP: submit/follow-up → background agent → threaded reply; 4 core tools; survives refresh mid-job; **minimal config (API key + model)** | scripted E2E with agent-browser |
+| M3 | Extension shell: works on any site, chrome.storage store, cross-tab, **thread panel (resolved + unanchored sections)** | manual run on 5 real sites |
+| M4 | Copilot MVP: create/reply → background run → reply in thread; 4 tools; survives refresh mid-run; **minimal config (API key + model)** | scripted E2E with agent-browser |
 | M5 | Full options page (prompt, tools, trigger), Prompt API provider (if viable), polish | — |
 
 ## 8. Risks & open questions
 
 - **Anchoring is best-effort by nature** — canvas-rendered UIs, closed shadow roots, and
   heavily virtualized lists will defeat it; the bench defines "good enough".
-- **Iframes**: out of scope v1 (markers attach per-frame document only).
+- **Iframes**: out of scope v1 (threads attach per-frame document only).
 - **Hotkey collisions** with page shortcuts — capture-phase + editable-field guard +
   configurable key should cover the internal-tool bar.
-- **SW death mid-agent-loop** — mitigated by the persisted job queue + alarms watchdog;
-  worst case a job restarts from scratch (bounded attempts). Offscreen document as
-  escape hatch for long jobs.
+- **SW death mid-run** — mitigated by the persisted run queue + alarms watchdog; worst
+  case a run restarts from scratch (bounded attempts). Offscreen document as escape
+  hatch for long runs.
 - **Slow first token** — a fetch taking > 30 s to first byte can kill the SW; always
   stream, keep prompts small.
+- **Trigger loops** — the bridge must only trigger on *human* comments; the author field
+  is the guard. Watch for other feedback loops as tools grow (e.g. a tool that writes
+  comments).
 - To decide with user: default trigger key; text-selection mode in v1 or element-only;
   default model (`claude-opus-5` quality-first vs `claude-haiku-4-5` latency-first).
