@@ -1,0 +1,25 @@
+{
+  "name": "@astrale-os/browser-copilot",
+  "version": "0.0.0",
+  "license": "Apache-2.0",
+  "author": "Astrale",
+  "type": "module",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "scripts": {
+    "typecheck": "tsgo --noEmit",
+    "lint": "oxlint .",
+    "test": "vitest run",
+    "test:watch": "vitest"
+  },
+  "dependencies": {
+    "@ai-sdk/anthropic": "^4.0.25",
+    "ai": "^7.0.44",
+    "zod": "^4.4.3"
+  },
+  "devDependencies": {
+    "happy-dom": "^20.11.1",
+    "vitest": "^4.1.10"
+  }
+}

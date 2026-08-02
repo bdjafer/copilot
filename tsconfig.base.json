@@ -1,0 +1,8 @@
+{
+  "extends": "@astrale/typescript-config/base",
+  "compilerOptions": {
+    "lib": ["ES2022", "DOM", "DOM.Iterable"],
+    "allowImportingTsExtensions": true,
+    "noEmit": true
+  }
+}

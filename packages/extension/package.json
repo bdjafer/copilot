@@ -1,0 +1,16 @@
+{
+  "name": "exp-spec-extension",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "wxt",
+    "build": "wxt build"
+  },
+  "dependencies": {
+    "@webext-core/messaging": "^4.0.0"
+  },
+  "devDependencies": {
+    "wxt": "^0.21.2"
+  }
+}
