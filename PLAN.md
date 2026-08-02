@@ -355,7 +355,9 @@ engine.on('thread:anchored' | 'thread:orphaned' | 'thread:click', ({ thread }) =
 
 // Programmatic surface (used by hosts writing on behalf of others, e.g. the extension
 // appending a copilot reply — same author-aware auto-reopen rules apply):
-engine.appendComment(threadId, { author, body }): Promise<Comment>;
+engine.appendComment(threadId, { author, body }): Promise<AppendResult>;
+// AppendResult = { comment, reopened, deduped } — reopened/deduped are unrecoverable
+// from the Comment alone and the bridge needs both (see docs/SPEC-comment-core.md)
 engine.resolve(threadId) / engine.reopen(threadId) / engine.delete(threadId);
 engine.listThreads(): Thread[];      // this page's threads (live view)
 engine.destroy(): void;
