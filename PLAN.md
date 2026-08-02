@@ -519,6 +519,18 @@ The only place where the two modules meet:
   builds the run input from `capture` + the full comment list (stateless per run —
   submit and follow-up share one code path) and calls
   `copilot.trigger({ input, context })` with the kind-specific config.
+- **Dispatch policy — per mode: `'immediate' | 'manual'`** (the GitHub-review pattern:
+  single comment vs start-review → pending → submit batch). `ask` defaults to
+  `immediate` (a question wants its answer now). `comment` defaults to `manual`:
+  threads accumulate in a bridge-owned **pending set** (badges show a "pending" state,
+  no AI churn while you're still forming thoughts); a floating pill shows
+  "N comments — Send to copilot". Sending dispatches **one batch run** with all pending
+  threads in context — strictly better than N isolated runs: the copilot sees the whole
+  review at once, can connect related comments, and replies per-thread via a
+  `reply_to_thread(threadId, body)` tool registered for batch runs (`run:done` output
+  then serves as an optional overall summary, surfaced as a toast). Entirely
+  bridge-side: zero change to `comment-core` or `copilot`; both defaults togglable in
+  options and to be validated by usage.
 - **Tools registration** (SW side, wrapping the `CommentStore` + content-script RPC):
 
   | Tool | Runs in | Notes |
