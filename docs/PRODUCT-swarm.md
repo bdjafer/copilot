@@ -7,10 +7,10 @@
 | Contract status       | Normative product contract — locked                                                    |
 | Implementation status | None. Design wave; no package source exists yet.                                       |
 | Package               | `@astrale-os/swarm`, entries `.` (client core), `./presentation` (seam, imports nothing), `./server` (Node), `./testing` |
-| Date                  | 2026-08-04 (amended after adversarial review — §14)                                    |
+| Date                  | 2026-08-04 (amended after adversarial review — §14 — and again after feasibility review — §15) |
 | Runtime               | Client core: DOM-free, Node-free ES2022. Server: Node.js 24+, macOS/Linux.             |
 | Agent runtime         | jcode via `@1jehuang/jcode-sdk@^1.0.1`, harness API protocol v1                        |
-| **jcode version floor** | **`>= 0.66.0`** required, `>= 0.67.0` recommended and **currently the latest release**. The SDK spawns `jcode api-bridge`, which does not exist in the installed **v0.64.2** (`error: unrecognized subcommand 'api-bridge'`), so `launchInstance()` fails `startup_failed`. Wave 1 opens with `jcode update` to 0.67.0 — the loop is runnable on this machine today. |
+| **jcode version floor** | **`>= 0.66.0`** required, `>= 0.67.0` recommended; **latest tag at time of writing is 0.67.1**. `jcode api-bridge` does not exist in the installed **v0.64.2** (`error: unrecognized subcommand 'api-bridge'`), so any connection attempt fails `startup_failed`. **The floor is swarm's alone**: `@1jehuang/jcode-sdk@1.0.1` declares and checks no jcode version anywhere — no floor, no `--version` parse, no runtime gate — so without R1/R2 a stale binary produces a spawn failure with no explanation. Wave 1 opens with `jcode update`. |
 | Heads                 | Chrome extension (wave 1), CLI (wave 1, proof of headlessness)                          |
 | Planned consumers     | `exp-spec-extension`, `@astrale-os/browser-copilot` (as tool caller)                    |
 
@@ -25,13 +25,17 @@ out for this product line. Every requirement below carries a decided priority. T
 questions in this document; contested points are ruled in §11.
 
 Claims about jcode in this document are **source-read** against SDK tarball `1.0.1`
-(`dist/*.d.ts`, `dist/launch.js`), jcode source at branch `master`, and the installed binary's CLI
+(`dist/*.d.ts`, `dist/*.js`), jcode source at branch `master`, and the installed binary's CLI
 surface. They are **not runtime-observed**: the installed **v0.64.2 predates `api-bridge`**, so no
 harness call in this document has been executed. Two claims *are* runtime-observed and are labelled
 as such: `api-bridge` and `upgrade` are absent from 0.64.2's subcommand list, and `update` is
-present. Closing that gap is release gate 1a: update to 0.67.0, then re-run §5.1 and re-tag each row
-**observed** or **source-read**. Where the input briefing and reality disagreed, reality won and §13
-records the correction; §14 records the corrections the adversarial review forced on *this* document.
+present. Closing that gap is release gate 1a: update to ≥ 0.66.0, then re-run §5.1 and re-tag each
+row **observed** or **source-read**. Where the input briefing and reality disagreed, reality won and
+§13 records the correction; §14 records the corrections the adversarial review forced on *this*
+document, and §15 those the feasibility review forced after reading the bridge and daemon sources
+directly. The gap between §14 and §15 is instructive: §14's claims were read off the SDK's surface
+and were largely right about the SDK and wrong about **what happens on the other side of the
+socket** — most expensively about the hard kill (§15).
 
 ## 1. Vision
 
@@ -183,18 +187,21 @@ directive → send → record the effective configuration on the turn record.
 | Fact | Consequence |
 | --- | --- |
 | `setReasoningEffort(sessionId, effort)` returns `void`; the daemon's applied value is discarded by the bridge; there is no getter and neither `runtime_info` nor `model_info` carries effort | Effort is **declared intent, never observed state**. `ok` means *accepted*, not *in force*. Clamping (`max`→`xhigh`) is undetectable. |
-| Applied immediately when the agent mutex is free (idle); **silently deferred to turn end** when a turn is in flight, with no deferral signal | Effort changes MUST be issued only while the session is idle, serialized by the writer lease. |
-| Unknown effort values are logged and ignored on the Anthropic path rather than rejected | Swarm MUST validate against its own closed ladder before sending. |
+| Applied immediately when the agent mutex is free (idle). Mid-turn it is **deferred to turn end and the reply is withheld until then** — so the call hangs for the rest of the turn, the SDK rejects it at its 30 s request timeout, **and the setting still applies afterwards** | Effort changes MUST be issued only while the session is idle, serialized by the writer lease. The mid-turn observable is "fails, then silently takes effect on a turn the user did not target" — worse than a no-op, and unfixable by retry. |
+| Unknown effort values are **rejected** with `invalid_request`; `swarm`/`swarm-deep` are **accepted** | Swarm MUST validate against its own closed ladder before sending — not because errors are swallowed, but because the two values swarm must refuse are the ones jcode is happy to take. `ok` therefore still cannot serve as validation, and `setReasoningEffort` errors are real and MUST be surfaced. |
 | `swarm` / `swarm-deep` are accepted effort values meaning "max effort + use jcode's internal swarm tool" | **Banned inputs** (§5.3). `JCODE_SWARM_ENABLED=false` does not block them. |
 | `setModel` has the same shape but broadcasts `model_info` to every attached client | Model is observable; effort is not. Drift from another writer is detectable for model only. |
 | `sendMessage` has no idempotency key; `message_accepted` carries only `session_id` — not content, not an index | Acks cannot be correlated to a specific send. Swarm owns idempotency (§T13). |
+| The SDK's `waitForAccept` option **resolves on timeout instead of rejecting**, by design, so `sendMessage` returns the same `undefined` whether the ack arrived or never came | Swarm MUST NOT use it. The `unknown` delivery state — X4, Q5, success criterion 5, the entire "did my message land?" story — has to be built on the `message_accepted` event observed on swarm's own stream under swarm's own timeout, or it is built on a value that carries no information. |
 | `sendMessage(noReply: true)` persists content without starting a turn | A genuine fourth delivery mode. |
 | `softInterrupt(content, urgent?)` injects at points A–D; the daemon's `soft_interrupt_injected` event is **not translated by the bridge** | Steering lands blind: swarm never learns whether, when, or how many tools were skipped. Must be surfaced as "delivery unconfirmed". |
 | `runStructured` is SDK-level (Ajv + bounded corrective retries) | The only **true** per-turn control that needs no reconciliation — and it burns extra turns. |
-| Tool allow/deny exists only as process arguments (`--tools`, `--tool-profile`, `--disable-base-tools`) | Instance-scoped, launch-time only. MUST NOT appear as a per-turn dial. |
+| Tool allow/deny exists only as process arguments (`--tools`, `--tool-profile`, `--disable-base-tools`). They are global flags, so `api-bridge` **accepts** them — and they do nothing: the agent runs in the daemon, and the bridge forwards only `--provider`/`--provider-profile`/`--model` to it | Not merely "launch-time only" — **undeliverable on this topology**, and undeliverable in the worst way, since the flag parses and looks accepted. Swarm claims **no** tool authority in any wave (T16, T17) and MUST NOT render the flags as a dial, a setting, or a promise. |
+| The daemon detaches with `setsid()`, so it leads its own session and process group. The agent, its tools and every bash child live **there**, not in the bridge's group | A `kill(-pgid)` on the bridge's group stops **nothing** and reports success. The hard kill MUST also signal the daemon's group, resolved from the instance's own `servers.json` (§5.3.8, R13, F5). |
 | `permission_request` / `permission_response` exist in protocol v1 but the bridge advertises no `permissions` capability and replies `invalid_request`; `autoApprove` is a dead branch | Approvals are designed and shipped dark, gated on a runtime probe. |
 | `launchInstance()` spawns `spawn(binary, ['api-bridge','--api-socket',sock], { env: { ...process.env, …, ...options.env } })` — **no argv passthrough**, and `env` can only add or override, never remove (`dist/launch.js:430-441`) | Swarm **MUST NOT** obtain its instances from `launchInstance`. A scrubbed child environment is unreachable through it, and `--tools`/`--tool-profile`/`--disable-base-tools` cannot be delivered at all. Swarm owns the spawn (R12). |
 | The same spawn passes `detached: false`, so the bridge stays in the **caller's process group** | A `kill(-pgid)` on that group kills the swarm server itself. The hard kill (§5.3.8, F5) requires swarm's own `detached: true` spawn and its own recorded pgid — otherwise the only mitigation for "jcode exposes no background-task control" is a self-inflicted outage. |
+| Banning `launchInstance()` also discards `shutdown()` / `stopInstanceDaemon` / `reapOnExit` — **the only SDK code that knows how to stop the daemon**, and the code whose own comment states that no signal aimed at the bridge can reach it | Swarm MUST re-implement daemon-pid resolution (`$JCODE_HOME/servers.json`, entry matching the runtime dir's socket) as part of owning the spawn. R12 bought back three authority claims and, unremarked until the feasibility review, took the working stop away with them. |
 
 ### 5.2 Controls and emulation strategy
 
@@ -204,7 +211,7 @@ directive → send → record the effective configuration on the turn record.
 | T2 | Model | set→send under lease; confirmed by `model_info`. **Legal only with `delivery:'after-turn'`** (§5.3.10) | **Emulated**, confirmed | **M** |
 | T3 | Structured-output demand (JSON Schema) | `runStructured`, retry cost disclosed to the user before send | **True** | **S** |
 | T4 | Attachments (images, screenshots, region captures) | `images` on `sendMessage`/`run` | **True** | **S** |
-| T5 | Delivery mode — `after-turn` | swarm queue → `sendMessage` when idle | **True** | **M** |
+| T5 | Delivery mode — `after-turn` | swarm queue → `sendMessage` when idle, **without** the SDK's `waitForAccept`; the ack is observed on swarm's own event stream under a swarm-owned timeout | **True**; delivery confirmed only because swarm watches for the ack itself | **M** |
 | T6 | Delivery mode — `next-safe-point` | `softInterrupt(content)` | **True**, landing unobservable | **M** |
 | T7 | Delivery mode — `interrupt` | `softInterrupt(content, urgent: true)` | **True**, landing unobservable | **M** |
 | T8 | Delivery mode — `context-only` | `sendMessage(noReply: true)` | **True** | **S** |
@@ -215,8 +222,8 @@ directive → send → record the effective configuration on the turn record.
 | T13 | Idempotency key + `expectedVersion` on every mutating intent | swarm-owned; jcode has none | **True** | **M** |
 | T14 | `autoApprove` / approvals | gated on `supports('permissions')`; rendered unavailable otherwise | dark | **S** |
 | T15 | Auto-effort policy (cheap for short follow-ups, high for planning) | opt-in, always overridable, always shown before send | derived | **C** |
-| T16 | Per-turn tool restriction | **impossible** — instance-scoped, launch-time only. Worse than instance-scoped in wave 1: the SDK's launcher passes no argv, so swarm can only deliver `--tools`/`--tool-profile` through its **own** spawn (R12), and no swarm run has yet observed those flags on an `api-bridge` process. MUST be stated in-product, never rendered as a dial | none | **M** (as a stated limit) |
-| T17 | Launch-time tool profile as an *authority* claim | Deliverable only via R12's own spawn, and **unverified** against 0.67.0's `api-bridge` argv. Until a test observes a denied tool, swarm claims no tool-level authority | none in wave 1 | **C** (promoted to **M** the day a test observes it) |
+| T16 | Per-turn tool restriction | **impossible per turn, and impossible at all on the `api-bridge` topology.** The flags are global clap args, so the bridge *accepts* them; the bridge does not run the agent, and it forwards only provider/profile/model to the daemon that does. Passing them delivers nothing and looks like it worked. MUST be stated in-product, never rendered as a dial | none | **M** (as a stated limit) |
+| T17 | Launch-time tool profile as an *authority* claim | **Withdrawn, not staged.** It is not blocked on an observation; it is blocked on a different topology (a pre-started `jcode serve` carrying the flags, with the bridge attaching to it). Swarm claims no tool-level authority and no wave-1 or wave-2 date | none | **W** on this topology; reopens only with a `serve`-first design |
 
 ### 5.3 Normative turn semantics
 
@@ -227,8 +234,11 @@ directive → send → record the effective configuration on the turn record.
    the previous turn's override. jcode's stickiness is an implementation detail swarm hides.
 3. **Every turn record MUST store the declared effective configuration** — model, effort, delivery
    mode, structure demand, budget, prompt digest, attachment digests, jcode + SDK versions. jcode's
-   `getHistory` returns `{role, content}` with all non-text blocks dropped; if swarm does not record
-   it, the answer to "what ran this turn?" does not exist anywhere.
+   two history reads are both lossy and *unequally* so: `getHistory` returns `content: ""` for any
+   message stored as a block array — not text-only, **empty** — while `peekSession` flattens to text
+   and drops the rest. Swarm reads only `peekSession`, and only to match a prompt digest. If swarm
+   does not record the configuration itself, the answer to "what ran this turn?" does not exist
+   anywhere.
 4. Effort and model MUST be presented as **declared**, with an explicit in-product statement that
    the applied effort is not observable through protocol v1.
 5. The effort ladder is a **closed union derived from provider + model**, excluding `swarm` and
@@ -244,13 +254,19 @@ directive → send → record the effective configuration on the turn record.
 8. Interrupts are three distinctly labelled actions (**M**): **cancel turn** (`cancel`, session
    survives), **cancel delegation** (stop dispatch, session survives), **hard kill** (terminate the
    instance and children — the only true stop, since jcode exposes no background-task control). The
-   hard kill MUST signal the **process group swarm created for that instance** (R12: swarm spawns
-   the bridge itself with `detached: true` and records the pgid). Signalling the server's own group —
-   which is what a `launchInstance`-spawned bridge sits in — is a self-inflicted outage and is
-   forbidden.
+   hard kill MUST signal **two** groups: the process group swarm created for that instance (R12:
+   swarm spawns the bridge itself with `detached: true` and records the pgid) **and the daemon's own
+   group**, because the daemon `setsid()`s away from the bridge at startup and is where the agent
+   actually runs. A kill that signals only the bridge stops nothing and **reports success** — the
+   worst available outcome for a panic button. Signalling the server's own group — which is what a
+   `launchInstance`-spawned bridge sits in — is a self-inflicted outage and is forbidden. A hard kill
+   that cannot name the daemon MUST report itself as partial, never as a stop.
 9. `rewind`/`rewindUndo` are exposed as "undo the last N exchanges", reversible within a bounded
    window (**S**); `clear` as "start over from the current code" (**C**); `compact` as "free up
-   context", with its sub-10%-usage refusal shown as information, not an error (**C**).
+   context", with its **sub-10 %-usage** refusal (jcode's `MANUAL_COMPACT_MIN_THRESHOLD = 0.10`)
+   shown as information, not an error (**C**). Note that both the refusal *and* the success reply
+   carry a `Token usage: ~Xk / Yk (Z.Z%)` line, so `compact` is the one place context pressure is
+   legible — as prose, from a call with a side effect (W14).
 10. **Effort and model are legal only with `delivery:'after-turn'`** (**M**). `next-safe-point` and
     `interrupt` exist *only* while a turn is in flight, and rule 6 refuses config changes in exactly
     those states — so a directive combining them is not a rare conflict, it is always a conflict.
@@ -276,19 +292,19 @@ directive → send → record the effective configuration on the turn record.
 
 | ID | Requirement | Pri |
 | --- | --- | --- |
-| R1 | Enforce the jcode version floor (`>= 0.66.0`) at server start; a hang is the forbidden failure mode | **M** |
-| R2 | Preflight doctor: binary present, version, `api-bridge` present, socket dir writable, credentials present, ≥1 route `available` — each with a distinct message | **M** |
+| R1 | Enforce the jcode version floor (`>= 0.66.0`) at server start — the SDK enforces none, so this is the only gate that exists; a hang is the forbidden failure mode | **M** |
+| R2 | Preflight doctor: binary present, version, `api-bridge` present, socket dir writable, credentials present, ≥1 route `available` — each with a distinct message. **A bridge child that exits before the handshake completes is a failure even when it exits 0** (the "another bridge already owns this socket" path), and daemon liveness is proven by a `ping` on an *attached* connection, never by a request the bridge answers from disk or from itself | **M** |
 | R3 | Surface doctor results as a first-run/blocked screen with copy-pasteable fixes | **M** |
 | R4 | Pin the embedded instance's jcode version and disable its auto-update (defaults to on for release builds) | **M** |
 | R5 | Re-read `getRuntimeInfo` on every reconnect; compare `protocolVersion` + `capabilities`; degrade explicitly on drift | **S** |
 | R6 | Probe `supports('permissions')` on every connect; switch the approvals UX from the probe, never from a build-time assumption | **M** |
 | R7 | Record jcode + SDK version on every attempt | **S** |
 | R8 | Never require Rust, Docker, or a cloud account to run swarm locally | **M** |
-| R9 | Instance pool: one private instance per trust domain, stable `jcodeHome`, **singleton lease per home** (jcode keeps pid files there; two daemons on one state dir corrupt it) | **M** |
-| R10 | `setApiKey` is instance-global (no session id) — credential scoping is therefore a **pool dimension**; different keys ⇒ different instances. `InstanceKey = provider/credentialScope` in wave 1: the third dimension (`toolProfile`) is deleted until argv delivery is observed (T17) | **M** |
-| R11 | Own `setRetentionPolicy` explicitly and default it off; auto-archive otherwise fires as a side effect of *listing* and mutates the fleet view | **M** |
-| R12 | **Swarm owns the bridge spawn.** Swarm MUST NOT use `launchInstance()`: it inherits the full server environment, exposes no argv, and leaves the child in the server's process group. Swarm spawns `<binary> api-bridge --api-socket <sock>` itself with an allowlisted env, `detached: true`, and a recorded pgid, then connects the SDK client to the socket. The SDK's `inheritCredentials`/`userJcodeHome` helpers are still used | **M** |
-| R13 | Record the spawned instance's pgid and boot id in `runtime.json`, and reclaim/kill through it; a hard kill that cannot name a pgid it created MUST refuse rather than guess | **M** |
+| R9 | Instance pool: one private instance per trust domain, stable `jcodeHome`, **singleton lease per home** (jcode keeps pid files there; two daemons on one state dir corrupt it). The lease does **not** cover the bridge's own `<api-socket>.lock`, which is keyed on the socket path — R2 covers that | **M** |
+| R10 | `setApiKey` is instance-global (no session id) — credential scoping is therefore a **pool dimension**; different keys ⇒ different instances. `InstanceKey = provider/credentialScope`, where `credentialScope` is one of the **six** provider ids the bridge accepts (`claude-api`, `openai-api`, `openrouter`, `cursor`, `gemini`, `jcode`) — a different vocabulary from the route catalog's `provider`, and swarm owns the mapping. The third dimension (`toolProfile`) is deleted permanently, not pending an observation (T17) | **M** |
+| R11 | Own `setRetentionPolicy` explicitly and pin it off. This is defence-in-depth: auto-archive is **off by default** and its state lives in the instance's own `JCODE_HOME`, which swarm creates — but when it *is* on, archiving fires as a side effect of *listing* and mutates the fleet view, so swarm sets the value rather than trusting the default | **M** |
+| R12 | **Swarm owns the bridge spawn.** Swarm MUST NOT use `launchInstance()`: it inherits the full server environment, exposes no argv, and leaves the child in the server's process group. Swarm spawns `<binary> api-bridge --api-socket <sock>` itself with an allowlisted env, `detached: true`, and a recorded pgid, then connects the SDK client to the socket. The SDK's `inheritCredentials`/`userJcodeHome` helpers are still used. **Declining `launchInstance` also declines `shutdown()`/`stopInstanceDaemon`/`reapOnExit`, so swarm MUST re-implement daemon-pid resolution** (R13) — that code is not a convenience wrapper, it is the stop | **M** |
+| R13 | Record the spawned instance's bridge pgid, **the daemon's pid** (resolved from `$JCODE_HOME/servers.json` by socket path) and the boot id in `runtime.json`, and reclaim/kill through them. A hard kill that cannot name a pgid it created MUST refuse rather than guess; one that cannot name the daemon MUST report itself **partial**, because the daemon is where the agent runs | **M** |
 
 ### 6.2 Create (C)
 
@@ -297,7 +313,7 @@ directive → send → record the effective configuration on the turn record.
 | C1 | Objective: free text, required, editable before first dispatch | **M** |
 | C2 | Typed acceptance criteria: `command` (exit 0), `file`, `artifact` (produced + hash), `review` (independent judge), `manual` | **M** |
 | C3 | Zero criteria allowed → `unverifiable`; never auto-succeeds (§4.3) | **M** |
-| C4 | Workspace: root from an allowlist, base revision, write mode **`worktree` / `in-place`**. `readonly` is **deleted** — jcode has no read-only mode and the only lever (a launch-time tool profile) is undeliverable and unobserved (T17); a mode that does not gate is exactly what S8 forbids | **M** |
+| C4 | Workspace: root from an allowlist, base revision, write mode **`worktree` / `in-place`**. `readonly` is **deleted** — jcode has no read-only mode and the only lever (a launch-time tool profile) is **undeliverable on this topology**, not merely unobserved (T17); a mode that does not gate is exactly what S8 forbids | **M** |
 | C4b | The head submits a **base ref expression** (`'HEAD'`, a branch, a tag); the server resolves it to a **full sha inside the create transaction** and stores only the sha. Drift detection, verification locking and landing all key off a fixed sha, so an unresolved `'HEAD'` on a record silently disables all three | **M** |
 | C5 | Default to an isolated git worktree per attempt, branched from the base revision | **M** |
 | C6 | Refuse `in-place` on a dirty tree unless the spec carries an **auditable** override — actor + timestamp, stored on the record, rendered wherever the delegation is | **M** |
@@ -307,7 +323,7 @@ directive → send → record the effective configuration on the turn record.
 | C9 | Running spend per delegation and per fleet, against a soft cap | **S** |
 | C10 | `ContextRef[]` — page URL/title, comment thread, files, screenshot, prior attempt output, memory bundle — each with provenance and a named renderer | **M** |
 | C11 | Client-generated `delegationId` + `idempotencyKey`; creation is idempotent and composable offline | **M** |
-| C12 | Execution flags per delegation: native swarm off, jcode memory off, auto-poke. Tool profile is **not** a wave-1 flag (T17) | **M** |
+| C12 | Execution flags per delegation: native swarm off, jcode memory off, auto-poke — all three delivered as environment variables, which *do* reach the agent because the daemon is re-exec'd from the bridge and inherits its environment. Tool profile is **not** a flag in any wave: it is delivered as an argv the agent's process never sees (T17) | **M** |
 | C12b | **Parallel attempts**: `parallelAttempts` (default 1, max 3) on create and on retry. N attempts of one delegation run concurrently, each with its own session, worktree and channel; the delegation state is a rollup (§4.2) | **M** |
 | C13 | Skills materialized to `.jcode/skills/<name>/SKILL.md` before session start, digests recorded (no client-facing skill API exists) | **S** |
 | C14 | MCP via project-local `.jcode/mcp.json`; transports `stdio`, `http`, `sse`, `streamable-http` are all supported | **C** |
@@ -336,7 +352,7 @@ directive → send → record the effective configuration on the turn record.
 | W11 | Background-progress rendered as its own plane, not merged into the transcript. Note: this event is reverse-engineered by jcode from TUI markdown prose and may vanish without notice | **S** |
 | W12 | Follow-tail vs pinned scroll; transcript virtualization | **S** |
 | W13 | Multi-delegation watch with preserved scroll per delegation | **S** |
-| W14 | Context-pressure indicator | **W** — obtainable only by provoking a `compact` refusal and parsing prose. Swarm states that context pressure is unavailable rather than faking it. |
+| W14 | Context-pressure indicator | **W** — obtainable **only as prose in `compact()`'s reply**, which carries `Token usage: ~Xk / Yk (Z.Z%)` on both refusal and success. There is no structured field anywhere in protocol v1. Swarm surfaces that text verbatim where `compact` is invoked and states that it has no continuous context-pressure metric, rather than scraping a percentage out of a mutating call and charting it. |
 | W15 | Full-text search within a transcript | **C** |
 
 ### 6.4 Verify (VE)
@@ -361,7 +377,7 @@ directive → send → record the effective configuration on the turn record.
 | A3 | **Land**: apply the winning attempt's diff to a target branch — commit or patch export | **M** |
 | A4 | Landing conflict handling: base moved → rebase / report / abandon, surfaced as `needs-you` | **S** |
 | A5 | Compare attempts side by side: diff, acceptance results, cost, duration, turns. Promoted from **S** — Q9 calls parallel attempts the flagship loop, and a flagship loop with no comparison surface is a retry log | **M** |
-| A6 | Branch = fork into a **new delegation** with a **new** session seeded from swarm's normalized transcript (jcode's `rewind` mutates in place and `getHistory` is lossy). The new delegation records its `origin` (source delegation + attempt) so Q2's objective lineage and A5's comparison survive the fork | **S** |
+| A6 | Branch = fork into a **new delegation** with a **new** session seeded from swarm's normalized transcript (jcode's `rewind` mutates in place; `getHistory` returns an *empty string* for any block-array message and `peekSession` keeps only text, so neither can seed a fork without silently discarding the work). The new delegation records its `origin` (source delegation + attempt) so Q2's objective lineage and A5's comparison survive the fork | **S** |
 | A7 | Discard: delete worktree, archive session, keep evidence and transcript | **M** |
 | A8 | Archive via native `archiveSession` plus swarm-side archive of record and evidence | **S** |
 | A9 | Purge: transcript + worktree + evidence, with confirmation and an explicit statement that provider-side data is not purged | **S** |
@@ -377,7 +393,7 @@ directive → send → record the effective configuration on the turn record.
 | F2 | Default sort is **attention required**, not recency | **M** |
 | F3 | Concurrency caps: global (default 4), per-workspace, per-provider/model | **M** |
 | F4 | One writing agent per working tree; worktrees exempt, capped per repo | **M** |
-| F5 | Kill-everything switch: cancel every in-flight turn, set `dispatchPaused` fleet-wide, optionally kill instances (through swarm's own pgid, R13). **Worktrees are untouched, no delegation becomes terminal**, and the switch returns a report naming exactly what it stopped. It is a panic brake, not a delete (§5.3.11) | **M** |
+| F5 | Kill-everything switch: cancel every in-flight turn, set `dispatchPaused` fleet-wide, optionally kill instances (through swarm's own pgid **and each instance's daemon pid**, R13). **Worktrees are untouched, no delegation becomes terminal**, and the switch returns a report naming exactly what it stopped — including any instance whose daemon it could not confirm dead, which MUST be reported as *not stopped*. A panic brake that reports a stop it did not achieve is the one failure this control cannot have (§5.3.11) | **M** |
 | F6 | Health strip: server, instance, socket, provider routes with `available` + `detail` | **S** |
 | F7 | Queue with priority and an aging guard against starvation | **S** |
 | F8 | Bulk cancel / retry / archive | **S** |
@@ -423,7 +439,7 @@ privileges and whose approval mechanism does not exist.
 | S6 | **Workspace allowlist**: explicit roots; `createSession` outside them is refused; symlink escape refused. This is the one authority boundary swarm actually controls | **M** |
 | S7 | Write mode per workspace: `worktree` (default) or `in-place`. **`readonly` is deleted** — see S8. A workspace marked `sensitive` forces `worktree`, refuses `in-place` outright, and renders the S8 statement inline at create time | **M** |
 | S8 | **Honest capability statement in-product**: jcode's agent runs arbitrary bash with the user's privileges; programmatic approvals are non-functional in protocol v1; authority is structural. Pretending to gate is worse than admitting we do not — and this is why `readonly` was deleted rather than shipped: it would have marked a workspace safe while handing the agent bash | **M** |
-| S9 | Structural authority that **works today**: worktree isolation, allowlisted roots (realpath + symlink guard, re-checked every time), a **scrubbed child env delivered by swarm's own spawn** (R12 — `launchInstance` cannot remove a variable), no secrets in prompts, explicit `inheritLogins`, and a **process-group kill of a group swarm created** (R13). Launch-time tool profile is *not* on this list in wave 1 (T17) | **M** |
+| S9 | Structural authority that **works today**: worktree isolation, allowlisted roots (realpath + symlink guard, re-checked every time), a **scrubbed child env delivered by swarm's own spawn** (R12 — `launchInstance` cannot remove a variable, and the env *does* reach the agent because the daemon inherits the bridge's environment), no secrets in prompts, explicit `inheritLogins`, and a **two-group kill — the bridge group swarm created plus the daemon's own group** (R13). Launch-time tool profile is *not* on this list in any wave: the flag reaches a process that runs no agent (T17) | **M** |
 | S10 | `inheritLogins` defaults to `true` in the SDK and silently spends the user's subscription quota. Swarm MUST make it an explicit, visible setup decision | **M** |
 | S11 | Network allowlisting is stated as **unenforceable** without a container. Swarm MUST NOT claim it | **M** |
 | S12 | Secrets never traverse a head; keys are set server-side; secret-shaped strings are redacted from stored transcripts and exports | **S** |
@@ -446,7 +462,7 @@ property this product has, swarm builds.
 | X4 | `unknown` delivery is user-visible — "I do not know whether your message landed" — with a Reconcile action and an evidence summary | **M** |
 | X5 | Reconciliation: reconnect → attach → compare `peekSession` tail against the persisted prompt digest → workspace revision/diff → acceptance checks → resume observation, verify, or resend **only on strong evidence it never landed** (§11 Q5) | **M** |
 | X6 | One writer lease per session, one in-flight turn per session, enforced server-side. `detachSession()` is a verified client-side no-op and MUST NOT be used as a lease release; re-target with `attachSession` | **M** |
-| X7 | The server consumes jcode event streams at full speed into its own log; a head can never backpressure jcode. The SDK's fan-in buffer **kills the stream** on overflow rather than dropping | **M** |
+| X7 | The server consumes jcode event streams at full speed into its own log; a head can never backpressure jcode. The mechanism it is protecting against is **not** a jcode-side buffer kill — the SDK's per-session `events()` iterator is *unbounded* and the bridge holds no fan-in buffer at all. It is that a stalled consumer grows that array without limit and, once the socket fills, blocks the **bridge's select loop** for every session on the instance. (The 10 000-event kill belongs to the SDK's `globalEvents()`, which swarm bans outright.) | **M** |
 | X8 | Head state is derived, never authoritative. On service-worker wake: re-subscribe, re-snapshot; badge recovery is level-triggered | **M** |
 | X9 | jcode crash / instance death: supervised restart with backoff; affected attempts → `interrupted` with a resume-with-context offer | **M** |
 | X10 | Laptop sleep: budgets track monotonic and wall clock separately. The **sleep signature is wall ≫ monotonic** — both Darwin's `CLOCK_UPTIME_RAW`-backed and Linux's `CLOCK_MONOTONIC` exclude suspend. A large wall gap with a near-zero monotonic gap reports "asleep"; a large gap in **both** clocks is the *stall* signature and reports "stalled" | **S** |
@@ -476,7 +492,7 @@ work with a verdict, not a conversation that accumulates objectives (§11 Q2).
 | Q3 | Does swarm land the work? | **Yes**, minimally: commit-to-branch and patch export are **M**. PR creation is **C**. Conflict resolution is never agent-driven; a moved base surfaces as `needs-you` with rebase / report / abandon. | Without landing, `done-unlanded` becomes the fleet's largest state and swarm is a monitoring surface for work that dies in a worktree. Owning git *identity* and review would be a second product; owning `git apply` and a branch is one afternoon. |
 | Q4 | Sticky or per-message? | **Per-turn declared, session-reconciled, non-sticky at the product level.** Omission resets to the *delegation* default, not the previous override. Effort is a **control**; auto-effort routing is opt-in and **C**. Effort is recorded as declared and stated as unobservable. | jcode's session-sticky effort with a discarded applied value cannot support a truthful "per-message" claim without a reconciler and an honest label. Resetting to the delegation default is the only rule that prevents a one-off `max` from silently costing money for the next forty turns. |
 | Q5 | Who decides to resend on `unknown`? | **Never auto-resend by default.** Auto-action is permitted in one direction only: auto-**resume observation** when evidence shows the turn landed. Resend requires user confirmation, unless the delegation opts into `autoResendOnStrongEvidence` (default **off**), where strong evidence is the conjunction: no recorded `message_accepted`, prompt digest absent from the transcript tail, no workspace mutation since dispatch, and the session is idle. | A duplicated destructive turn is unrecoverable; a confirmation prompt is merely annoying. The asymmetry decides it. At 3 a.m. the user sees one row: "message status unknown — reconcile", with the four evidence lines that produced the verdict. |
-| Q6 | How much authority by default? | **Write, inside an isolated git worktree, on an allowlisted root, with a scrubbed child environment, no network claim, and a working hard-kill.** `readonly` is **deleted**, not defaulted: jcode has no read-only mode, the only lever is a launch-time tool profile that swarm cannot yet deliver or observe (T17), and a workspace labelled read-only while the agent holds bash is precisely the fake gate S8 forbids. A `sensitive` workspace instead forces `worktree`, refuses `in-place`, and shows the S8 statement at create time. | Read-only-by-default is safe and useless: the agent cannot do the job, and the product is a demo. This ruling is what makes swarm a tool. Shipping an unenforceable `readonly` would have been worse than either: it converts an honest product into a lying one at the exact point the user is deciding how much to trust it. |
+| Q6 | How much authority by default? | **Write, inside an isolated git worktree, on an allowlisted root, with a scrubbed child environment, no network claim, and a hard kill that reaches the daemon as well as the bridge.** `readonly` is **deleted**, not defaulted: jcode has no read-only mode, the only lever is a launch-time tool profile that cannot reach the agent's process at all on this topology (T17), and a workspace labelled read-only while the agent holds bash is precisely the fake gate S8 forbids. A `sensitive` workspace instead forces `worktree`, refuses `in-place`, and shows the S8 statement at create time. | Read-only-by-default is safe and useless: the agent cannot do the job, and the product is a demo. This ruling is what makes swarm a tool. Shipping an unenforceable `readonly` would have been worse than either: it converts an honest product into a lying one at the exact point the user is deciding how much to trust it. |
 | Q7 | What is swarm when the browser is closed? | **The server is the scheduler; heads are views.** Delegations keep progressing with no head attached. Wave 1: user-launched server with an optional launchd/systemd unit (**S**) and server-side OS notification when no head is connected (**S**). Scheduling and recurring runs are **C**. | "Headless-first" is a lie if closing a tab stops the fleet. This is also what makes the CLI head cheap and the badge purely derived. |
 | Q8 | Does the copilot drive the swarm, and may it act unasked? | **Read-only tools unasked** (`list`, `inspect`, `wait` — event-driven, `until: idle \| waiting \| terminal \| event`) — **M**. **Write tools (`start`, `followUp`, `cancel`) require per-call user confirmation** delivered over a named request/response pair on the swarm protocol, and are **S**: the confirmation frame, the `confirmation-required` client event and the `confirm`/`deny` intents are specified in wave 1 (SPEC §6.7) so the ruling has a contract, but the write half may slip to wave 2 without reopening the ruling. Copilot has **no** `complete`, `verify`, `land`, or `retry-with-edited-spec`. Copilot delegations draw on the fleet budget under a copilot sub-cap. A copilot `cancel` of a user-started delegation is refused. | A page-context conversation that can spawn processes writing to your repos needs a human in the loop at exactly one place, and creation is that place. But a confirmation requirement with no frame that can carry a confirmation to a human is a ruling with no mechanism — so the mechanism is specified even where the tools are staged. |
 | Q9 | How many concurrent agents? | **Design point 3–8; hard default 4.** UI is summary-first, transcript-on-demand. Attention budget per agent is one line in the fleet, expanded on focus. **Parallel attempts are wave 1 and structural, not sequential retries**: `parallelAttempts` (default 1, max 3) admits N attempts of one delegation to N slots, each with its own session, worktree and channel; delegation state is a rollup over live attempts. **Compare attempts (A5) is therefore M, not S.** | On one laptop, worktrees, CPU, and provider rate limits bind long before 30. Committing to a number is what lets the dashboard be a triage list rather than a wall of terminals. And if "3 parallel attempts at one objective" is the flagship behaviour that justifies the name, it cannot be a delegation with one `currentAttempt` and one channel — that machine can only run attempts in sequence, which is a retry log with better wording. |
@@ -484,7 +500,7 @@ work with a verdict, not a conversation that accumulates objectives (§11 Q2).
 | Q11 | Who watches spend, and what happens at the cap? | Soft cap warns; **hard cap pauses dispatch** and never cancels a turn mid-flight. Caps are per fleet and per delegation. | `inheritLogins` defaults to spending the user's own subscription quota. A mid-turn kill wastes the tokens already spent — pausing dispatch is the only breach action that saves money. |
 | Q12 | Is the transcript the product or the evidence? | **Evidence.** It is retained for the delegation's life, exportable (**C**), searchable (**C**), and it is not the primary view. The primary view is state + diff + evidence. | Decides the whole investment split: virtualization and renderers are **S**, search and export are **C**, and the fleet view never renders a transcript to answer "what is happening". |
 | Q13 | Does swarm ever manage a remote machine's jcode? | **No** (**W**). Local, single machine, `127.0.0.1`. | Every right-sizing decision in §8 depends on it. Remote operation would invalidate the pairing model, the workspace allowlist, and the plaintext-at-rest statement simultaneously. |
-| Q14 | Who spawns the jcode bridge? | **Swarm does** (R12). `launchInstance()` is used for nothing but its credential helpers. | It hard-codes `{...process.env}` (additive only), passes no argv, and leaves the child in the caller's process group. Three of §8's structural-authority claims — scrubbed env, tool profile, working hard kill — are unreachable through it, and the third is actively dangerous: killing that process group kills the swarm server. Owning ~20 lines of `spawn` buys back the entire authority model. |
+| Q14 | Who spawns the jcode bridge? | **Swarm does** (R12) — and swarm also owns **stopping the daemon**, which the SDK's launcher was the only thing that knew how to do. `launchInstance()` is used for nothing but its credential helpers. | It hard-codes `{...process.env}` (additive only), passes no argv, and leaves the child in the caller's process group. Two of §8's structural-authority claims — scrubbed env and a working hard kill — are unreachable through it, and the second is actively dangerous: killing that process group kills the swarm server. The third, a tool profile, is unreachable through *any* spawn of `api-bridge`, because the flag never reaches the daemon that runs the agent — so owning the spawn buys back two of the three, not three. It also costs one: `shutdown()`/`stopInstanceDaemon` go with it, and with them the only code that resolves the `setsid()`'d daemon's pid. ~20 lines of `spawn` plus ~15 of `servers.json` lookup buy back the authority model; the second 15 were invisible until someone read what the first 20 replaced. |
 | Q15 | Where does the presentation seam live? | **A fourth entry, `./presentation`** — types only, importing nothing, grep-enforced, mirroring `comment-ui/presentation`. The extension still owns rendering; the reference presentation is a separate package in wave 2. | H6 was a **M** requirement naming an interface that appeared three times and was declared zero times. Either the seam gets a module or the requirement gets deleted; a locked contract cannot hold a requirement with no contract. Adding a fourth entry breaks H1's "three" — so H1 is amended here rather than quietly violated in the spec. |
 | Q16 | What does the kill switch destroy? | **Nothing.** It cancels in-flight turns, pauses dispatch fleet-wide, optionally kills instances, and leaves states non-terminal and worktrees intact. Only `cancel{scope:'delegation'}` reaches `cancelled`. | The panic button and the delete button cannot be the same button. A fleet-wide stop that terminalizes every delegation costs the user N retries at the exact moment they were trying to stop losing work. |
 | Q17 | Do per-turn effort and model compose with steering? | **No.** They are legal only with `delivery:'after-turn'`; the other three modes reject the field and record `inherited`. | `next-safe-point` and `interrupt` exist only mid-turn, which is precisely when a config change is refused — so the combination is never merely unlucky, it is always impossible. `context-only` starts no turn, so a recorded effort would name nothing. Saying so is one table row; discovering it is a support thread. |
@@ -507,16 +523,18 @@ state, for any completed delegation, what verified it and what it changed, from 
    actionable upgrade message within one second, never a hang.
 2. The client core imports clean with `document`, `window`, `navigator`, `chrome`, and `node:*`
    absent, and a grep gate over the core returns nothing.
-1a. jcode on the development machine is **≥ 0.67.0** and every §5.1 row is re-tagged **observed** or
-   **source-read**. Shipping a version floor whose far side has never been executed is not a
-   verified product.
+1a. jcode on the development machine is **≥ 0.67.0** (0.67.1 at time of writing) and every §5.1 row
+   is re-tagged **observed** or **source-read**. Shipping a version floor whose far side has never
+   been executed is not a verified product — and the floor is swarm's own, since the SDK checks no
+   version at all.
 3. A **CLI head** drives create → turn → cancel → verify → land over the identical client core,
    **twice**: once in-process against `MockExecutor`, and once over a **WebSocket against a real
    `swarm serve`**, authenticating from `$SWARM_HOME/cli-token`. The in-process run alone proves
    nothing about headlessness against a real server.
 4. A scripted **fake jcode** over the SDK's injectable `Transport` drives the resilience matrix in
-   CI with no binary: mid-turn disconnect, ambiguous send, instance death, event-buffer overflow,
-   sleep gap, two-head conflict. A **real-jcode smoke test** runs the same loop against a seeded
+   CI with no binary: mid-turn disconnect, ambiguous send, instance death, slow-consumer backlog,
+   sleep gap, two-head conflict, and a mid-turn `setReasoningEffort` that times out and applies
+   anyway. A **real-jcode smoke test** runs the same loop against a seeded
    scratch repo; it is env-gated in ordinary CI but **required at least once per release**, with its
    output archived as evidence. A release whose only jcode proof is a skipped test is not released.
 5. A named test asserts each of: `unknown` never auto-resends by default; a turn override does not
@@ -540,8 +558,12 @@ state, for any completed delegation, what verified it and what it changed, from 
 12. The fleet kill switch leaves every delegation non-terminal and every worktree on disk, and its
     report names what it stopped; a separate test asserts `cancel{scope:'delegation'}` is the only
     path to `cancelled`.
-13. The hard kill terminates a bridge and its children and the swarm server is still serving
-    afterwards — asserted by a test that kills an instance and then completes an intent.
+13. The hard kill terminates a bridge, **its `setsid()`'d daemon, and a process the agent itself
+    spawned**, and the swarm server is still serving afterwards — asserted by a test that starts a
+    long-running child through the agent's bash tool, kills the instance, asserts that child and the
+    daemon are both gone (`kill(pid, 0)` → `ESRCH`), and then completes an intent. Asserting only
+    that the bridge died and the server lived is the assertion that passed while the feature was
+    broken.
 
 ## 13. Corrections to the input briefing
 
@@ -559,6 +581,15 @@ defaulting to true; `setRetentionPolicy` applying as a side effect of listing se
 only by the adversarial review — `launchInstance()`'s **additive-only `env`, absent argv, and
 `detached: false`**, which between them made three of §8's structural-authority claims
 unimplementable and the fourth suicidal (§14, Q14).
+
+Missed by the briefing **and by the adversarial review**, found only by reading the bridge and daemon
+sources (§15): the daemon's **`setsid()`**, which makes a bridge-group kill a no-op that reports
+success; `waitForAccept` **resolving** on timeout, which makes `accepted` and `unknown`
+indistinguishable through `sendMessage`; the tool flags **parsing on `api-bridge` and never reaching
+the daemon**; `create_session` **attaching** the connection that issues it; `getHistory` returning
+**`""`** rather than flattened text; the bridge **exiting 0** when another bridge holds the socket
+lock; and the mid-turn `setReasoningEffort` that **times out and then applies**. Every one of them
+fails in the direction that looks like success.
 
 ## 14. Amendments from adversarial review (2026-08-04)
 
@@ -583,6 +614,28 @@ The review's jcode research stood; the product line did not. What changed, and w
 | Node 20+ | Node 24+ everywhere (`node:sqlite`) | §1, SPEC §1.1 |
 | HTTP+SSE fallback transport (**M**) | Wave 2 (**C**); WS + in-process only in wave 1 (H7) | H7 |
 | "Verified against the installed binary" | Source-read, not runtime-observed; 0.67.0 is released; gate 1a and a required real-jcode run | §1, gate 4 |
+
+## 15. Amendments from the feasibility review (2026-08-04)
+
+The adversarial review of §14 reasoned from the SDK's surface. This one read the bridge
+(`crates/jcode-harness-api-server/`), the daemon (`crates/jcode-app-core/src/server/`), the CLI
+(`src/cli/{args,dispatch}.rs`) and the SDK's compiled `dist/*.js`. Three of §14's own amendments did
+not survive it.
+
+| Was | Now | Invalidated |
+| --- | --- | --- |
+| Hard kill = `kill(-pgid)` on the bridge group swarm created (§14, Q14) | **Two groups**: bridge pgid **and** the daemon's group, `daemonPid` resolved from `$JCODE_HOME/servers.json`. The daemon `setsid()`s at startup, so the agent, its tools and its bash children were never in the bridge's group. Partial kills report themselves partial | §5.1, §5.3.8, R12, R13, F5, S9, Q14, gate 13, SPEC §4.3.7/§5.3/§5.5/#27 and its DoD test |
+| `sendMessage(..., {waitForAccept: true, acceptTimeoutMs})` distinguishes `accepted` from `unknown` | `waitForAccept: false`; swarm observes `message_accepted` on its own stream under its own timeout. The SDK **resolves** on ack timeout by design, so the call returns the same value either way | T5, SPEC §4.2, `SubmitReceipt`, V5 |
+| Tool profile is deliverable via swarm's own spawn, unobserved, promoted when a run sees it (T17) | **Withdrawn.** The flags are global args that `api-bridge` accepts and never forwards; the daemon that runs the agent receives only provider/profile/model. Reopens only under a `serve`-first topology | T16, T17, C12, R10, S9, Q6, SPEC §4.2/§5.3/§5.5/§7.3/#20 |
+| Unknown effort values are logged and ignored | **Rejected** with `invalid_request`; the ladder decision stands on `swarm`/`swarm-deep` being *accepted* | §5.1 row 3, SPEC §4.2, #9 |
+| Mid-turn config change is "silently deferred" | The reply is withheld until turn end: the call **times out at 30 s and the setting still applies** | §5.1 row 2, SPEC §4.2/§4.3.3/#8 |
+| One admin connection per instance, unattached | A **probe** connection attached to a probe session. `create_session` attaches the issuing connection and `detach_session` cannot release it; an unattached `ping` is answered by the bridge itself, so an "admin" connection stays green with a dead daemon | R2, R9, SPEC §5.3, §5.4 #1, `HealthVM` |
+| `getHistory`/`peekSession` are equally lossy ("text-only") | `getHistory` returns **`""`** for block-array messages; only `peekSession` flattens. `tail()` is pinned to `peekSession`; `getHistory` is never called | §5.3.3, A6, SPEC §5.4 #12, §5.5, #13 |
+| A bridge child that exits 0 started successfully | Exit **0** is the "another bridge already owns this socket" path. Any exit before the handshake is a preflight failure, and pgid recording waits on a liveness check | R2, SPEC §5.3 |
+| jcode's fan-in buffer kills the stream on overflow (X7) | That buffer is the SDK's **banned** `globalEvents()`. `events()` is unbounded; real backpressure is `write_all` stalling the bridge's select loop | X7, SPEC §2.4, #4 |
+| `setRetentionPolicy` prevents a live hazard | Auto-archive defaults **off** and the state is per-`JCODE_HOME`; pinning it is defence-in-depth | R11, SPEC §5.3 |
+| "0.67.0, the current latest release" | 0.67.1; and the SDK enforces **no** version floor, so R1 is the only gate | §1, gate 1a, SPEC header/§11 |
+| — (unstated) | `InstanceKey`'s `credentialScope` is one of six fixed provider ids; `tool_input` deltas always carry an empty call id; `ExecutorRuntimeInfo` is a deliberate subset of the SDK's `RuntimeInfo`; `listSessions()` is a disk inventory; context pressure *is* legible as prose in `compact()`'s reply | R10, W14, SPEC §5.1, §5.4 #13 |
 
 ## Final product statement
 
