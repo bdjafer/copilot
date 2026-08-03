@@ -18,6 +18,18 @@ import { build } from 'vite'
 const repoRoot = fileURLToPath(new URL('../../..', import.meta.url))
 
 export default async function setup(): Promise<void> {
+  // `comment-ui/glass` is its own single-entry pass, so emitting it is a second `build()` call
+  // rather than a fourth name in the ESM entry map — see the package's `vite.config.ts`.
+  process.env.BUILD_TARGET = 'glass'
+  try {
+    await build({
+      root: resolve(repoRoot, 'packages/comment-ui'),
+      logLevel: 'warn',
+      build: { emptyOutDir: false },
+    })
+  } finally {
+    delete process.env.BUILD_TARGET
+  }
   for (const packageDir of ['packages/comment-core', 'packages/comment-ui']) {
     await build({
       root: resolve(repoRoot, packageDir),

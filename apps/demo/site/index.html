@@ -5,24 +5,44 @@
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <title>exp-spec demo · Module 1 without an extension</title>
     <link rel="stylesheet" href="assets/demo.css" />
-    <!-- Two script tags and no build step (SPEC-comment-core §7.1). Order is load-bearing:
-         comment-ui.iife.js declares comment-core external and reads `globalThis.Comments`. -->
+    <!-- Three script tags and no build step (SPEC-comment-core §7.1). Order is load-bearing:
+         comment-ui.iife.js declares comment-core external and reads `globalThis.Comments`, and
+         comment-ui-glass.iife.js is the appearance, loaded last and selected at mount. -->
     <script src="vendor/comment-core.iife.js"></script>
     <script src="vendor/comment-ui.iife.js"></script>
+    <script src="vendor/comment-ui-glass.iife.js"></script>
   </head>
   <body>
     <main>
-      <h2>Module 1, standing on its own</h2>
+      <section class="hero">
+        <h1>Comment on a page nobody built for commenting.</h1>
+        <p class="lede">
+          Anchors are <em>scored</em>, not looked up. Every page below is static HTML served off
+          disk — no extension, no service worker, no bundler, no model. Threads live in
+          <code>localStorage</code>, keyed by page URL, and the “copilot” is an
+          <a href="assets/echo.js">echo responder</a>: a <code>setTimeout</code> and one call to
+          <code>engine.appendComment({ author: 'copilot' })</code>.
+        </p>
+        <ul class="hero-keys">
+          <li><kbd>C</kbd> comment</li>
+          <li><kbd>A</kbd> ask</li>
+          <li><kbd>Esc</kbd> back out</li>
+          <li><kbd>⌘</kbd><kbd>↵</kbd> send</li>
+          <li><kbd>⌥</kbd><kbd>⇧</kbd><kbd>C</kbd> summon the panel</li>
+        </ul>
+      </section>
+
       <div class="demo-note">
-        Every page here is static HTML served off disk. No extension, no service worker, no bundler,
-        no model. Threads live in <code>localStorage</code>, keyed by page URL, and the “copilot” is
-        an <a href="assets/echo.js">echo responder</a> — a <code>setTimeout</code> and one call to
-        <code>engine.appendComment({ author: 'copilot' })</code>. <br /><br />
-        On every page: <kbd>C</kbd> places a comment, <kbd>A</kbd> asks, <kbd>Esc</kbd> backs out,
-        the panel in the corner lists open, resolved and unanchored threads.
+        <strong>Nothing exists until you ask for it.</strong> A resting badge is a 12&nbsp;px dot at
+        72&nbsp;% opacity; bring the cursor within 96&nbsp;px, tab to it, or give it something to
+        say, and it becomes a pill. The corner panel is <em>zero pixels</em> until the page has its
+        first thread. That is the whole difference between an annotation layer and a tool that
+        vandalises somebody's page with twelve permanent blue pills — and it only holds up because
+        five mitigations ship together: touch, keyboard focus, a live copilot chip, the two seconds
+        after a page change, and a complete accessible name in every state, including the dot.
       </div>
 
-      <h3>The scenario matrix</h3>
+      <p class="section-label">The scenario matrix</p>
       <ul class="index-list">
         <li>
           <a href="pages/basic.html">Basic static page</a>
@@ -56,7 +76,24 @@
         </li>
       </ul>
 
-      <h3>What to look at</h3>
+      <p class="section-label">The appearance</p>
+      <ul class="index-list">
+        <li>
+          <a href="material.html">The material</a>
+          <p>
+            One page about one thing: what the overlay is made of, and what a 3D renderer would have
+            cost to say it. Includes the byte ledger that deleted the shader.
+          </p>
+        </li>
+      </ul>
+      <p>
+        Every page mounts <code>glassPresentation()</code> by default —
+        <a href="?theme=default">?theme=default</a> switches any of them back to the frozen original
+        in one reload, which is the cheapest possible proof that the renderer really did split into
+        a headless controller and a swappable presentation.
+      </p>
+
+      <p class="section-label">What to look at</p>
       <p>
         Each page has a toolbar with a live event log. <code>thread:anchored</code> prints the
         strategy that won and its confidence; <code>thread:orphaned</code> prints when an anchor

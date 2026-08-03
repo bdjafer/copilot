@@ -22,6 +22,10 @@ export default defineConfig({
         replacement: BUILT_ENTRIES['@astrale-os/comment-core'],
       },
       { find: /^@astrale-os\/comment-ui$/, replacement: BUILT_ENTRIES['@astrale-os/comment-ui'] },
+      {
+        find: /^@astrale-os\/comment-ui\/glass$/,
+        replacement: BUILT_ENTRIES['@astrale-os/comment-ui/glass'],
+      },
     ],
   },
 })

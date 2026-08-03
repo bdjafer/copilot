@@ -30,13 +30,16 @@ import { dirname, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { afterAll, beforeAll, describe, expect, test } from 'vitest'
 
+import type * as CommentUiGlass from '../src/glass.ts'
 import type * as CommentUi from '../src/index.ts'
 
 const packageRoot = resolve(dirname(fileURLToPath(import.meta.url)), '..')
 const coreRoot = resolve(packageRoot, '../comment-core')
 const repoRoot = resolve(packageRoot, '../..')
 const artifact = resolve(packageRoot, 'dist/comment-ui.iife.js')
+const glassArtifact = resolve(packageRoot, 'dist/comment-ui-glass.iife.js')
 const stylesheet = resolve(packageRoot, 'dist/comment-ui.css')
+const glassStylesheet = resolve(packageRoot, 'dist/comment-ui-glass.css')
 
 const PACKAGES = [
   ['@astrale-os/comment-core', coreRoot],
@@ -44,6 +47,7 @@ const PACKAGES = [
 ] as const
 
 let CommentsUI: typeof CommentUi
+let CommentsUIGlass: typeof CommentUiGlass
 let Comments: typeof CommentCore
 
 /** Set for the length of this file: the IIFE bundle reads the global by name, at load time. */
@@ -53,12 +57,17 @@ function setGlobalComments(value: unknown): void {
 
 beforeAll(async () => {
   const { build } = await import('vite')
-  for (const [, root] of PACKAGES) {
-    process.env.BUILD_TARGET = 'iife'
-    try {
-      await build({ root, logLevel: 'error', build: { emptyOutDir: false } })
-    } finally {
-      delete process.env.BUILD_TARGET
+  for (const [name, root] of PACKAGES) {
+    // The same passes the packages' own `build` scripts run, in the same order — a build
+    // definition that only exists in a test proves nothing about what `pnpm build` emits.
+    const passes = name === '@astrale-os/comment-ui' ? ['iife', 'glass'] : ['iife']
+    for (const pass of passes) {
+      process.env.BUILD_TARGET = pass
+      try {
+        await build({ root, logLevel: 'error', build: { emptyOutDir: false } })
+      } finally {
+        delete process.env.BUILD_TARGET
+      }
     }
     await build({ root, logLevel: 'error', build: { emptyOutDir: false } })
     execFileSync(resolve(repoRoot, 'node_modules/.bin/tsgo'), ['-p', 'tsconfig.build.json'], {
@@ -79,18 +88,29 @@ beforeAll(async () => {
   CommentsUI = new Function(
     `${uiCode.replace(/^var CommentsUI =/, 'return')}`,
   )() as typeof CommentUi
-}, 120_000)
+  const glassCode = readFileSync(glassArtifact, 'utf8')
+  CommentsUIGlass = new Function(
+    `${glassCode.replace(/^var CommentsUIGlass =/, 'return')}`,
+  )() as typeof CommentUiGlass
+}, 180_000)
 
 afterAll(() => {
   Reflect.deleteProperty(globalThis, 'Comments')
 })
 
 describe('§1.2 / §9 — the IIFE bundle', () => {
-  test('exposes `CommentsUI` with exactly the §3 runtime surface', () => {
+  test('exposes `CommentsUI` with exactly the §3 / §3.1.7 runtime surface', () => {
     const exported = Object.keys(CommentsUI)
       .filter((name) => name !== 'default' && name !== '__proto__')
       .sort()
-    expect(exported).toEqual(['commentUIStyles', 'defaultLabels', 'mount', 'mountCommentUI'])
+    expect(exported).toEqual([
+      'commentUIStyles',
+      'createCommentUIController',
+      'defaultLabels',
+      'domPresentation',
+      'mount',
+      'mountCommentUI',
+    ])
   })
 
   test('declares comment-core external — it never bundles a second copy', () => {
@@ -122,15 +142,107 @@ describe('§1.2 / §9 — the IIFE bundle', () => {
     expect(CommentsUI.mountCommentUI).toBeTypeOf('function')
   })
 
-  test('the ESM pass emits the entry point and its declarations input', () => {
-    expect(existsSync(resolve(packageRoot, 'dist/index.js'))).toBe(true)
+  test('the ESM pass emits every subpath of §3.1.1 the package publishes', () => {
+    for (const entry of ['dist/index.js', 'dist/presentation.js', 'dist/testing.js']) {
+      expect({ entry, built: existsSync(resolve(packageRoot, entry)) }).toEqual({
+        entry,
+        built: true,
+      })
+    }
+  })
+
+  test('`comment-ui/presentation` carries no runtime and no import (§3.1.1)', () => {
+    // The types-only seam is what makes "a presentation imports zero engine code" enforceable
+    // by a grep rather than by discipline. A `.d.ts` naming a `comment-core` identifier, or a
+    // chunk that pulls one in, would put the engine one `import` away from every theme.
+    const source = readFileSync(resolve(packageRoot, 'src/presentation.ts'), 'utf8')
+    expect(source).not.toMatch(/^\s*import\b/m)
+    expect(source).not.toMatch(/\bexport\b[^\n]*\bfrom\b/)
+
+    const declaration = readFileSync(resolve(packageRoot, 'dist/types/presentation.d.ts'), 'utf8')
+    expect(declaration).not.toMatch(/^\s*import\b/m)
+    expect(declaration).not.toContain('comment-core')
+    expect(declaration).not.toContain('floating-ui')
+    expect(declaration).toContain('UIViewModel')
+    expect(declaration).toContain('Intents')
+
+    const chunk = readFileSync(resolve(packageRoot, 'dist/presentation.js'), 'utf8')
+    expect(chunk).not.toMatch(/\bfrom\s*(['"])(?!\.)[^'"]+\1/)
   })
 
   test('emits the importable stylesheet, byte-identical to the injected one', async () => {
     expect(existsSync(stylesheet)).toBe(true)
-    const { commentUIStyles } = await import('../src/styles.ts')
+    const { commentUIStyles } = await import('../src/presentations/dom/styles.ts')
     expect(readFileSync(stylesheet, 'utf8')).toBe(commentUIStyles)
     expect(CommentsUI.commentUIStyles).toBe(commentUIStyles)
+  })
+
+  test('`comment-ui/glass` ships two names and, at runtime, imports nothing (§1.2)', () => {
+    const exported = Object.keys(CommentsUIGlass)
+      .filter((name) => name !== 'default' && name !== '__proto__')
+      .sort()
+    expect(exported).toEqual(['glassPresentation', 'glassStyles'])
+
+    // §1.2's table says "**none at runtime**", and this is what that costs a consumer: the ESM
+    // chunk resolves no bare specifier at all — not the engine, not the controller, not the
+    // positioning library — so selecting the theme can never drag a second copy of any of them
+    // into a page. A shared rollup chunk would break exactly this line.
+    const chunk = readFileSync(resolve(packageRoot, 'dist/glass.js'), 'utf8')
+    expect(chunk).not.toMatch(/\bfrom\s*(['"])(?!\.)[^'"]+\1/)
+    expect(chunk).not.toContain('comment-core')
+    expect(chunk).not.toContain('computePosition')
+
+    // …and the same for the IIFE, which is what a bare page loads third.
+    const code = readFileSync(glassArtifact, 'utf8')
+    expect(code).not.toMatch(/\bfrom\s*(['"])(?!\.)[^'"]+\1/)
+    expect(code).not.toMatch(/\brequire\((['"])(?!\.)/)
+    expect(code).toContain('CommentsUIGlass')
+    // The controller is not in here: `mountCommentUI` stays the root bundle's, read off the page.
+    expect(code).not.toContain('createCommentUIController')
+    expect(code).not.toContain('THREAD_VERSION')
+  })
+
+  test('emits the importable glass stylesheet, byte-identical to the injected one', async () => {
+    expect(existsSync(glassStylesheet)).toBe(true)
+    const { glassStyles } = await import('../src/presentations/glass/styles.ts')
+    expect(readFileSync(glassStylesheet, 'utf8')).toBe(glassStyles)
+    expect(CommentsUIGlass.glassStyles).toBe(glassStyles)
+  })
+
+  test('the two appearances are selectable from the same bare page', async () => {
+    document.body.innerHTML = '<article id="a" data-testid="a">alpha text</article>'
+    const store = Comments.createMemoryStore()
+    const ui = CommentsUI.mount({
+      engine: { store, pageKey: 'https://example.com/glass' },
+      ui: { panel: { defaultOpen: true }, presentation: CommentsUIGlass.glassPresentation() },
+    })
+    try {
+      await ui.engine.ready()
+      const target = document.querySelector('#a')!
+      const { anchor, capture } = Comments.captureTarget(target)
+      const created = await ui.engine.createThread({
+        pageKey: ui.engine.pageKey,
+        kind: 'comment',
+        anchor,
+        capture,
+        author: 'user',
+        body: 'drawn by the second presentation',
+      })
+      await ui.engine.reanchor()
+      await new Promise<void>((done) => setTimeout(done, 0))
+
+      const badge = ui.root.querySelector(
+        `button[aria-haspopup="dialog"][data-thread="${created.thread.id}"]`,
+      )
+      expect(badge).not.toBeNull()
+      // The sprite the theme injects, and the sheet, both landed in the same shadow root.
+      expect(ui.root.querySelector('.cc-sprite')).not.toBeNull()
+      expect(ui.root.querySelector('style[data-cc="base"]')?.textContent).toContain('--_glass-bg')
+    } finally {
+      ui.unmount()
+      ui.engine.destroy()
+      document.body.innerHTML = ''
+    }
   })
 
   test('the build is additive: it never deletes what a previous pass emitted', () => {
@@ -223,7 +335,9 @@ describe('§1.1 / §1.2 — the published exports map', () => {
     const declaration = readFileSync(types, 'utf8')
     expect(declaration).toContain('mountCommentUI')
     expect(declaration).toContain('commentUIStyles')
-    // The runtime surface and the declared surface are the same four names (§3).
+    expect(declaration).toContain('createCommentUIController')
+    expect(declaration).toContain('domPresentation')
+    // The runtime surface and the declared surface are the same six names (§3, §3.1.7).
     const { commentUIStyles } = await import('../src/index.ts')
     expect(typeof commentUIStyles).toBe('string')
   })

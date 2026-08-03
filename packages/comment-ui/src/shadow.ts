@@ -7,6 +7,11 @@
  * bits; **the host page's DOM is never mutated** beyond appending this single host element;
  * an explicit `font-size` on `:host` next to `all: initial`.
  *
+ * Sheet order is the presentation contract's (§3.1.4 step 1): the dynamic `:host` vars first,
+ * then `presentation.css`, then `CommentUIOptions.css`. A presentation that ships no sheet
+ * simply skips the middle one — the layer, the vars and the `role="status"` region exist either
+ * way, which is what makes `presentation: null` a usable mount rather than a broken one.
+ *
  * `isolateEvents` (default true) is WXT's `isolateEvents` by hand: keyboard events bubble out
  * of a shadow root even with retargeting, so a page-level `keydown` handler would otherwise
  * see every character typed into the composer. They are stopped **in the bubble phase at the
@@ -19,8 +24,6 @@
  */
 
 import type { ResolvedOptions } from './types.ts'
-
-import { commentUIStyles } from './styles.ts'
 
 /** WXT's default isolated set: the events that carry typed input out of the shadow tree. */
 const ISOLATED_EVENTS = ['keydown', 'keyup', 'keypress'] as const
@@ -46,17 +49,20 @@ export function createLayer(options: ResolvedOptions): Layer {
   host.setAttribute('data-comment-ui', '')
   const root = host.attachShadow({ mode: 'open' })
 
-  // Dynamic `:host` bits kept OUT of the exported sheet so the importable `comment-ui.css` is
+  // Dynamic `:host` bits kept OUT of any exported sheet so the importable `.css` files stay
   // static and complete. Custom properties survive `all: initial`.
   const vars = doc.createElement('style')
   vars.setAttribute('data-cc', 'vars')
   vars.textContent = `:host{--cc-root-font-size:${options.rootFontSize};--cc-z:${String(options.zIndex)}}`
+  root.append(vars)
 
-  const sheet = doc.createElement('style')
-  sheet.setAttribute('data-cc', 'base')
-  sheet.textContent = commentUIStyles
-
-  root.append(vars, sheet)
+  const presentationCss = options.presentation?.css
+  if (presentationCss) {
+    const sheet = doc.createElement('style')
+    sheet.setAttribute('data-cc', 'base')
+    sheet.textContent = presentationCss
+    root.append(sheet)
+  }
 
   if (options.css) {
     const extra = doc.createElement('style')

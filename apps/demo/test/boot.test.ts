@@ -15,6 +15,7 @@ import type { CommentUI } from '@astrale-os/comment-ui'
 
 import * as Comments from '@astrale-os/comment-core'
 import * as CommentsUI from '@astrale-os/comment-ui'
+import * as CommentsUIGlass from '@astrale-os/comment-ui/glass'
 import { afterEach, beforeEach, describe, expect, test } from 'vitest'
 
 import { bootDemo, DEMO_ANCHORING, DEMO_MODES } from '../site/assets/demo.js'
@@ -30,15 +31,20 @@ interface DemoApi {
 
 installLocalStorage()
 
-/** What the two `<script src="…iife.js">` tags leave on the page. */
+/** What the three `<script src="…iife.js">` tags leave on the page. */
 function installGlobals(): void {
   Object.defineProperty(globalThis, 'Comments', { value: Comments, configurable: true })
   Object.defineProperty(globalThis, 'CommentsUI', { value: CommentsUI, configurable: true })
+  Object.defineProperty(globalThis, 'CommentsUIGlass', {
+    value: CommentsUIGlass,
+    configurable: true,
+  })
 }
 
 function clearGlobals(): void {
   Reflect.deleteProperty(globalThis, 'Comments')
   Reflect.deleteProperty(globalThis, 'CommentsUI')
+  Reflect.deleteProperty(globalThis, 'CommentsUIGlass')
 }
 
 let demo: DemoApi | null = null

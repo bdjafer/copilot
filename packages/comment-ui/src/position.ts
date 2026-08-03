@@ -1,16 +1,25 @@
 /**
- * Positioning (§5.2 `position.ts`, PLAN §3.3): `@floating-ui/dom` + `autoUpdate` for badges
- * and popovers, `IntersectionObserver` to cheaply skip off-screen badges.
+ * Positioning (§5.2 `position.ts`, §3.1.5): `@floating-ui/dom` + `autoUpdate` for badges and
+ * popovers, `IntersectionObserver` to cheaply skip off-screen badges, and the `host.anchor()`
+ * registry that binds a presentation's node to a surface key.
+ *
+ * **The coordinate contract (§3.1.5, decision log #34).** Positioning is logic, not appearance:
+ * it decides *where a thing is*, and it is the part that regressed against real pages in the
+ * bench. So the controller owns all of it — `computePosition`, `autoUpdate`, the off-screen
+ * skip, the docked-orphan reference, `left`/`top`, `data-placement` and `data-picking` — and a
+ * presentation only ever hands over a node. The corollary is the gift: `transform`, `opacity`,
+ * `clip-path` and friends on those same nodes are then entirely the presentation's, with zero
+ * conflict, which is why a motion catalog needs no coordination with this file.
  *
  * `autoUpdate` already composes the loop we would hand-roll — capture-phase passive scroll
  * listeners (so nested scrollers are caught), `resize`, `ResizeObserver`, and `animationFrame`
  * for elements moved by page JS. `animationFrame: true` is what makes the **orphan dock**
  * correct: its reference is a virtual element derived from a `DocumentRect`, and only a
- * per-frame re-read re-projects document space into viewport space after a scroll, so the
- * dock cannot drift (§3).
+ * per-frame re-read re-projects document space into viewport space after a scroll, so the dock
+ * cannot drift (§3).
  *
- * `strategy: 'fixed'` matches the `position: fixed` layer, so floating-ui's coordinates and
- * the layer's coordinate system are the same thing and no offset-parent maths is needed.
+ * `strategy: 'fixed'` matches the `position: fixed` layer, so floating-ui's coordinates and the
+ * layer's coordinate system are the same thing and no offset-parent maths is needed.
  */
 
 import type { DocumentRect } from '@astrale-os/comment-core'
@@ -30,6 +39,8 @@ export interface TrackOptions {
   offset?: readonly [number, number]
   padding?: number
   onError?: (error: unknown) => void
+  /** Fired after every successful pass, with floating-ui's *resolved* placement. */
+  onPlaced?: (placement: string) => void
 }
 
 export function track(
@@ -48,10 +59,17 @@ export function track(
       placement: options.placement ?? 'top-end',
       middleware: [offset({ mainAxis, crossAxis }), flip({ padding }), shift({ padding })],
     })
-      .then(({ x, y }) => {
+      .then((result) => {
         if (stopped) return
-        floating.style.left = `${String(Math.round(x))}px`
-        floating.style.top = `${String(Math.round(y))}px`
+        floating.style.left = `${String(Math.round(result.x))}px`
+        floating.style.top = `${String(Math.round(result.y))}px`
+        // §3.1.5: `data-placement` is the controller's, so a presentation can grow a surface out
+        // of the correct edge without ever computing where that edge is.
+        const resolved = result.placement as string | undefined
+        if (resolved && floating.getAttribute('data-placement') !== resolved) {
+          floating.setAttribute('data-placement', resolved)
+        }
+        if (resolved) options.onPlaced?.(resolved)
       })
       .catch((error: unknown) => {
         options.onError?.(error)
@@ -143,5 +161,150 @@ export function watchVisibility(
     }
   } catch {
     return null
+  }
+}
+
+/* -------------------------------------------------------------------- the anchor registry */
+
+/** What the controller wants a surface tracked against, this pass. */
+export interface SurfaceRef {
+  /**
+   * Rebuild the tracker only when this changes — an unconditional teardown on every render
+   * pass would restart the frame loop constantly.
+   */
+  token: unknown
+  reference: ReferenceElement
+  placement: Placement
+  offset: readonly [number, number]
+  /** False while the surface is deliberately un-tracked (an off-screen, un-pinned badge). */
+  active: boolean
+}
+
+interface Surface {
+  node: HTMLElement | null
+  token: unknown
+  reference: ReferenceElement | null
+  placement: Placement
+  offset: readonly [number, number]
+  active: boolean
+  tracker: Tracker | null
+  resolved: string | null
+}
+
+export interface Positioner {
+  /** `PresentationHost.anchor` — register (or clear) the node for a surface key. */
+  anchor(key: string, node: HTMLElement | null): void
+  node(key: string): HTMLElement | null
+  /** The surface key a node (or one of its ancestors) was registered under. */
+  keyOf(node: Node | null): string | null
+  /** floating-ui's last resolved placement for a key. */
+  placementOf(key: string): string | null
+  /** Apply this pass's reference set. Keys absent from `refs` are torn down. */
+  sync(refs: ReadonlyMap<string, SurfaceRef>): void
+  destroy(): void
+}
+
+/**
+ * The registry is deliberately tolerant of ordering: a presentation registers its nodes from
+ * inside `update(vm)`, i.e. *after* the controller computed this pass's references, and a node
+ * can also arrive between passes. Both halves (node, reference) are stored independently and a
+ * tracker starts as soon as both exist — so neither side has to know about the other's timing.
+ */
+export function createPositioner(options: { onError: (error: unknown) => void }): Positioner {
+  const surfaces = new Map<string, Surface>()
+  let wanted: ReadonlySet<string> = new Set()
+
+  function stop(surface: Surface): void {
+    surface.tracker?.destroy()
+    surface.tracker = null
+  }
+
+  function start(surface: Surface): void {
+    if (surface.tracker || !surface.node || !surface.reference || !surface.active) return
+    surface.tracker = track(surface.reference, surface.node, {
+      placement: surface.placement,
+      offset: surface.offset,
+      onError: options.onError,
+      onPlaced: (placement) => {
+        surface.resolved = placement
+      },
+    })
+  }
+
+  function ensure(key: string): Surface {
+    let surface = surfaces.get(key)
+    if (!surface) {
+      surface = {
+        node: null,
+        token: null,
+        reference: null,
+        placement: 'top-end',
+        offset: [0, 6],
+        active: false,
+        tracker: null,
+        resolved: null,
+      }
+      surfaces.set(key, surface)
+    }
+    return surface
+  }
+
+  return {
+    anchor(key, node) {
+      const surface = ensure(key)
+      if (surface.node === node) return
+      stop(surface)
+      surface.node = node
+      if (node) {
+        start(surface)
+        return
+      }
+      if (!wanted.has(key)) surfaces.delete(key)
+    },
+
+    node: (key) => surfaces.get(key)?.node ?? null,
+
+    keyOf(node) {
+      if (!node) return null
+      for (const [key, surface] of surfaces) {
+        if (surface.node && (surface.node === node || surface.node.contains(node))) return key
+      }
+      return null
+    },
+
+    placementOf: (key) => surfaces.get(key)?.resolved ?? null,
+
+    sync(refs) {
+      wanted = new Set(refs.keys())
+      for (const [key, ref] of refs) {
+        const surface = ensure(key)
+        if (surface.token !== ref.token || surface.reference === null) {
+          stop(surface)
+          surface.token = ref.token
+          surface.reference = ref.reference
+          surface.resolved = null
+        }
+        surface.placement = ref.placement
+        surface.offset = ref.offset
+        surface.active = ref.active
+        if (ref.active) start(surface)
+        else stop(surface)
+      }
+      for (const [key, surface] of Array.from(surfaces)) {
+        if (refs.has(key)) continue
+        stop(surface)
+        surface.reference = null
+        surface.token = null
+        surface.resolved = null
+        surface.active = false
+        if (!surface.node) surfaces.delete(key)
+      }
+    },
+
+    destroy() {
+      for (const surface of surfaces.values()) stop(surface)
+      surfaces.clear()
+      wanted = new Set()
+    },
   }
 }

@@ -1,14 +1,20 @@
 /**
- * §3 theming + the CSS injection contract.
+ * §3 theming + the CSS injection contract, **parameterised over every shipped sheet** (§3.1.8,
+ * decision log #39).
+ *
+ * The eleven `--cc-*` names are the theming surface for every presentation; only their default
+ * *values* are per-presentation. So the contract below is a property of the package, not of one
+ * appearance, and adding a sheet to `SHEETS` is the entire cost of proving the new one obeys it.
  *
  * The one rule that is easy to break and impossible to notice without a test: internal styling
- * must read `var(--cc-x, <default>)`, and must **never** declare `--cc-x: <default>` on
- * `:host`. A declaration on `:host` wins over the page's inherited `:root` value and silently
- * disables the entire documented theming surface.
+ * must read `var(--cc-x, <default>)`, and must **never** declare `--cc-x: <default>` on `:host`.
+ * A declaration on `:host` wins over the page's inherited `:root` value and silently disables
+ * the entire documented theming surface.
  */
 
 import { describe, expect, test } from 'vitest'
 
+import { glassStyles } from '../src/glass.ts'
 import { commentUIStyles, defaultLabels } from '../src/index.ts'
 import { resolveLabels } from '../src/labels.ts'
 
@@ -26,10 +32,16 @@ const THEME_PROPERTIES = [
   '--cc-shadow',
 ] as const
 
-describe('the custom-property contract', () => {
+/** Every sheet the package ships. Adding one to this list is the whole cost of proving it. */
+const SHEETS: ReadonlyArray<[string, string]> = [
+  ['commentUIStyles', commentUIStyles],
+  ['glassStyles', glassStyles],
+]
+
+describe.each(SHEETS)('the custom-property contract — %s', (_name, sheet) => {
   test('every documented property is consumed with a fallback', () => {
     for (const property of THEME_PROPERTIES) {
-      expect(commentUIStyles).toContain(`var(${property},`)
+      expect(sheet).toContain(`var(${property},`)
     }
   })
 
@@ -37,29 +49,29 @@ describe('the custom-property contract', () => {
     for (const property of THEME_PROPERTIES) {
       // `--cc-x: value` (a declaration) vs `--_x: var(--cc-x, value)` (a read).
       const declaration = new RegExp(`(^|[;{\\s])${property}\\s*:(?!\\s*var\\()`, 'm')
-      expect(commentUIStyles).not.toMatch(declaration)
+      expect(sheet).not.toMatch(declaration)
     }
   })
 
   test('dark defaults are applied as reads too, so an explicit host value survives', () => {
-    expect(commentUIStyles).toContain('@media (prefers-color-scheme: dark)')
-    expect(commentUIStyles).toContain('--_surface: var(--cc-surface, #18181b)')
+    expect(sheet).toContain('@media (prefers-color-scheme: dark)')
+    expect(sheet).toMatch(/--_surface:\s*var\(--cc-surface,/)
   })
 
   test('the sheet is rem-free and pins :host font-size', () => {
-    expect(commentUIStyles).not.toMatch(/\d\s*rem\b/)
-    expect(commentUIStyles).toContain('all: initial')
-    expect(commentUIStyles).toContain('font-size: var(--cc-root-font-size, 16px)')
+    expect(sheet).not.toMatch(/\d\s*rem\b/)
+    expect(sheet).toContain('all: initial')
+    expect(sheet).toContain('font-size: var(--cc-root-font-size, 16px)')
   })
 
   test('the dynamic host vars are NOT in the exported sheet, so it stays static', () => {
-    expect(commentUIStyles).not.toContain('--cc-root-font-size:')
-    expect(commentUIStyles).not.toContain('--cc-z:')
+    expect(sheet).not.toContain('--cc-root-font-size:')
+    expect(sheet).not.toContain('--cc-z:')
   })
 
   test('it is exported as a plain string — the importable half of the contract', () => {
-    expect(typeof commentUIStyles).toBe('string')
-    expect(commentUIStyles.length).toBeGreaterThan(1000)
+    expect(typeof sheet).toBe('string')
+    expect(sheet.length).toBeGreaterThan(1000)
   })
 })
 

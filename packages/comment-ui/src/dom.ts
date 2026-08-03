@@ -1,11 +1,16 @@
 /**
  * The whole "framework" (§5.2 `dom.ts`): an `el()` helper, a keyed list reconciler and two
- * focus utilities. No virtual DOM, no reactivity — the renderer is driven by
- * `engine.threads` / `engine.placement` and re-reads them on every scheduled pass.
+ * focus utilities. No virtual DOM, no reactivity — a presentation is handed a frozen
+ * `UIViewModel` and re-reads it on every coalesced pass.
+ *
+ * **Shared by the controller and by every presentation**, which is why it lives above
+ * `src/presentations/` and imports nothing: a helper that reached the engine would put the
+ * engine one `import` away from a presentation, and the dependency rule would stop being a
+ * mechanical property of the tree.
  *
  * Keyed reconciliation (rather than `innerHTML = ''` + rebuild) is not a performance nicety:
- * blowing away the subtree on every store notification would destroy the element that has
- * focus, which breaks the composer, the inline comment editor and every keyboard user.
+ * blowing away the subtree on every notification would destroy the element that has focus,
+ * which breaks the composer, the inline comment editor and every keyboard user.
  */
 
 export type AttrValue = string | number | boolean | null | undefined

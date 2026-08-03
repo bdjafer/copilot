@@ -6,7 +6,7 @@
  * renderer must not invent a key for one.
  */
 
-import type { Labels } from './types.ts'
+import type { Labels } from './presentation.ts'
 
 export const defaultLabels: Labels = Object.freeze({
   send: 'Send',

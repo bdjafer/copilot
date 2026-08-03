@@ -1,0 +1,123 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>exp-spec demo · the material</title>
+    <link rel="stylesheet" href="assets/demo.css" />
+    <script src="vendor/comment-core.iife.js"></script>
+    <script src="vendor/comment-ui.iife.js"></script>
+    <script src="vendor/comment-ui-glass.iife.js"></script>
+  </head>
+  <body>
+    <main>
+      <section class="hero">
+        <h1>This is what the overlay is made of.</h1>
+        <p class="lede">
+          One pane of glass, over a background it does not control, at the same 135° light vector as
+          the elevation ramp. Everything here is CSS —
+          <code>backdrop-filter</code>, a keyline sandwich and a layered shadow. The page is
+          finished before any script runs.
+        </p>
+      </section>
+
+      <div class="material-stage" id="stage">
+        <div class="material-lozenge">subtle liquid glass</div>
+      </div>
+
+      <p class="section-label">The byte ledger</p>
+      <p>
+        DESIGN §9 sanctioned a 3D renderer on exactly one page — this one — and attached a budget to
+        it: <strong>≤ 45 KB gz for the lazy chunk</strong>, with the rule that exceeding it
+        <em>deletes the page, not the budget</em>. So it was built and measured rather than
+        estimated. Both figures below are real builds of this repository's toolchain, tree-shaken
+        and minified.
+      </p>
+      <table class="ledger">
+        <thead>
+          <tr>
+            <th>Lazy chunk</th>
+            <th>What it draws</th>
+            <th>gz</th>
+            <th>Verdict</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td><code>WebGLRenderer</code> slice, refracting lozenge</td>
+            <td>a physical material with transmission, one light</td>
+            <td>127.5 KB</td>
+            <td data-verdict="over">2.8× over</td>
+          </tr>
+          <tr>
+            <td>the same slice, emptied to a plane</td>
+            <td>a flat quad and nothing else</td>
+            <td>124.5 KB</td>
+            <td data-verdict="over">2.7× over</td>
+          </tr>
+          <tr>
+            <td><code>assets/material-lens.js</code></td>
+            <td>edge refraction at the rim, the one thing CSS cannot do</td>
+            <td>&lt; 1 KB</td>
+            <td data-verdict="under">shipped</td>
+          </tr>
+        </tbody>
+      </table>
+      <p>
+        The floor of a 3D library is the library, not the scene: emptying the scene to a single
+        untextured quad saved 3 KB. There is no version of that page that fits, so the ruling
+        applies itself and the shader is gone. What survives is the effect the ruling itself named
+        as the only one a GPU genuinely buys — <code>feTurbulence</code> +
+        <code>feDisplacementMap</code> at the rim — and it arrives through the same lazy-load
+        discipline the renderer would have had to obey.
+      </p>
+
+      <p class="section-label">The gates</p>
+      <p>
+        The upgrade is a dynamic <code>import()</code> and it is the last line of
+        <a href="assets/material.js">the loader</a> — nothing is fetched on mount. All five have to
+        hold: a stated motion preference outranks the design, the machine must have memory and cores
+        to spare, the engine must support the effect, and the stage must be at least a quarter
+        visible and the browser idle. Leaving the viewport tears it down again.
+      </p>
+      <div class="demo-note">
+        <strong>On this machine, right now:</strong>
+        <span id="verdict" role="status">checking…</span>
+      </div>
+
+      <p class="section-label">And in the product</p>
+      <p>
+        None of this ships into a host page. The in-product “alive” moment is a six-line ambient
+        ring that breathes while a copilot is working — rotation says <em>wait</em>, breathing says
+        <em>I'm here</em> — and the hard ceiling for everything injected into somebody else's page
+        is 40 KB gz, of which the whole glass appearance is a fraction. Press <kbd>C</kbd> and
+        comment on this paragraph; the widget you get is the same one, at the same budget.
+      </p>
+    </main>
+
+    <script type="module">
+      import { bootDemo } from './assets/demo.js'
+      import { upgradeMaterial } from './assets/material.js'
+
+      bootDemo({
+        title: 'The material',
+        hint: 'The glass, its budget, and the shader that did not fit.',
+      })
+
+      const stage = document.querySelector('#stage')
+      const verdict = document.querySelector('#verdict')
+      const REASON = {
+        motion: 'held back — you asked for reduced motion, and that outranks it.',
+        memory: 'held back — this machine reports under 4 GB of memory.',
+        cores: 'held back — 4 cores or fewer; the upgrade is not worth a core.',
+        support: 'held back — this engine has no displacement map to refract with.',
+        viewport: 'waiting — scroll the stage into view.',
+      }
+      upgradeMaterial(stage, ({ loaded, blockedBy }) => {
+        verdict.textContent = loaded
+          ? 'refracting — the rim is being displaced by a filter that arrived after you did.'
+          : (REASON[blockedBy] ?? 'held back.')
+      })
+    </script>
+  </body>
+</html>

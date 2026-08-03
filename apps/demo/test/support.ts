@@ -17,10 +17,17 @@ import { fileURLToPath } from 'node:url'
 const here = dirname(fileURLToPath(import.meta.url))
 const packages = resolve(here, '../../../packages')
 
-/** The two built ESM entries the two package names are aliased at. `global-setup.ts` emits them. */
+/**
+ * The built ESM entries the package specifiers are aliased at. `global-setup.ts` emits them.
+ *
+ * `/glass` is here for the same reason the other two are: it is a **separate rollup pass** with
+ * its own entry (SPEC §1.2 — "none at runtime"), so importing it through `src/` would test a
+ * module graph no consumer ever resolves and would quietly hide a shared chunk if one appeared.
+ */
 export const BUILT_ENTRIES = {
   '@astrale-os/comment-core': resolve(packages, 'comment-core/dist/index.js'),
   '@astrale-os/comment-ui': resolve(packages, 'comment-ui/dist/index.js'),
+  '@astrale-os/comment-ui/glass': resolve(packages, 'comment-ui/dist/glass.js'),
 } as const
 
 /**

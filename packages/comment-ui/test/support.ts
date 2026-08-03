@@ -1,4 +1,15 @@
-/** Shared scaffolding for the comment-ui suite. Not a test file. */
+/**
+ * Shared scaffolding for the comment-ui suite. Not a test file.
+ *
+ * Two scenes, and the split is the migration (§3.1.9):
+ *
+ *  - `scene()` mounts with `presentation: null` and hands back `vm` + `intents`. **A controller
+ *    test drives those and never queries presentation markup** — the only shadow nodes it may
+ *    look at are the two the *controller* owns, `.cc-layer` (which it marks `data-picking`) and
+ *    `.cc-status` (which it writes announcements into).
+ *  - `domScene()` mounts the default presentation, for the four cases that exist to pin its now
+ *    frozen markup.
+ */
 
 import type {
   CommentEngine,
@@ -10,9 +21,10 @@ import type {
 import { captureTarget, createMemoryStore } from '@astrale-os/comment-core'
 import { createTestPage } from '@astrale-os/comment-core/testing'
 
-import type { CommentUI, CommentUIOptions } from '../src/index.ts'
+import type { CommentUI, CommentUIController, CommentUIOptions } from '../src/index.ts'
+import type { Intents, Presentation, UIViewModel } from '../src/presentation.ts'
 
-import { mountCommentUI } from '../src/index.ts'
+import { createCommentUIController, mountCommentUI } from '../src/index.ts'
 
 export const PAGE_URL = 'https://example.com/doc'
 
@@ -22,41 +34,54 @@ export const MODES: readonly Mode[] = [
   { kind: 'triage', trigger: false },
 ]
 
-export interface Scene {
+export interface SceneOptions {
+  engine?: CommentEngineOptions
+  ui?: CommentUIOptions
+  url?: string
+}
+
+export interface BaseScene {
   page: ReturnType<typeof createTestPage>
   engine: CommentEngine
   store: MemoryStore
-  ui: CommentUI
   root: ShadowRoot
   doc: Document
   /** Seed a thread anchored on `selector`. Returns the thread id. */
   seed(selector: string, body?: string, over?: { kind?: string }): Promise<string>
-  /** Flush the anchoring batch and the renderer's coalesced microtask. */
+  /** Flush the anchoring batch and the controller's coalesced microtask. */
   settle(): Promise<void>
   dispose(): Promise<void>
 }
 
-/** The renderer coalesces onto a microtask; floating-ui resolves on a promise. */
+export interface Scene extends BaseScene {
+  ui: CommentUIController
+  /** The last published model. */
+  vm(): UIViewModel
+  intents: Intents
+}
+
+export interface DomScene extends BaseScene {
+  ui: CommentUI
+}
+
+/** The controller coalesces onto a microtask; the positioner resolves on a promise. */
 export async function tick(times = 3): Promise<void> {
   for (let i = 0; i < times; i += 1) await Promise.resolve()
   await new Promise<void>((resolve) => setTimeout(resolve, 0))
 }
 
-export async function scene(
+async function base(
   html: string,
-  options?: {
-    engine?: CommentEngineOptions
-    ui?: CommentUIOptions
-    url?: string
-  },
-): Promise<Scene> {
+  options: SceneOptions | undefined,
+  mount: (engine: CommentEngine, ui: CommentUIOptions | undefined) => CommentUI,
+): Promise<BaseScene & { ui: CommentUI }> {
   const page = createTestPage(html, { url: options?.url ?? PAGE_URL })
   const store = createMemoryStore()
   const engine = page.engine({ store, modes: MODES, ...options?.engine })
   await engine.ready()
   await page.flush()
 
-  const ui = mountCommentUI(engine, options?.ui)
+  const ui = mount(engine, options?.ui)
   await tick()
 
   const settle = async (): Promise<void> => {
@@ -94,6 +119,27 @@ export async function scene(
   }
 }
 
+/** A headless mount: no presentation at all, `vm` and `intents` fully live. */
+export async function scene(html: string, options?: SceneOptions): Promise<Scene> {
+  // `presentation: null` is the default here and an explicit one in `options.ui` wins, so a
+  // controller test that needs the probe can ask for it without a second scene helper.
+  const built = await base(html, options, (engine, ui) =>
+    createCommentUIController(engine, { presentation: null, ...ui }),
+  )
+  const controller = built.ui as CommentUIController
+  return {
+    ...built,
+    ui: controller,
+    vm: () => controller.vm.get(),
+    intents: controller.intents,
+  }
+}
+
+/** A mount with the default presentation, for the frozen-markup cases. */
+export async function domScene(html: string, options?: SceneOptions): Promise<DomScene> {
+  return base(html, options, (engine, ui) => mountCommentUI(engine, ui))
+}
+
 export function $(root: ParentNode, selector: string): HTMLElement | null {
   return root.querySelector<HTMLElement>(selector)
 }
@@ -102,12 +148,13 @@ export function $$(root: ParentNode, selector: string): HTMLElement[] {
   return Array.from(root.querySelectorAll<HTMLElement>(selector))
 }
 
-export function badges(root: ParentNode): HTMLElement[] {
-  return $$(root, '.cc-badge')
+export function badgeOf(vm: UIViewModel, threadId: string): UIViewModel['badges'][number] | null {
+  return vm.badges.find((badge) => badge.threadId === threadId) ?? null
 }
 
-export function badgeOf(root: ParentNode, threadId: string): HTMLElement | null {
-  return $(root, `.cc-badge[data-thread="${threadId}"]`)
+export function rowsOf(vm: UIViewModel, section: string): readonly string[] {
+  const found = vm.panel?.sections.find((entry) => entry.id === section)
+  return (found?.rows ?? []).map((row) => row.threadId)
 }
 
 export function click(node: Element | null): void {
@@ -139,6 +186,81 @@ export function type(input: HTMLTextAreaElement, value: string): void {
   input.value = value
   const view = input.ownerDocument.defaultView as Window & typeof globalThis
   input.dispatchEvent(new view.Event('input', { bubbles: true, composed: true }))
+}
+
+/* ------------------------------------------------------------------- the probe presentation */
+
+export interface Probe {
+  presentation: Presentation
+  /** Every model handed to `update()`, in order. */
+  updates: UIViewModel[]
+  creates: number
+  destroys: number
+  /** The nodes it registered through `host.anchor()`, by surface key. */
+  nodes: Map<string, HTMLElement>
+}
+
+/**
+ * A presentation that draws **nothing**: it records the models it is handed and, optionally,
+ * registers one bare `<div>` per surface so the controller's positioning has something to
+ * position. It exists so the *controller's* lifecycle, fault isolation and coordinate contract
+ * are testable without a single assertion on anybody's markup.
+ */
+export function probePresentation(options?: {
+  css?: string
+  throwOn?: 'create' | 'update'
+  anchor?: boolean
+}): Probe {
+  const probe: Probe = {
+    updates: [],
+    creates: 0,
+    destroys: 0,
+    nodes: new Map(),
+    presentation: {
+      name: 'probe',
+      css: options?.css,
+      create(host) {
+        probe.creates += 1
+        if (options?.throwOn === 'create') throw new Error('probe: create failed')
+        const claim = (key: string): HTMLElement => {
+          let node = probe.nodes.get(key)
+          if (!node) {
+            node = host.doc.createElement('div')
+            host.layer.append(node)
+            probe.nodes.set(key, node)
+            host.anchor(key, node)
+          }
+          return node
+        }
+        return {
+          update(vm) {
+            probe.updates.push(vm)
+            if (options?.throwOn === 'update') throw new Error('probe: update failed')
+            if (!options?.anchor) return
+            const wanted = new Set(vm.badges.map((badge) => `badge:${badge.threadId}`))
+            if (vm.thread) wanted.add('thread')
+            if (vm.composer) wanted.add('composer')
+            for (const key of wanted) claim(key)
+            for (const [key, node] of Array.from(probe.nodes)) {
+              if (wanted.has(key)) continue
+              host.anchor(key, null)
+              node.remove()
+              probe.nodes.delete(key)
+            }
+          },
+          destroy() {
+            probe.destroys += 1
+            for (const [key, node] of probe.nodes) {
+              host.anchor(key, null)
+              node.remove()
+            }
+            probe.nodes.clear()
+          },
+        }
+      },
+    },
+  }
+  return probe
 }
 
 /* --------------------------------------------------------------- IntersectionObserver stub */

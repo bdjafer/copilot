@@ -36,7 +36,11 @@
   ],
   "exports": {
     ".": "./src/index.ts",
-    "./styles.css": "./dist/comment-ui.css"
+    "./presentation": "./src/presentation.ts",
+    "./glass": "./src/glass.ts",
+    "./testing": "./src/testing/index.ts",
+    "./styles.css": "./dist/comment-ui.css",
+    "./glass.css": "./dist/comment-ui-glass.css"
   },
   "publishConfig": {
     "exports": {
@@ -44,11 +48,24 @@
         "types": "./dist/types/index.d.ts",
         "import": "./dist/index.js"
       },
-      "./styles.css": "./dist/comment-ui.css"
+      "./presentation": {
+        "types": "./dist/types/presentation.d.ts",
+        "import": "./dist/presentation.js"
+      },
+      "./glass": {
+        "types": "./dist/types/glass.d.ts",
+        "import": "./dist/glass.js"
+      },
+      "./testing": {
+        "types": "./dist/types/testing/index.d.ts",
+        "import": "./dist/testing.js"
+      },
+      "./styles.css": "./dist/comment-ui.css",
+      "./glass.css": "./dist/comment-ui-glass.css"
     }
   },
   "scripts": {
-    "build": "BUILD_TARGET=iife vite build && vite build && tsgo -p tsconfig.build.json",
+    "build": "BUILD_TARGET=iife vite build && BUILD_TARGET=glass vite build && vite build && tsgo -p tsconfig.build.json",
     "typecheck": "tsgo --noEmit",
     "lint": "oxlint .",
     "test": "vitest run",

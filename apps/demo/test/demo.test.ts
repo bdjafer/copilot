@@ -305,21 +305,28 @@ describe('the static pages', () => {
       'spa.html',
     ])
     expect(existsSync(`${site}/index.html`)).toBe(true)
+    // The one page DESIGN §9 sanctions a heavyweight upgrade on, and the only page that has one.
+    expect(existsSync(`${site}/material.html`)).toBe(true)
   })
 
-  test('load comment-core before comment-ui, and boot through the shared module', () => {
-    for (const page of [...pages.map((page) => `pages/${page}`), 'index.html']) {
+  test('load the three bundles in order, and boot through the shared module', () => {
+    for (const page of [...pages.map((page) => `pages/${page}`), 'index.html', 'material.html']) {
       const html = readFileSync(`${site}/${page}`, 'utf8')
       const loaded = [...html.matchAll(/<script src="[^"]*\/(\S+\.iife\.js)"/g)].map((m) => m[1])
-      // §1.2: the UI bundle reads `globalThis.Comments`, so this order is load-bearing.
-      expect(loaded, page).toEqual(['comment-core.iife.js', 'comment-ui.iife.js'])
+      // §1.2: `comment-ui` reads `globalThis.Comments` and the appearance is selected at mount
+      // from `globalThis.CommentsUIGlass`, so this order is load-bearing twice over.
+      expect(loaded, page).toEqual([
+        'comment-core.iife.js',
+        'comment-ui.iife.js',
+        'comment-ui-glass.iife.js',
+      ])
       expect(html, page).toContain('bootDemo(')
     }
   })
 
   test('the tests really did load the built bundles', async () => {
     for (const entry of Object.values(BUILT_ENTRIES)) {
-      expect(entry).toMatch(/[/\\]dist[/\\]index\.js$/)
+      expect(entry).toMatch(/[/\\]dist[/\\](index|glass)\.js$/)
       expect(existsSync(entry)).toBe(true)
     }
 

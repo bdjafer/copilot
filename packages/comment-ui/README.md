@@ -1,9 +1,8 @@
 # @astrale-os/comment-ui
 
 **The renderer for [`@astrale-os/comment-core`](../comment-core).** Badges, a composer popover,
-a thread popover and a corner panel — one open shadow root, ~2,500 lines of vanilla TypeScript
-(~1,900 excluding blanks and comments), no framework, no build-time CSS, and it never mutates
-the host page's DOM.
+a thread popover and a corner panel — one open shadow root, vanilla TypeScript, no framework,
+no build-time CSS, and it never mutates the host page's DOM.
 
 The entire public surface is **two functions, one method and a handful of CSS custom
 properties**:
@@ -13,6 +12,11 @@ mountCommentUI(engine, options?)  // attach to an engine you own
 mount({ ui?, engine? })           // zero-config: build the engine too
 ui.decorate(threadId, decoration) // host-driven badge chrome
 ```
+
+Internally it is a **headless controller plus an injected presentation**: the controller owns
+every rule and publishes a frozen, structured-cloneable `UIViewModel`; a `Presentation` draws
+that model and can reach nothing else. `domPresentation()` is the default, so the three lines
+above behave exactly as they always did. See [The presentation seam](#the-presentation-seam).
 
 There are no slots, no renderer registry, no `tokens` object, no `defineTheme`, no
 `theme: 'auto' | 'light' | 'dark'`. Theming is CSS custom properties, which already inherit
@@ -238,9 +242,53 @@ once rather than three times.
 |---|---|---|
 | `mountCommentUI` | `(engine: CommentEngine, options?: CommentUIOptions) => CommentUI` | Attach the shadow-root UI to an engine you already own. |
 | `mount` | `(options?: { ui?: CommentUIOptions; engine?: CommentEngineOptions }) => CommentUI & { engine: CommentEngine }` | Zero-config bootstrap; builds the engine too. IIFE global: `CommentsUI.mount()`. |
+| `createCommentUIController` | `(engine: CommentEngine, options?: CommentUIOptions) => CommentUIController` | The same mount, plus `vm` and `intents`. `mountCommentUI` *is* this, narrowed. |
+| `domPresentation` | `() => Presentation` | The default appearance. Frozen: bug and a11y fixes only. |
 | `defaultLabels` | `Labels` | The frozen default string table. |
 | `commentUIStyles` | `string` | The built-in stylesheet, for a host that ships CSS itself. |
-| *types* | `CommentUI`, `CommentUIOptions`, `Decoration`, `Labels`, `PanelSection` | — |
+| *types* | `CommentUI`, `CommentUIController`, `CommentUIOptions`, `Decoration`, `Labels`, `PanelSection`, and the seam types below | — |
+
+### Subpaths
+
+| Subpath | Contents | Runtime deps |
+|---|---|---|
+| `@astrale-os/comment-ui` | the six names above | `comment-core`, `@floating-ui/dom` |
+| `@astrale-os/comment-ui/presentation` | **types only** — `UIViewModel` and every member, `Intents`, `Presentation`, `PresentationInstance`, `PresentationHost`, `Labels`, `PanelSection` | **none** |
+| `@astrale-os/comment-ui/glass` | `glassPresentation()`, `glassStyles` — the product's intended appearance | **none at runtime** |
+| `@astrale-os/comment-ui/testing` | `presentationConformance()` | `comment-ui`, `comment-core/testing` |
+| `@astrale-os/comment-ui/styles.css` | the built-in sheet as a file | — |
+| `@astrale-os/comment-ui/glass.css` | the glass sheet as a file | — |
+
+### The two shipped appearances
+
+```ts
+import { mountCommentUI } from '@astrale-os/comment-ui'
+import { glassPresentation } from '@astrale-os/comment-ui/glass'
+
+mountCommentUI(engine, { presentation: glassPresentation() })
+```
+
+| | `domPresentation()` (default) | `glassPresentation()` |
+|---|---|---|
+| Governed by | this document | [`docs/DESIGN.md`](../../docs/DESIGN.md) |
+| Status | **frozen** — bug and a11y fixes only, no new class names | active |
+| Rest state | a full-size badge, always | a 12 px dot until intent is expressed |
+| Material | flat surfaces | `backdrop-filter` glass on chrome that owns its own rectangle; badges are never glass |
+| Text | verbs and nouns are drawn | verbs and nouns are 16 px stroke icons with a native `title`; 24 strings leave the screen and none leaves the accessibility tree |
+| Runtime deps | — | **none**: `/glass` imports types only |
+
+`glassPresentation(options?)` takes one bag, and it is deliberately **not** part of the theming
+surface — theming is the eleven `--cc-*` properties and nothing else:
+
+| Option | Type | Default | Why it exists |
+|---|---|---|---|
+| `reduceMotion` | `boolean` | follow `prefers-reduced-motion` | an embedder that already knows |
+| `polarity` | `'auto' \| 'light' \| 'dark'` | `'auto'` | `auto` follows the **page's** background luminance, not the desktop's — a light widget on a dark host page is a flashlight in the face |
+| `icons` | `'sprite' \| 'none'` | `'sprite'` | `none` skips the sprite for a host that already ships the 19 `cc-i-*` symbol ids |
+
+Both appearances read the same eleven `--cc-*` properties with the same never-declare-on-`:host`
+rule; only their default *values* differ, because a default value is a property of the material
+and not of the API. A host that themed explicitly is unaffected by which one is mounted.
 
 ### `CommentUIOptions`
 
@@ -261,6 +309,7 @@ once rather than three times.
 | `zIndex` | `number` | `2147483000` |
 | `rootFontSize` | `string` | `'16px'` |
 | `onError` | `(error: unknown) => void` | swallow |
+| `presentation` | `Presentation \| null` | `domPresentation()` — `null` mounts headless |
 
 ### `CommentUI`
 
@@ -282,6 +331,73 @@ Keys: `send`, `dismiss`, `reply`, `resolve`, `reopen`, `delete`, `edit`, `placeh
 
 Composed strings a translator cannot reach are built from **values**, not prose: a badge's
 accessible name is `"Ask (2)"` (mode label + count), a timestamp is `<time datetime="…">`.
+
+---
+
+## The presentation seam
+
+`comment-ui` is a **headless controller** plus an **injected presentation**. This is not a slot
+system: slots let a host inject *into* our renderer, which is a second execution plane inside our
+DOM. A `Presentation` replaces the renderer wholesale, behind a contract it cannot partially
+occupy.
+
+```ts
+import { createCommentUIController } from '@astrale-os/comment-ui'
+import type { Presentation } from '@astrale-os/comment-ui/presentation'
+
+const ui = createCommentUIController(engine, { presentation: myPresentation })
+ui.vm.subscribe((vm) => console.log(vm.badges.length))
+ui.intents.openThread(threadId)
+```
+
+**What crosses the seam.** Exactly two things, both declared in `comment-ui/presentation`, a
+module that imports *nothing*:
+
+- `UIViewModel` — **frozen, `structuredClone`-able, referentially stable, ordered, total and
+  pre-resolved.** Mode labels, `aria-label`s, chip defaults, the 160-char quote, section
+  assignment and the `approximate` flag are already computed. A presentation that renders `vm`
+  and nothing else is a complete UI, because there is no second channel.
+- `Intents` — every write the UI can perform. Every method returns `void`, **never throws**, and
+  is a documented no-op against stale state. Engine rejections are routed to
+  `CommentUIOptions.onError` by the controller, so a presentation never handles a promise.
+
+**What does not.** The engine, the store, the domain types, `@floating-ui/dom`. Serializability
+is the enforcement mechanism: it is impossible to smuggle an `Element` or a method through
+`structuredClone`, so the rule tests itself.
+
+**Who positions.** The controller — exclusively. `@floating-ui/dom`, `autoUpdate`, the
+`IntersectionObserver` off-screen skip, the docked-orphan reference, `left` / `top`,
+`data-placement` and `data-picking`. A presentation registers a node with
+`host.anchor('badge:<id>' | 'thread' | 'composer' | 'panel' | 'panel-toggle', node)` and must not
+write a layout property on it. The gift in return: `transform`, `opacity`, `filter`, `clip-path`
+and `mask` on those same nodes are entirely the presentation's, with zero conflict — a whole
+motion system needs no coordination with the positioner.
+
+**Focus.** Policy is the controller's, execution is split. It focuses host-page elements it
+captured itself, and names its own surfaces through `vm.focus = { seq, target }`: apply the
+target when `seq` changes, then do nothing until it changes again. Monotonic and idempotent, so a
+re-render can never re-steal focus.
+
+**Lifecycle.** `create(host, intents)` once → a synchronous first `update(vm)` before
+`createCommentUIController` returns → one `update` per coalesced render with `vm.seq` strictly
+increasing → `destroy()` before the layer is torn down. A throw from `create` or `update` is
+caught, reported to `onError`, and the pass abandoned: a presentation fault must never break the
+host page or the engine.
+
+**Proving one works.** `presentationConformance()` returns runner-agnostic
+`ConformanceCase[]` — the same shape as `comment-core`'s `storeConformance` — asserting
+contract-level behaviour only, never a class name:
+
+```ts
+import { presentationConformance } from '@astrale-os/comment-ui/testing'
+
+for (const c of presentationConformance(() => myPresentation)) test(c.name, c.run)
+```
+
+`presentation: null` mounts the controller with no presentation at all: the shadow root, the
+layer and the `role="status"` region still exist, and `vm` / `intents` are fully live. That is
+how the controller's own test suite runs, and it is also the shape a worker-, iframe- or
+wire-hosted UI would take.
 
 ---
 

@@ -1,19 +1,27 @@
 /**
  * Public types — SPEC-comment-core §3 verbatim, plus the internal resolved-option shape the
- * renderer actually reads.
+ * controller actually reads.
  *
- * `comment-ui` is a **pure renderer** (§3): its only state is which panel section is open,
- * which thread popover is open (mirrored from `engine.active`), and the host-supplied
- * `decorate()` map. Everything else is read from `engine.threads`, `engine.placement` and
- * `engine.modes`, and every write goes through a `CommentEngine` method — there is no
- * privileged path to the store.
+ * `Labels` and `PanelSection` now live in `./presentation.ts` (decision log #37) and are
+ * re-exported from here and from the barrel unchanged: the view model carries resolved labels,
+ * so the types module needs the interface, and duplicating a locked 17-key interface is how the
+ * two copies drift.
+ *
+ * The §3 "pure renderer" clause is now the **controller's** obligation (§3.1): its only state is
+ * which panel section is open, which thread popover is open (mirrored from `engine.active`), the
+ * host-supplied `decorate()` map, the comment being edited inline, and the element focus returns
+ * to on close. Everything else is read from `engine.threads`, `engine.placement` and
+ * `engine.modes`, and every write goes through a `CommentEngine` method — there is no privileged
+ * path to the store.
  */
 
-import type { CommentEngine } from '@astrale-os/comment-core'
+import type { CommentEngine, ReadableStore } from '@astrale-os/comment-core'
+
+import type { Intents, Labels, PanelSection, Presentation, UIViewModel } from './presentation.ts'
+
+export type { Labels, PanelSection }
 
 /* -------------------------------------------------------------------------------- §3 types */
-
-export type PanelSection = 'open' | 'resolved' | 'unanchored'
 
 export interface Decoration {
   chip?: {
@@ -24,27 +32,6 @@ export interface Decoration {
   tone?: 'default' | 'muted' | 'accent'
   /** title attribute on the badge. */
   title?: string
-}
-
-/** i18n — every user-visible string lives here. */
-export interface Labels {
-  send: string
-  dismiss: string
-  reply: string
-  resolve: string
-  reopen: string
-  delete: string
-  edit: string
-  placeholder: string
-  panelTitle: string
-  sectionOpen: string
-  sectionResolved: string
-  sectionUnanchored: string
-  emptyOpen: string
-  emptyResolved: string
-  emptyUnanchored: string
-  approximate: string
-  pickHint: string
 }
 
 export interface CommentUIOptions {
@@ -61,7 +48,7 @@ export interface CommentUIOptions {
     corner?: 'br' | 'bl' | 'tr' | 'tl'
     /** default false */
     defaultOpen?: boolean
-    /** default all three */
+    /** default: every section */
     sections?: readonly PanelSection[]
   }
   badge?: {
@@ -69,7 +56,7 @@ export interface CommentUIOptions {
     showResolved?: boolean
     /** default 'dock' */
     orphaned?: 'dock' | 'panel-only' | 'hidden'
-    /** default [6, -6] — `[crossAxis, mainAxis]` in CSS px, fed to `@floating-ui/dom` offset. */
+    /** default [6, -6] — `[crossAxis, mainAxis]` in CSS px, fed to the positioner's offset. */
     offset?: [number, number]
     /** default true (IntersectionObserver) */
     hideOffscreen?: boolean
@@ -81,6 +68,12 @@ export interface CommentUIOptions {
   /** default '16px'. The documented WXT `all: initial` caveat — no rem-dependent styling. */
   rootFontSize?: string
   onError?: (error: unknown) => void
+  /**
+   * The presentation adapter (§3.1). Default `domPresentation()`. `null` mounts the controller
+   * with **no** presentation — the shadow root, the layer and the `role="status"` region still
+   * exist, and `vm` / `intents` still work. This is the one new field on this interface.
+   */
+  presentation?: Presentation | null
 }
 
 export interface CommentUI {
@@ -103,6 +96,14 @@ export interface CommentUI {
    */
   decorate(threadId: string, decoration: Decoration | null): void
   unmount(): void
+}
+
+/** The headless seam (§3.1). `mountCommentUI` is this, with a narrower return type. */
+export interface CommentUIController extends CommentUI {
+  /** The frozen, structured-cloneable view model. Notifies once per coalesced render. */
+  readonly vm: ReadableStore<UIViewModel>
+  /** Every write the UI can perform. All methods return `void` and never throw. */
+  readonly intents: Intents
 }
 
 /* ------------------------------------------------------------------------------- internals */
@@ -131,4 +132,5 @@ export interface ResolvedOptions {
   zIndex: number
   rootFontSize: string
   onError: (error: unknown) => void
+  presentation: Presentation | null
 }

@@ -4,7 +4,8 @@
 > default value, ordering rule and error path below is normative. Implementers must not make
 > API decisions; if something appears underspecified, it is a spec bug — fix the spec, then
 > the code. Converged from entropy+ proposals A (dx), B (minimal), C (capability) against
-> `PLAN.md` v2. Decision log in §9.
+> `PLAN.md` v2. Decision log in §8. `comment-ui`'s presentation contract is §3.1 and its design
+> system is `docs/DESIGN.md`, which is locked on the same terms as this document.
 >
 > **Locked-by-PLAN invariants that this spec never renegotiates:** the `Thread` / `Comment` /
 > `AnchorDescriptor` / `Selector` / `ElementFingerprint` / `ElementCapture` record shapes
@@ -74,14 +75,26 @@ which throws `CommentError('invalid_options')` with an install hint when it is a
 
 ### 1.2 `comment-ui`
 
-Single entry `comment-ui`. Depends on `comment-core` and `@floating-ui/dom`. IIFE global:
-`CommentsUI`. ESM + IIFE.
+| Subpath | Contents | Runtime deps | IIFE global |
+|---|---|---|---|
+| `comment-ui` | controller + `domPresentation` (the default) | `comment-core`, `@floating-ui/dom` | `CommentsUI` |
+| `comment-ui/presentation` | **types only** — the presentation seam (§3.1) | **none** | — |
+| `comment-ui/glass` | `glassPresentation`, `glassStyles` (`docs/DESIGN.md`) | **none at runtime** | `CommentsUIGlass` |
+| `comment-ui/glass.css` | the same sheet as a file | — | — |
+| `comment-ui/testing` | `presentationConformance()` | `comment-ui`, `comment-core/testing` | — |
+
+ESM + IIFE. The root entry depends on `comment-core` and `@floating-ui/dom`; **no other subpath
+depends on either**, which is what makes the presentation seam of §3.1 enforceable by a grep
+rather than by discipline.
 
 **IIFE build contract (normative).** `comment-ui.iife.js` declares `comment-core` **external**
 and reads it from `globalThis.Comments`; it never bundles its own copy. `comment-core.iife.js`
 must therefore be loaded first (§7.1). Consequently `CommentError.is` is **brand-based** (a
 non-enumerable `Symbol.for('comment-core.error')` marker plus the `code` field), never
 `instanceof` — so it stays correct across bundle, realm and structured-clone boundaries.
+`comment-ui-glass.iife.js` applies the same rule one level up: it declares `comment-ui` external
+and reads `globalThis.CommentsUI`, so a bare page loads `comment-core` → `comment-ui` →
+`comment-ui-glass` and never ships a second copy of anything.
 
 ---
 
@@ -1255,10 +1268,31 @@ Runner-agnostic on purpose (arrays of `{ name, run }`), so vitest / node:test / 
 ## 3. Public TypeScript API — `comment-ui`
 
 ```ts
-import type { CommentEngine, CommentEngineOptions, ThreadView } from 'comment-core'
+import type { CommentEngine, CommentEngineOptions, ReadableStore, ThreadView } from 'comment-core'
+import type { Intents, Presentation, UIViewModel } from 'comment-ui/presentation'
 
 /** Attach the shadow-root UI to an engine you already own. */
 export function mountCommentUI(engine: CommentEngine, options?: CommentUIOptions): CommentUI
+
+/**
+ * The same lifecycle, plus the headless seam (§3.1): the controller owns all logic and state
+ * and publishes a serializable `UIViewModel`; a `Presentation` is the only thing that draws.
+ * `mountCommentUI` is this function with a narrower return type — one implementation, not two.
+ */
+export function createCommentUIController(
+  engine: CommentEngine,
+  options?: CommentUIOptions,
+): CommentUIController
+
+export interface CommentUIController extends CommentUI {
+  /** The frozen, structured-cloneable view model. Notifies once per coalesced render. */
+  readonly vm: ReadableStore<UIViewModel>
+  /** Every write the UI can perform. All methods return `void` and never throw. */
+  readonly intents: Intents
+}
+
+/** The default presentation: today's markup, class names and `commentUIStyles`. Frozen (§3.1.9). */
+export function domPresentation(): Presentation
 
 /**
  * Zero-config bootstrap for <script> tags: builds the engine too. Global: CommentsUI.mount().
@@ -1333,6 +1367,12 @@ export interface CommentUIOptions {
   /** default '16px'. The documented WXT `all: initial` caveat — no rem-dependent styling. */
   rootFontSize?: string
   onError?: (error: unknown) => void
+  /**
+   * The presentation adapter (§3.1). Default `domPresentation()`. `null` mounts the controller
+   * with **no** presentation — the shadow root, the layer and the `role="status"` region still
+   * exist, and `vm` / `intents` still work. This is the one new field on this interface.
+   */
+  presentation?: Presentation | null
 }
 
 export interface Labels {
@@ -1378,10 +1418,15 @@ the entire theming surface is set on the host page. There is no `tokens` option,
 ```
 
 **`comment-ui` is a pure renderer (normative).** Its only state is which panel section is open,
-which thread popover is open (mirrored into `engine.active`), and the host-supplied
-`decorate()` map. Everything else is read from `engine.threads`, `engine.placement` and
-`engine.modes`. It writes exclusively through `CommentEngine` methods — it has no privileged
-path to the store.
+which thread popover is open (mirrored into `engine.active`), the host-supplied `decorate()` map,
+the comment being edited inline, and the element focus returns to on close. Everything else is
+read from `engine.threads`, `engine.placement` and `engine.modes`. It writes exclusively through
+`CommentEngine` methods — it has no privileged path to the store.
+
+*(The last two entries are a correction, not a widening: `editing` already lived in `thread.ts`
+and `returnFocus` in `composer.ts` from the first implementation. §3.1 moves both into the
+controller, where the other three already were, so that the list is exhaustive and one layer
+owns all of it.)*
 
 Behavior it owns, none of it configurable (there is no second sane setting):
 one open shadow root on `document.documentElement`; a `pointer-events: none` layer with
@@ -1418,6 +1463,383 @@ keyboard reachable, `aria-label` composed from `Mode.badge.label` and the commen
 `aria-live="polite"` region so "copilot thinking" → settled is announced without stealing
 focus; placement mode announces `Labels.pickHint` the same way. Colour never carries state
 alone: resolved, orphaned and approximate each also have a shape or text marker.
+
+---
+
+### 3.1 The presentation contract (normative)
+
+`comment-ui` splits into a **headless controller** and an **injected presentation**. The
+controller subscribes to the engine, owns every piece of logic and state named in §3, and
+publishes a serializable `UIViewModel`. The presentation draws it. Total inverse DI: **the
+presentation layer imports zero engine and zero domain code** — it sees only the types in
+`comment-ui/presentation`, a module that imports nothing at all.
+
+Everything §3 says about `comment-ui` still holds and is now the **controller's** obligation:
+one open shadow root, the `pointer-events: none` layer, never mutating the host page, floating-ui
++ `autoUpdate`, the `IntersectionObserver` off-screen skip, `pending` renders nothing, the
+`decorate()` lifecycle, the `Esc` chain, the a11y contract. A presentation cannot opt out of any
+of it, because none of it is reachable from the presentation's surface.
+
+#### 3.1.1 Entry points
+
+| Subpath | Contents | Imports | IIFE global |
+|---|---|---|---|
+| `comment-ui` | `mount`, `mountCommentUI`, `createCommentUIController`, `domPresentation`, `commentUIStyles`, `defaultLabels` | `comment-core`, `@floating-ui/dom` | `CommentsUI` |
+| `comment-ui/presentation` | **types only** — `UIViewModel` and every VM member, `Intents`, `Presentation`, `PresentationInstance`, `PresentationHost`, `Labels`, `PanelSection` | **nothing** | — |
+| `comment-ui/glass` | `glassPresentation`, `glassStyles` | `comment-ui/presentation` (types, erased) — **nothing at runtime** | `CommentsUIGlass` |
+| `comment-ui/glass.css` | `dist/comment-ui-glass.css`, byte-identical to `glassStyles` | — | — |
+| `comment-ui/testing` | `presentationConformance(): ConformanceCase[]` | `comment-ui`, `comment-core/testing` | — |
+
+`comment-ui/presentation` emits declarations that reference no identifier from `comment-core`,
+`comment-ui` or `@floating-ui/dom`. It may reference `lib.dom` (`ShadowRoot`, `HTMLElement`,
+`Document`, `Window`) — `comment-ui` is a DOM renderer and pretending otherwise buys nothing. A CI
+test greps the emitted `.d.ts` for `import` and expects none.
+
+`comment-ui-glass.iife.js` declares `comment-ui` **external** and reads it from
+`globalThis.CommentsUI`, exactly as `comment-ui.iife.js` does for `Comments` (§1.2). Load order
+for a bare page is `comment-core` → `comment-ui` → `comment-ui-glass`.
+
+#### 3.1.2 The view model
+
+```ts
+// comment-ui/presentation — this module imports nothing.
+
+export type PanelSection = 'open' | 'resolved' | 'unanchored'
+export type AnchorState = 'pending' | 'anchored' | 'orphaned'
+export type ChipTone = 'neutral' | 'info' | 'busy' | 'warn' | 'danger'
+
+export interface Rect { readonly x: number; readonly y: number
+                        readonly width: number; readonly height: number }
+
+export interface ChipVM { readonly text: string; readonly tone: ChipTone; readonly spinner: boolean }
+
+export interface BadgeVM {
+  readonly threadId: string
+  readonly kind: string
+  /** `Mode.badge.label`, else the raw kind. Already resolved — the presentation never sees `Mode`. */
+  readonly label: string
+  /** `Mode.badge.icon` when the host supplied one, else `null`: draw your own glyph. */
+  readonly icon: string | null
+  readonly count: number
+  readonly anchor: AnchorState
+  readonly resolved: boolean
+  readonly orphaned: boolean
+  readonly approximate: boolean
+  /** Positioned from `capture.rect`, not from a live element. */
+  readonly docked: boolean
+  /** The off-screen skip decided this badge is not visible. */
+  readonly offscreen: boolean
+  readonly open: boolean
+  readonly tone: 'default' | 'muted' | 'accent'
+  readonly title: string | null
+  readonly ariaLabel: string
+  readonly chip: ChipVM | null
+  /** Last known viewport rect of the *reference*. For non-DOM presentations and for FLIP. */
+  readonly rect: Rect | null
+  /** floating-ui's resolved placement, so a morph can grow out of its anchor. */
+  readonly placement: string | null
+}
+
+export interface CommentVM {
+  readonly id: string
+  readonly author: 'user' | 'copilot'
+  readonly body: string
+  readonly createdAt: string
+  readonly editedAt: string | null
+  readonly editing: boolean
+}
+
+export interface ThreadVM {
+  readonly threadId: string
+  readonly kind: string
+  readonly label: string
+  readonly ariaLabel: string
+  readonly status: string
+  readonly anchor: AnchorState
+  readonly resolved: boolean
+  readonly orphaned: boolean
+  readonly approximate: boolean
+  readonly title: string | null
+  /** `capture.text`, first 160 chars, for orphans only. Else `null`. */
+  readonly quote: string | null
+  readonly chip: ChipVM | null
+  readonly comments: readonly CommentVM[]
+  readonly actions: { readonly reply: boolean; readonly resolve: boolean
+                      readonly reopen: boolean; readonly delete: boolean }
+}
+
+export interface ComposerVM {
+  readonly kind: string
+  readonly draft: string
+  /** `placement.phase === 'submitting'`. */
+  readonly busy: boolean
+  readonly replyTo: string | null
+  readonly canSubmit: boolean
+  readonly placeholder: string
+}
+
+export interface PickerVM { readonly kind: string; readonly rect: Rect | null; readonly hint: string }
+
+export interface PanelRowVM {
+  readonly threadId: string; readonly kind: string; readonly label: string
+  readonly ariaLabel: string; readonly body: string; readonly count: number
+  readonly anchor: AnchorState; readonly approximate: boolean; readonly status: string
+  readonly title: string; readonly chip: ChipVM | null
+  readonly action: 'reopen' | 'delete' | null
+}
+
+export interface PanelSectionVM {
+  readonly id: PanelSection; readonly label: string; readonly empty: string
+  readonly current: boolean; readonly rows: readonly PanelRowVM[]
+}
+
+export interface PanelVM {
+  readonly open: boolean; readonly title: string
+  readonly corner: 'br' | 'bl' | 'tr' | 'tl'
+  readonly total: number; readonly sections: readonly PanelSectionVM[]
+}
+
+export type FocusTarget =
+  | { readonly kind: 'composer-input' }
+  | { readonly kind: 'thread-close' }
+  | { readonly kind: 'badge'; readonly threadId: string }
+  | { readonly kind: 'panel-toggle' }
+
+export interface UIViewModel {
+  /** Monotonic. Increments on every published model, never resets. */
+  readonly seq: number
+  readonly labels: Labels
+  readonly badges: readonly BadgeVM[]
+  readonly thread: ThreadVM | null
+  readonly composer: ComposerVM | null
+  readonly picker: PickerVM | null
+  /** `null` when `panel.enabled` is false. */
+  readonly panel: PanelVM | null
+  /** What the controller wants announced; `''` clears the region. */
+  readonly announce: string
+  /** Apply when `focus.seq` changes; idempotent. `null` means "nothing to do". */
+  readonly focus: { readonly seq: number; readonly target: FocusTarget } | null
+}
+```
+
+**Normative properties of the model.**
+
+* **Serializable.** `structuredClone(vm)` succeeds: no functions, no DOM nodes, no `Element`, no
+  `Range`, no class instances. This is what makes a worker-, iframe- or wire-hosted presentation
+  possible, and it is what forces the controller to keep the DOM on its own side.
+* **Frozen.** Every object and array is `Object.freeze`d, recursively.
+* **Referentially stable.** A member that did not change is the same object identity between
+  publications, so `===` memoization in a presentation is correct without selectors — the same
+  rule `ThreadView` already lives under (decision log #7).
+* **Ordered.** `badges` follows document order of the anchored elements (docked orphans last, by
+  creation time). `comments` is oldest-first. `sections` is `CommentUIOptions.panel.sections`
+  order. `rows` is engine order within a section.
+* **Total.** A presentation that renders `vm` and nothing else is a complete UI. There is no
+  second channel, no escape hatch, and no way to reach the engine.
+* **Pre-resolved.** Mode labels, `aria-label`s, chip tone/spinner defaults, the 160-char quote
+  truncation, section assignment, `approximate` (`confidence < 0.85`) and every visibility rule of
+  §3 are computed by the controller. A presentation that re-derives any of them is wrong by
+  construction, because it cannot: it has no `Mode`, no `ThreadView` and no `engine`.
+
+#### 3.1.3 Intents
+
+```ts
+export interface Intents {
+  openThread(threadId: string): void
+  closeThread(): void
+  startReply(threadId: string): void
+  resolveThread(threadId: string): void
+  reopenThread(threadId: string): void
+  deleteThread(threadId: string): void
+
+  beginEdit(threadId: string, commentId: string): void
+  cancelEdit(): void
+  commitEdit(threadId: string, commentId: string, body: string): void
+
+  setDraft(text: string): void
+  submitDraft(): void
+  cancelComposer(): void
+
+  openPanel(section?: PanelSection): void
+  closePanel(): void
+  togglePanel(): void
+  selectSection(section: PanelSection): void
+
+  /** The §3 Esc chain, in one call. Returns true when the controller consumed it. */
+  escape(): boolean
+  /** Route a presentation-side fault into `CommentUIOptions.onError`. */
+  error(error: unknown): void
+}
+```
+
+**Every method returns `void`** (`escape` returns `boolean`), **never throws, and is safe to call
+in any state** — an intent fired against stale state is a documented no-op, not an error. Promise
+rejections from the engine are routed to `CommentUIOptions.onError` by the controller, so a
+presentation never handles a promise and never needs `try`/`catch`. This is the property that
+makes a presentation writable in any language or framework binding.
+
+`deleteThread` performs the focus dance of §3 itself (close without restoring focus, choose the
+fallback before the write, apply it after it lands). A presentation must not attempt it.
+
+#### 3.1.4 `Presentation`, `PresentationInstance`, `PresentationHost`
+
+```ts
+export interface PresentationHost {
+  readonly root: ShadowRoot
+  /** The `pointer-events: none` container. Append here; nothing else is yours. */
+  readonly layer: HTMLElement
+  readonly doc: Document
+  readonly win: Window
+  /**
+   * Register the node the controller should position for a surface key, or `null` to clear.
+   * Keys: `badge:<threadId>` | `thread` | `composer` | `panel` | `panel-toggle`.
+   * A presentation that does not want engine positioning simply never calls this and uses
+   * `BadgeVM.rect` / `PickerVM.rect` instead.
+   */
+  anchor(key: string, node: HTMLElement | null): void
+  /** Write into the controller's visually-hidden `role="status"` region. */
+  announce(message: string): void
+}
+
+export interface PresentationInstance {
+  /** Called once per coalesced render, with a frozen model. Never called after `destroy()`. */
+  update(vm: UIViewModel): void
+  destroy(): void
+}
+
+export interface Presentation {
+  /** Stable identity, for diagnostics and conformance reporting. */
+  readonly name: string
+  /** Injected into the shadow root before `create()`, after the base vars and before `options.css`. */
+  readonly css?: string
+  create(host: PresentationHost, intents: Intents): PresentationInstance
+}
+```
+
+**Lifecycle, normative.**
+
+1. `createCommentUIController` builds the layer, injects `:host` vars, then `presentation.css`,
+   then `CommentUIOptions.css`, then calls `create(host, intents)` exactly once.
+2. The first `update(vm)` is **synchronous**, inside `createCommentUIController`, before it
+   returns — matching today's `render()` at mount.
+3. Every subsequent `update(vm)` is on the coalesced microtask, one per publication, with
+   `vm.seq` strictly increasing.
+4. `unmount()` calls `instance.destroy()` **before** tearing down the layer, then removes the
+   host element. `update` is never called after `destroy`.
+5. A throw from `create` or `update` is caught, routed to `onError`, and the render pass is
+   abandoned — a presentation fault must never break the host page or the engine.
+6. `update` / `destroy` live on the **instance**, not on the `Presentation` object, so one
+   `Presentation` value can be mounted more than once (two engines, two iframes, a test matrix)
+   without a shared-state bug that a top-level `update` would silently create.
+
+#### 3.1.5 Positioning — the coordinate contract
+
+The **controller** owns `@floating-ui/dom`, `autoUpdate({ flip, shift, animationFrame })`, the
+`IntersectionObserver` off-screen skip, the docked-orphan reference and the `data-picking`
+click-through attribute on the layer. For every node registered through `host.anchor()` it writes
+`style.left` / `style.top` and the `data-placement` attribute.
+
+Therefore, normatively:
+
+* A presentation **must not** write `left`, `top`, `width` or `height` on any node it registered
+  through `host.anchor()`, and must not attach its own `autoUpdate`.
+* `transform`, `translate`, `scale`, `rotate`, `opacity`, `filter`, `clip-path` and `mask` on
+  those nodes are **entirely the presentation's**, with zero conflict.
+* The picker overlay is **not** an anchored node — it is positioned by the presentation from
+  `PickerVM.rect`, because the controller already has the candidate rect and floating-ui adds
+  nothing to a rect that is recomputed every frame anyway.
+* `data-picking` is written by the controller, never by a presentation: it is a pointer-events
+  safety invariant (§3, the `composedPath()[0]` hazard), not a style choice.
+
+#### 3.1.6 Focus
+
+Focus **policy** is the controller's; focus **execution** is split. The controller focuses
+elements it captured itself (the host page element that had focus at trigger time). It asks the
+presentation for its own nodes via `vm.focus`: apply the target whenever `focus.seq` changes, then
+do nothing until it changes again. `seq` is monotonic and idempotent, so a re-render cannot
+re-steal focus and a presentation needs no acknowledgement channel.
+
+The a11y contract of §3 is unchanged and is enforced by `presentationConformance()`: the composer
+moves focus to its textarea on open and returns it on close, badges are real `<button>`s with
+`aria-label` and `aria-expanded`, the panel is a `<section>` named by `Labels.panelTitle` with
+heading-labelled lists, chips live in an `aria-live="polite"` region, and placement announces
+`Labels.pickHint` through `host.announce`.
+
+#### 3.1.7 Backward compatibility
+
+`mount()` and `mountCommentUI()` keep their **exact outer signatures and return types**. The
+default presentation is `domPresentation()`, whose markup, class names, attributes and stylesheet
+are byte-identical to today's. **A host that upgrades and changes nothing sees no visual change,
+no DOM change and no API change.** This was cheap, so there is no breaking ruling to record for
+the mount surface.
+
+Three additive changes are recorded instead (decision log #36, #37):
+
+* `CommentUIOptions` gains one optional field, `presentation`.
+* The root barrel gains two runtime names, `createCommentUIController` and `domPresentation`, so
+  the §9 DoD assertion on the IIFE's exported key list becomes
+  `['commentUIStyles', 'createCommentUIController', 'defaultLabels', 'domPresentation', 'mount', 'mountCommentUI']`.
+* `Labels` and `PanelSection` **declarations** move to `comment-ui/presentation` and are
+  re-exported from the root unchanged. Structurally identical, so no consumer changes.
+
+#### 3.1.8 Shipped presentations
+
+| Name | Subpath | Governed by | Status |
+|---|---|---|---|
+| `domPresentation` | `comment-ui` (default) | this document | **Frozen.** Bug and a11y fixes only. No new class names, no design changes. Removed at 1.0 at the earliest, and only with a deprecation cycle. |
+| `glassPresentation` | `comment-ui/glass` | `docs/DESIGN.md` | Active. The product's intended appearance; the extension, the demo and the options page opt in with `presentation: glassPresentation()`. |
+
+**The eleven `--cc-*` property names are the theming surface for every presentation. Their
+*default values* are per-presentation:** `domPresentation` keeps §3's table verbatim;
+`glassPresentation` ships the OKLCH defaults of DESIGN.md §2.1. Both obey the same two rules —
+read as `var(--cc-x, <default>)`, never declared on `:host` — and the existing `styles.test.ts`
+property-contract assertions run against **both** sheets.
+
+`glassPresentation(options?)` takes one optional bag, and it is not part of the theming surface:
+`{ reduceMotion?: boolean; polarity?: 'auto' | 'light' | 'dark'; icons?: 'sprite' | 'none' }`.
+Each is a *rendering* choice with a defensible default (`auto`, `auto`, `'sprite'`), and none of
+them is reachable from the controller.
+
+#### 3.1.9 Conformance and the test migration
+
+`comment-ui/testing` exports `presentationConformance(): ConformanceCase[]` — runner-agnostic
+arrays, the same shape as `storeConformance` / `domainConformance` (decision log #24), so it works
+in vitest, `node:test` and bun with one `for` loop. It is the executable form of "themes are
+swappable at mount": every case mounts the presentation under test against a `createTestPage`
+engine and asserts contract-level behaviour only — never a class name, never a selector that is
+not part of the a11y contract.
+
+The 135 committed-green `comment-ui` tests migrate as follows. **Nothing is deleted; the split is
+by what each test was actually about.**
+
+| Today | Cases | Where they go |
+|---|---|---|
+| `mount.test.ts` | 10 | 10 → controller (lifecycle, teardown, `onError` isolation, the `presentation: null` path) |
+| `decorate.test.ts` | 11 | 11 → controller (`vm.badges[i].chip`, the drop-on-delete / clear-on-page-change lifecycle) |
+| `panel.test.ts` | 15 | 11 → controller (`vm.panel` sections, totals, exclusivity, `scrollIntoView` intent) · 4 → conformance |
+| `picker.test.ts` | 7 | 5 → controller (`vm.picker`, `data-picking`, the announce string) · 2 → conformance |
+| `badge.test.ts` | 16 | 11 → controller (visibility rules, marks, tone, `aria-label` composition) · 5 → conformance |
+| `composer.test.ts` | 16 | 10 → controller (draft, submit, cancel, busy, reply anchoring choice) · 6 → conformance (focus trap, `⌘↵`, `Esc`) |
+| `thread.test.ts` | 16 | 10 → controller (comments, edit state machine, resolve/reopen/delete intents) · 6 → conformance |
+| `a11y.test.ts` | 10 | 10 → conformance (this file *is* the presentation contract's a11y half) |
+| `badge-tracking.test.ts` | 4 | 4 → controller (the tracker/observer lifecycle is controller-owned) |
+| `renderer.test.ts` | 10 | 10 → controller (coalescing, idempotency, referential stability of the VM) |
+| `styles.test.ts` | 10 | 6 parameterised over **both** sheets (property contract, no-declaration, rem-free, `all: initial`) · 4 stay label tests |
+| `dod-bundle.test.ts` | 9 (+1 generated) | stays, +3 rows: the `/glass` IIFE reads `globalThis.CommentsUI`; `comment-ui-glass.css` is byte-identical to `glassStyles`; `comment-ui/presentation`'s `.d.ts` contains no `import` |
+
+Net: **72 controller cases, 27 conformance cases × 2 presentations = 54 executions, 4 label
+tests, 13 build/DoD cases** — 143 executions from 103 case definitions, against 135 today. The
+suite gets *more* coverage from *fewer* definitions, because the 27 conformance cases run twice.
+
+Two migration rules are normative, because they are what keeps the migration honest:
+
+1. **A controller test may not touch the shadow root.** It mounts with `presentation: null`,
+   drives `intents`, and asserts on `vm`. If a test needs a DOM node to say what it means, it is
+   a conformance test, not a controller test.
+2. **A conformance case may not assert a class name.** It may assert roles, `aria-*`, `<button>`,
+   focus location, and that a node registered through `host.anchor()` received `left`/`top`.
+   Anything else is `domPresentation`-specific and belongs in the four remaining
+   `dom-presentation.test.ts` cases that exist precisely to pin the frozen markup.
 
 ---
 
@@ -1667,20 +2089,25 @@ comments on read. Both GC passes are silent (no events).
 
 | File | ~LOC | Contents |
 |---|---|---|
-| `index.ts` | 20 | Barrel: `mount`, `mountCommentUI`, types. |
-| `mount.ts` | 140 | Lifecycle, subscriptions, decoration map, teardown. |
-| `shadow.ts` | 80 | Open shadow root, isolateEvents, `:host` font-size, layer setup. |
-| `styles.ts` | 230 | The single CSS string; all custom-property defaults. |
-| `position.ts` | 90 | `@floating-ui/dom` + `autoUpdate` + `IntersectionObserver`. |
-| `badge.ts` | 190 | Badge element, dock-when-orphaned, approximate marker, decoration, mode icon. |
-| `picker.ts` | 120 | Placement-mode highlight overlay from `engine.placement`. |
-| `composer.ts` | 200 | `popover` composer, textarea, Send/Dismiss, draft wiring. |
-| `thread.ts` | 210 | Thread popover: comments, reply, resolve/reopen, delete, edit. |
-| `panel.ts` | 210 | Corner panel: open / resolved / unanchored sections. |
+| `index.ts` | 30 | Barrel: `mount`, `mountCommentUI`, `createCommentUIController`, `domPresentation`, `commentUIStyles`, `defaultLabels`, types. |
+| `presentation.ts` | 220 | **`comment-ui/presentation`.** Types only, zero imports: `UIViewModel` + members, `Intents`, `Presentation`, `PresentationInstance`, `PresentationHost`, `Labels`, `PanelSection`. |
+| `controller/index.ts` | 200 | `createCommentUIController`: lifecycle, subscriptions, decoration map, the five state slots, teardown, presentation lifecycle + fault isolation. |
+| `controller/model.ts` | 260 | `engine.threads`/`placement`/`modes` + state → frozen, referentially stable `UIViewModel`. All §3 visibility, section and label rules live here, once. |
+| `controller/intents.ts` | 120 | The `Intents` implementation. Every engine promise's rejection routed to `onError`; every method a no-op against stale state. |
+| `controller/focus.ts` | 70 | Focus policy, the `vm.focus` seq, the Esc chain, the delete focus dance. |
+| `shadow.ts` | 90 | Open shadow root, isolateEvents, `:host` vars, layer + `role="status"` setup, sheet ordering. |
+| `position.ts` | 130 | `@floating-ui/dom` + `autoUpdate` + `IntersectionObserver` + `host.anchor()` registry + `data-placement` + `data-picking`. |
+| `dom.ts` | 60 | Tiny `el()` helper, no framework. Shared by both presentations. |
 | `labels.ts` | 50 | Default `Labels`. |
-| `dom.ts` | 60 | Tiny `el()` helper, no framework. |
+| `presentations/dom/*.ts` | 700 | `domPresentation` — today's `badge`/`picker`/`composer`/`thread`/`panel`/`chip` markup, verbatim. **Frozen.** |
+| `presentations/dom/styles.ts` | 230 | `commentUIStyles`. **Frozen.** |
+| `presentations/glass/*.ts` | 520 | `glassPresentation` per `docs/DESIGN.md`: surfaces, icon sprite, intent tracker, motion helpers. |
+| `presentations/glass/styles.ts` | 380 | `glassStyles`. |
+| `testing/index.ts` | 20 | `comment-ui/testing` barrel. |
+| `testing/presentation-conformance.ts` | 240 | The 27 contract-level cases of §3.1.9. |
 
-**Total: ~1,600 LOC.**
+**Total: ~3,300 LOC**, of which ~930 is the frozen default presentation and ~900 the glass one.
+The controller — the part that can be wrong in a way a user notices — is ~650.
 
 ---
 
@@ -1967,6 +2394,17 @@ describe('chrome.storage store', () => {
 | 27 | A regenerated `id` / attribute value | **No information (0.5), not a mismatch** — but only when the candidate carries the attribute under a *different* value AND the stored value matches nothing in the document | scoring it 0 / 0.25 unconditionally (the old rule); dropping volatile-looking values at capture with finder's `idName`/`attr` word-like tests | Bench F3: a paragraph whose text was byte-identical scored 0.575 and orphaned because React regenerated four bookkeeping attributes — an element cannot be "not itself" on the strength of a value that now identifies nothing. Capture-side filtering was rejected because finder's word-like test also throws away every legitimate value containing a digit (`data-testid="row-3"`, `href="/docs/page-2"`), which is a much larger loss of discrimination. The rescue is deliberately narrow: an attribute the candidate does not carry **at all** still scores 0, so "the app stopped emitting it" is not confused with "the app renamed it". Residual risk, accepted and recorded: two elements with byte-identical text and per-element ids, where the anchored one was deleted, now match the survivor. |
 | 28 | What makes a class stable evidence | **Word-like AND corroborated** — carried by a second element in the document — at capture; **coverage of that vetted set** (not a symmetric Jaccard) at resolve | word-like alone (finder v4, the old rule); filtering the live class list at resolve; "survive a second observation" over time | Bench F4 measured `css-<base36×6>` passing finder's word-like test **5.8 %** of the time, and such a class is unique in the document by construction. One render in seventeen therefore baked a per-render-random class into the fingerprint, and the symmetric Jaccard punished the *live* element for carrying new ones — `attribute-churn` scored 5/6, 4/6, 4/6, 2/6 over four runs of the same scenario. Corroboration is the cheapest signal that separates a hash from `card`; coverage makes the resolve side ignore new classes entirely, which also stops a `is-selected` state class from costing anything. The cost: a genuinely singleton semantic class (`sidebar`) is no longer evidence. Classes are 0.22 and, since #26, never decisive on their own — a fair trade for a deterministic anchor. |
 | 29 | Where an orphan's dock position comes from after a reload | **`ElementCapture.rect`** — additive optional field, written once at capture, read only when a thread orphans with no live rect | persisting `Anchoring.rect` on every pass; docking to the panel edge; narrowing PLAN §3.3's claim to warm orphans | PLAN §3.3 promises "dimmed badge docked at last-known position". Bench F1: after a reload with the anchor element absent, `anchoring.rect` was `null` — the rect is a live derivation and orphanhood is never persisted (§4.1 row 14) — so comment-ui drew **no badge at all**. Persisting the live rect would make orphaning a write and break the property the popover scenario asserts on raw bytes; docking to the panel edge answers a different question ("where is the panel") than the one PLAN asks ("where was it"). Capture time is the one moment the element is guaranteed present, and one field on a snapshot type that already exists to survive the element is the smallest correct place for it. |
+| 30 | `comment-ui`'s internal shape | **Headless controller + injected presentation.** The controller subscribes to the engine, owns all logic and the five state slots, and publishes a serializable `UIViewModel`; a `Presentation` draws it and nothing else | keeping one monolithic renderer; a `Renderers` map per widget (proposal C, rejected as #22); slots (#22, D5) | This is not the slot system #22 rejected, and the distinction is the whole argument. Slots let a host *inject into* our renderer, which is a second execution plane inside our DOM. This replaces the renderer wholesale behind a contract the host cannot partially occupy. The forcing reason is that we now ship **two** appearances (`domPresentation`, `glassPresentation`) and a third-party could ship a React or canvas one; without the split, every design decision in `docs/DESIGN.md` would be a fork of the logic that took 135 tests to get right. The split makes the logic testable without a DOM and the pixels swappable without touching it. |
+| 31 | What crosses the seam | **A frozen, structured-cloneable `UIViewModel` + an `Intents` interface whose every method returns `void` and never throws**, both declared in `comment-ui/presentation`, a module that imports **nothing** | passing `ThreadView[]` / `PlacementState` / the engine straight through; a callback bag; an event emitter | Total inverse DI was the requirement: the presentation must not be able to reach the engine, the store or the domain types, because anything it *can* reach it will eventually depend on, and then a theme is a fork. Serializability is the enforcement mechanism — it is impossible to smuggle an `Element` or a method through `structuredClone`, so the rule tests itself. The `void`-only, never-throws intent surface is what makes a presentation writable with no promise handling and no error plumbing, which is the difference between "a theme" and "a port". |
+| 32 | Where `update` / `destroy` live | **On `PresentationInstance`**, returned by `create(host, intents)` | the brief's literal `{ create, update, destroy }` flat shape | A flat shape forces one `Presentation` value to hold the state of every mount it is used for. Two engines on one page, an iframe matrix, or a conformance suite that mounts the same presentation 27 times would share it silently. Instance-per-mount costs one closure and removes an entire class of bug. Recorded as a deliberate refinement of the brief. |
+| 33 | Whether the mount surface breaks | **It does not.** `mount()` / `mountCommentUI()` keep their exact outer signatures and return types; `presentation` is one optional field on `CommentUIOptions`, defaulting to `domPresentation()` | a new `mountWith(engine, presentation, options)`; making `glassPresentation` the default | Backward compatibility was cheap here, so the breaking ruling is simply not needed. And the default stays `domPresentation` because a design change is not something a patch upgrade should perform on a host's users: the glass appearance is opt-in, one field, and the extension / demo / options page take it. |
+| 34 | Who positions | **The controller**, exclusively: floating-ui, `autoUpdate`, the `IntersectionObserver` skip, `left`/`top`, `data-placement`, `data-picking`. A presentation registers nodes through `host.anchor(key, node)` and never writes a layout property on them | letting each presentation own its own positioning; passing rects only | Positioning is logic (it decides *where a thing is*, and it is the part that regressed against real pages in the bench), not appearance. Splitting it per presentation would fork the one part of this package that took a benchmark suite to make correct. The corollary is the gift: `transform`/`opacity`/`clip-path` on those same nodes are then entirely the presentation's, with zero conflict, which is why `docs/DESIGN.md`'s whole motion catalog needs no coordination. |
+| 35 | Focus | **Policy in the controller, execution split**: the controller focuses elements it captured itself; presentation-owned nodes are named by `vm.focus` with a monotonic `seq` the presentation applies idempotently | a `focus(node)` callback on the host; letting the presentation own the return-focus element | The §3 a11y contract is normative and must be identical across presentations, so its *policy* cannot live in a swappable layer. A monotonic seq is the smallest thing that survives re-renders without an acknowledgement channel, and it keeps `vm` serializable — a node reference would not. |
+| 36 | Export surface growth | **+2 root runtime names** (`createCommentUIController`, `domPresentation`), **+3 subpaths** (`/presentation` types-only, `/glass` + `/glass.css`, `/testing`), **+1 IIFE** (`CommentsUIGlass`, reading `globalThis.CommentsUI` as an external) | one flat root export of everything; a separate `@astrale-os/comment-ui-glass` package | The types module must be separately importable or the "zero engine code" rule is unenforceable. `/glass` must be separate or the default bundle pays 7.5 KB gz for an appearance most consumers never select. `/testing` mirrors `comment-core/testing` (#24) and is what makes "themes are swappable" executable instead of claimed. A second npm package was rejected: it would version-skew against the contract it implements. The §9 DoD's exact exported-key assertion is amended in the same commit. |
+| 37 | `Labels` / `PanelSection` declarations | **Moved into `comment-ui/presentation`, re-exported from the root** | duplicating the 17-key interface in both modules; passing labels as `Record<string, string>` | The VM carries the resolved labels, so the types module needs the interface; duplicating a locked 17-key interface is how the two copies drift. Structurally identical and still exported from the root, so no consumer changes and no test changes. |
+| 38 | What happens to the 135 tests | **72 controller cases (no shadow root) + 27 conformance cases run against both presentations + 4 label + 13 build/DoD**, per §3.1.9's table. Two normative rules: a controller test may not touch the shadow root; a conformance case may not assert a class name | rewriting the suite against the glass DOM; keeping every test on `domPresentation` and testing glass by hand | The tests' value was never the selectors — it was the rules (`pending` renders nothing, resolved hides, orphans dock, the Esc chain, chip precedence, decoration lifecycle, coalescing). Those are all controller behaviour and become cheaper and faster to assert against `vm`. The a11y file is the one that *is* the presentation contract, so it becomes the conformance suite's spine and runs twice. Four cases stay pinned to `domPresentation`'s markup on purpose: that markup is now a frozen compatibility surface and needs a test that fails when someone "improves" it. |
+| 39 | Two presentations, one theming surface | **The eleven `--cc-*` names are shared; their default *values* are per-presentation.** `domPresentation` keeps §3's table verbatim; `glassPresentation` ships OKLCH defaults (`docs/DESIGN.md` §2.1), including `--cc-radius` 10px and a layered `--cc-shadow` | one global default table; new `--cc-*` tokens for glass (blur, glass opacity, elevation) | A default value is a property of the material, not of the API — and the read-with-fallback rule means a host that themed explicitly is unaffected in either presentation. New public tokens were refused outright: each is a permanent compatibility obligation, and a host that *can* set `--cc-glass-opacity: 0.15` will, on their own busy page, and then the widget is illegible and it is our bug. Theming lets a host say what their brand is, not how transparent our glass gets. `styles.test.ts`'s property contract is parameterised over both sheets. |
+| 40 | `three.js` | **Banned in `comment-ui`, `comment-ui/glass` and the extension content script. Sanctioned in exactly one place: `apps/demo/site/material.html`**, ≤ 45 KB gz lazy chunk behind five gates, with an always-correct CSS fallback (`docs/DESIGN.md` §9) | a lazy WebGL "thinking orb" in the content script; a hand-rolled ~3.2 KB GLSL orb; a decorative canvas on the options page | 148 KB gz for the smallest useful renderer, against a 40 KB gz ceiling for everything injected into a third party's page, is a 3.7× miss for ambience. The one effect a GPU genuinely buys — edge refraction, which `backdrop-filter` provably cannot produce — is ~700 bytes of inline SVG filter, off by default. The hand-rolled GLSL orb was rejected too: it is new surface in the content script for a signal a 6-line CSS ring already carries, and browsers evict the oldest of ~16 WebGL contexts, which would silently kill thread 1's canvas when thread 17 appears. A DoD grep enforces it. |
 
 ---
 
@@ -1990,7 +2428,23 @@ describe('chrome.storage store', () => {
   returns nothing.
 * Ordering rules §4.2.1–12 each have a named test.
 * The IIFE bundle exposes `Comments` / `CommentsUI` and `CommentsUI.mount()` works on a bare
-  HTML page with no build step.
+  HTML page with no build step. `CommentsUI`'s exported key list is exactly
+  `['commentUIStyles', 'createCommentUIController', 'defaultLabels', 'domPresentation', 'mount', 'mountCommentUI']`,
+  and `comment-ui-glass.iife.js` reads `globalThis.CommentsUI` as an external the same way
+  `comment-ui.iife.js` reads `Comments` (§1.2, §3.1.1).
+* `presentationConformance()` passes against **both** `domPresentation()` and
+  `glassPresentation()`, and no case in it asserts a class name (§3.1.9).
+* Every controller test mounts with `presentation: null` and never queries the shadow root, and
+  `structuredClone(controller.vm.get())` succeeds on every published model.
+* `packages/comment-ui/src/presentation.ts` contains no `import` or `export … from` statement,
+  and its emitted `.d.ts` names no `comment-core`, `comment-ui` or `@floating-ui/dom` identifier.
+* `grep -rE "comment-core|floating-ui" packages/comment-ui/src/presentations` returns nothing:
+  no presentation imports engine, domain or positioning code.
+* `grep -rEi "\bthree\b|webgl" packages/comment-ui/src packages/extension/src` returns nothing
+  (decision log #40).
+* `styles.test.ts`'s eleven-property contract (consumed with a fallback, never declared,
+  rem-free, `all: initial`, explicit `:host` font-size) passes against `commentUIStyles` **and**
+  `glassStyles`, and each is byte-identical to the `.css` file its build emits.
 
 ---
 

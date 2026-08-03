@@ -1,142 +1,239 @@
 /* Demo page chrome only. comment-ui ships its own styles inside its shadow root — nothing in
-   this file can reach the widgets, which is the point of the shadow boundary. */
+   this file can reach the widgets, which is the point of the shadow boundary.
+
+   What it CAN do, and what DESIGN §8.9 asks for, is agree with them: the same eleven-token OKLCH
+   palette, the same type scale, the same radii and the same spring, so a screenshot of a demo
+   page reads as one product rather than as a widget parked on somebody's test harness. The
+   toolbar is glass; the event log is quiet until you look at it — the log is the demo's whole
+   argument, and it should be legible and unobtrusive at the same time. */
 
 :root {
   color-scheme: light dark;
-  --ink: #16181d;
-  --muted: #5c6370;
-  --line: #e2e5ea;
-  --bg: #ffffff;
-  --panel: #f6f7f9;
-  --accent: #4f46e5;
+
+  --accent: oklch(59.6% 0.211 254);
+  --surface: oklch(99.2% 0.002 264);
+  --surface-2: oklch(96.4% 0.004 264);
+  --ink: oklch(19% 0.012 264);
+  --muted: oklch(55% 0.014 264);
+  --line: oklch(89% 0.005 264);
+  --danger: oklch(58.5% 0.222 27.3);
+
+  --glass: color-mix(in oklab, var(--surface) 74%, transparent);
+  --glass-fx: blur(24px) saturate(180%) brightness(1.02);
+  --line-out: color-mix(in oklab, var(--ink) 13%, transparent);
+  --accent-06: color-mix(in oklab, var(--accent) 6%, transparent);
+  --accent-14: color-mix(in oklab, var(--accent) 14%, transparent);
+
+  --e2:
+    0 0 0 0.5px var(--line-out), 0 2px 4px -1px oklch(0% 0 0 / 0.08),
+    0 10px 24px -8px oklch(0% 0 0 / 0.19);
+
+  --r-sm: 6px;
+  --r-md: 8px;
+  --r-lg: 10px;
+  --r-xl: 14px;
+
+  --spring: linear(
+    0,
+    0.234 10%,
+    0.589 20%,
+    0.839 30%,
+    0.967 40%,
+    1.012 50%,
+    1.02 60%,
+    1.014 70%,
+    1.007 80%,
+    1.003 90%,
+    1
+  );
+  --std: cubic-bezier(0.32, 0.72, 0, 1);
+
+  --sans:
+    -apple-system, BlinkMacSystemFont, 'SF Pro Text', 'Segoe UI Variable Text', 'Segoe UI', Inter,
+    system-ui, sans-serif;
+  --mono: ui-monospace, SFMono-Regular, 'SF Mono', Menlo, monospace;
 }
 
 @media (prefers-color-scheme: dark) {
   :root {
-    --ink: #e8eaee;
-    --muted: #9aa2b1;
-    --line: #2b2f38;
-    --bg: #101318;
-    --panel: #171b22;
-    --accent: #8b87ff;
+    --accent: oklch(64.2% 0.191 253);
+    --surface: oklch(24.5% 0.012 264);
+    --surface-2: oklch(29% 0.013 264);
+    --ink: oklch(96% 0.004 264);
+    --muted: oklch(70.5% 0.012 264);
+    --line: oklch(38% 0.012 264);
+    --danger: oklch(66% 0.214 28);
+    --glass: color-mix(in oklab, var(--surface) 64%, transparent);
+    --glass-fx: blur(24px) saturate(170%) brightness(0.86);
+    --line-out: oklch(0% 0 0 / 0.58);
   }
 }
 
-* {
+*,
+*::before,
+*::after {
   box-sizing: border-box;
 }
 
 body {
   margin: 0;
-  padding: 0 0 6rem;
-  background: var(--bg);
+  padding: 0 0 96px;
+  background:
+    radial-gradient(120vw 60vh at 82% -12%, var(--accent-06), transparent 60%),
+    radial-gradient(
+      90vw 50vh at 8% 4%,
+      color-mix(in oklab, var(--accent) 4%, transparent),
+      transparent 62%
+    ),
+    var(--surface);
   color: var(--ink);
-  font:
-    16px/1.6 ui-sans-serif,
-    system-ui,
-    -apple-system,
-    'Segoe UI',
-    sans-serif;
+  font: 15px/21px var(--sans);
+  font-synthesis: none;
+  letter-spacing: -0.006em;
+  -webkit-font-smoothing: antialiased;
 }
 
-main,
-.demo-bar {
-  max-width: 62rem;
+main {
+  max-width: 900px;
   margin: 0 auto;
-  padding: 1.25rem 1.5rem;
+  padding: 24px;
 }
 
-/* --- toolbar (built by demo.js) --- */
+/* --- toolbar (built by demo.js) ------------------------------------------------------- */
 
 .demo-bar {
   position: sticky;
   top: 0;
   z-index: 10;
-  background: var(--panel);
-  border-bottom: 1px solid var(--line);
-  max-width: none;
   display: grid;
-  gap: 0.6rem;
+  gap: 10px;
+  padding: 12px 24px;
+  background: var(--glass);
+  backdrop-filter: var(--glass-fx);
+  -webkit-backdrop-filter: var(--glass-fx);
+  box-shadow: 0 0.5px 0 var(--line-out);
 }
 
 .demo-bar-head {
   display: flex;
   flex-wrap: wrap;
   align-items: baseline;
-  gap: 0.75rem;
+  gap: 12px;
 }
 
 .demo-bar-title {
   margin: 0;
-  font-size: 1.05rem;
-  letter-spacing: -0.01em;
+  font-size: 17px;
+  line-height: 23px;
+  font-weight: 600;
+  letter-spacing: -0.012em;
 }
 
 .demo-bar-hint,
 .demo-bar-counts {
   margin: 0;
   color: var(--muted);
-  font-size: 0.85rem;
+  font-size: 12px;
+  line-height: 16px;
+  letter-spacing: 0.003em;
+}
+
+.demo-bar-counts {
+  font-variant-numeric: tabular-nums;
 }
 
 .demo-bar-actions {
   display: flex;
   flex-wrap: wrap;
   align-items: center;
-  gap: 0.5rem;
+  gap: 6px;
 }
 
 button,
 .demo-bar-actions a {
-  font: inherit;
-  font-size: 0.85rem;
-  padding: 0.35rem 0.7rem;
-  border: 1px solid var(--line);
-  border-radius: 0.5rem;
-  background: var(--bg);
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  height: 28px;
+  padding: 0 10px;
+  border: 0;
+  border-radius: var(--r-sm);
+  background: color-mix(in oklab, var(--surface-2) 70%, transparent);
+  box-shadow: 0 0 0 0.5px var(--line-out);
   color: var(--ink);
+  font: inherit;
+  font-size: 12px;
   cursor: pointer;
   text-decoration: none;
+  transition:
+    background-color 90ms var(--std),
+    color 90ms var(--std),
+    scale 160ms var(--spring);
 }
 
 button:hover,
 .demo-bar-actions a:hover {
-  border-color: var(--accent);
+  background: var(--accent-14);
   color: var(--accent);
+}
+
+button:active {
+  scale: 0.97;
+}
+
+button:focus-visible,
+a:focus-visible {
+  outline: none;
+  box-shadow: 0 0 0 3px color-mix(in oklab, var(--accent) 38%, transparent);
+}
+
+.demo-bar-actions [data-demo='theme'] {
+  margin-left: auto;
 }
 
 kbd {
   font: inherit;
-  font-size: 0.75rem;
-  padding: 0 0.25rem;
-  border: 1px solid var(--line);
-  border-radius: 0.25rem;
+  font-size: 10px;
+  padding: 0 4px;
+  border-radius: 4px;
+  background: color-mix(in oklab, var(--ink) 8%, transparent);
   color: var(--muted);
 }
 
+/* The log is the demo's whole argument: quiet at rest, fully legible the moment you look. */
 .demo-log {
   margin: 0;
   padding: 0;
   list-style: none;
-  max-height: 7.5rem;
+  max-height: 112px;
   overflow: auto;
-  font:
-    12px/1.5 ui-monospace,
-    SFMono-Regular,
-    Menlo,
-    monospace;
+  overscroll-behavior: contain;
+  scrollbar-width: none;
+  font: 11px/15px var(--mono);
+  letter-spacing: 0.006em;
   color: var(--muted);
+  opacity: 0.6;
+  transition: opacity 160ms var(--std);
+}
+
+.demo-log::-webkit-scrollbar {
+  display: none;
+}
+
+.demo-log:hover,
+.demo-log:focus-within {
+  opacity: 1;
 }
 
 .demo-log li {
-  padding: 0.05rem 0;
+  padding: 1px 0;
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
 }
 
 .demo-log li[data-kind='error'] {
-  color: #d2453d;
+  color: var(--danger);
 }
 
 .demo-log li[data-kind='echo'],
@@ -144,103 +241,309 @@ kbd {
   color: var(--accent);
 }
 
-/* --- page content --- */
+/* --- page content --------------------------------------------------------------------- */
 
 h2 {
-  font-size: 1.35rem;
-  margin: 2rem 0 0.5rem;
+  font-size: 22px;
+  line-height: 27px;
+  font-weight: 640;
+  letter-spacing: -0.018em;
+  margin: 32px 0 8px;
 }
 
 h3 {
-  font-size: 1.05rem;
-  margin: 1.5rem 0 0.4rem;
+  font-size: 17px;
+  line-height: 23px;
+  font-weight: 600;
+  letter-spacing: -0.012em;
+  margin: 28px 0 8px;
+}
+
+p {
+  margin: 8px 0;
+}
+
+a {
+  color: var(--accent);
 }
 
 .demo-note {
-  border-left: 3px solid var(--accent);
-  background: var(--panel);
-  padding: 0.75rem 1rem;
-  margin: 1rem 0 1.5rem;
-  font-size: 0.9rem;
+  border-radius: var(--r-lg);
+  background: color-mix(in oklab, var(--surface-2) 60%, transparent);
+  box-shadow: inset 0 0 0 0.5px var(--line-out);
+  padding: 12px 16px;
+  margin: 16px 0 24px;
+  font-size: 13px;
+  line-height: 19px;
 }
 
 .demo-note ol,
 .demo-note ul {
-  margin: 0.4rem 0 0;
-  padding-left: 1.2rem;
+  margin: 6px 0 0;
+  padding-left: 20px;
 }
 
 .demo-controls {
   display: flex;
   flex-wrap: wrap;
-  gap: 0.5rem;
-  margin: 1rem 0;
-  padding: 0.75rem;
-  border: 1px dashed var(--line);
-  border-radius: 0.6rem;
+  gap: 6px;
+  margin: 16px 0;
+  padding: 12px;
+  border-radius: var(--r-lg);
+  box-shadow: inset 0 0 0 1px var(--line);
 }
 
 .card,
 .item {
-  border: 1px solid var(--line);
-  border-radius: 0.6rem;
-  padding: 0.75rem 1rem;
-  margin: 0.5rem 0;
-  background: var(--panel);
+  border-radius: var(--r-md);
+  box-shadow: inset 0 0 0 0.5px var(--line-out);
+  padding: 12px 16px;
+  margin: 8px 0;
+  background: color-mix(in oklab, var(--surface-2) 55%, transparent);
 }
 
 .grid {
   display: grid;
-  gap: 0.5rem;
-  grid-template-columns: repeat(auto-fill, minmax(14rem, 1fr));
+  gap: 8px;
+  grid-template-columns: repeat(auto-fill, minmax(224px, 1fr));
 }
 
 table {
   border-collapse: collapse;
   width: 100%;
-  font-size: 0.9rem;
+  font-size: 13px;
 }
 
 th,
 td {
-  border: 1px solid var(--line);
-  padding: 0.4rem 0.6rem;
+  border-bottom: 0.5px solid var(--line);
+  padding: 8px 10px;
   text-align: left;
 }
 
 code {
-  font:
-    0.85em ui-monospace,
-    SFMono-Regular,
-    Menlo,
-    monospace;
-  background: var(--panel);
-  padding: 0.1rem 0.3rem;
-  border-radius: 0.25rem;
+  font: 0.88em var(--mono);
+  background: color-mix(in oklab, var(--ink) 6%, transparent);
+  padding: 1px 5px;
+  border-radius: 4px;
 }
 
 .popover-panel {
-  border: 1px solid var(--accent);
-  border-radius: 0.6rem;
-  padding: 1rem;
-  margin: 1rem 0;
-  background: var(--panel);
+  border-radius: var(--r-lg);
+  box-shadow: inset 0 0 0 1px var(--accent);
+  padding: 16px;
+  margin: 16px 0;
+  background: var(--accent-06);
+}
+
+/* --- landing page --------------------------------------------------------------------- */
+
+.hero {
+  padding: 56px 0 8px;
+}
+
+.hero h1 {
+  margin: 0;
+  font-size: 40px;
+  line-height: 44px;
+  font-weight: 640;
+  letter-spacing: -0.028em;
+}
+
+.hero .lede {
+  max-width: 60ch;
+  margin: 12px 0 0;
+  color: var(--muted);
+  font-size: 17px;
+  line-height: 25px;
+  letter-spacing: -0.012em;
+}
+
+.hero-keys {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin: 20px 0 0;
+  padding: 0;
+  list-style: none;
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.hero-keys li {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  height: 26px;
+  padding: 0 10px 0 6px;
+  border-radius: 999px;
+  background: color-mix(in oklab, var(--surface-2) 60%, transparent);
+  box-shadow: inset 0 0 0 0.5px var(--line-out);
+}
+
+.section-label {
+  margin: 40px 0 12px;
+  color: var(--muted);
+  font-size: 11px;
+  line-height: 15px;
+  font-weight: 500;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
 }
 
 .index-list {
   list-style: none;
   padding: 0;
+  margin: 0;
   display: grid;
-  gap: 0.75rem;
+  gap: 8px;
+  grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
+}
+
+.index-list li {
+  position: relative;
+  border-radius: var(--r-xl);
+  background: color-mix(in oklab, var(--surface-2) 55%, transparent);
+  box-shadow: inset 0 0 0 0.5px var(--line-out);
+  transition:
+    background-color 160ms var(--std),
+    translate 220ms var(--spring),
+    box-shadow 160ms var(--std);
+}
+
+.index-list li:hover {
+  translate: 0 -2px;
+  background: var(--accent-06);
+  box-shadow: var(--e2);
 }
 
 .index-list a {
+  display: block;
+  padding: 14px 16px 4px;
   font-weight: 600;
-  color: var(--accent);
+  font-size: 15px;
+  letter-spacing: -0.006em;
+  text-decoration: none;
+}
+
+.index-list a::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  border-radius: inherit;
 }
 
 .index-list p {
-  margin: 0.2rem 0 0;
+  margin: 0;
+  padding: 0 16px 14px;
   color: var(--muted);
-  font-size: 0.9rem;
+  font-size: 13px;
+  line-height: 19px;
+}
+
+/* --- the material page ---------------------------------------------------------------- */
+
+.material-stage {
+  position: relative;
+  display: grid;
+  place-items: center;
+  min-height: 420px;
+  margin: 24px 0;
+  border-radius: 24px;
+  overflow: hidden;
+  background:
+    radial-gradient(60% 80% at 22% 18%, oklch(72% 0.19 28 / 0.55), transparent 62%),
+    radial-gradient(55% 70% at 78% 30%, oklch(70% 0.2 268 / 0.6), transparent 60%),
+    radial-gradient(70% 90% at 50% 96%, oklch(78% 0.17 152 / 0.45), transparent 62%),
+    linear-gradient(160deg, oklch(28% 0.06 264), oklch(16% 0.04 264));
+  box-shadow: inset 0 0 0 0.5px var(--line-out);
+}
+
+.material-stage::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  background-image: repeating-linear-gradient(
+    90deg,
+    oklch(100% 0 0 / 0.06) 0 1px,
+    transparent 1px 42px
+  );
+  pointer-events: none;
+}
+
+/* The lozenge IS the content, and it is complete on its own. The lazy chunk only ever adds
+   edge refraction on top of it — never meaning. */
+.material-lozenge {
+  position: relative;
+  z-index: 1;
+  display: grid;
+  place-items: center;
+  width: min(420px, 78%);
+  height: 180px;
+  border-radius: 40px;
+  background: oklch(100% 0 0 / 0.14);
+  backdrop-filter: blur(28px) saturate(180%) brightness(1.06);
+  -webkit-backdrop-filter: blur(28px) saturate(180%) brightness(1.06);
+  color: oklch(100% 0 0 / 0.92);
+  font-size: 11px;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  box-shadow:
+    0 0 0 0.5px oklch(0% 0 0 / 0.3),
+    inset 0 1px 0 oklch(100% 0 0 / 0.55),
+    inset 0 -1px 0 oklch(0% 0 0 / 0.18),
+    0 24px 56px -16px oklch(0% 0 0 / 0.55);
+  animation: lozenge-drift 5700ms ease-in-out infinite alternate;
+}
+
+@supports (corner-shape: squircle) {
+  .material-lozenge {
+    corner-shape: squircle;
+    border-radius: 64px;
+  }
+}
+
+@keyframes lozenge-drift {
+  from {
+    translate: -10px 0;
+    rotate: -0.4deg;
+  }
+  to {
+    translate: 10px 0;
+    rotate: 0.4deg;
+  }
+}
+
+/* The upgrade, applied by the lazy chunk and by nothing else. */
+.material-stage[data-lens='on'] .material-lozenge {
+  backdrop-filter: url('#demo-lens') blur(28px) saturate(180%) brightness(1.06);
+}
+
+.ledger {
+  width: 100%;
+  font-variant-numeric: tabular-nums;
+}
+
+.ledger td:last-child,
+.ledger th:last-child {
+  text-align: right;
+}
+
+.ledger [data-verdict='over'] {
+  color: var(--danger);
+}
+
+.ledger [data-verdict='under'] {
+  color: var(--accent);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .material-lozenge {
+    animation: none;
+  }
+  .index-list li,
+  button,
+  .demo-log {
+    transition-duration: 1ms;
+  }
 }

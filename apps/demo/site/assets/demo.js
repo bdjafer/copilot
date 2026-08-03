@@ -38,19 +38,40 @@ export const DEMO_MODES = [
 export const DEMO_ANCHORING = { threshold: 0.62 }
 
 /**
+ * Which appearance a page mounts. **Glass is the default** — it is the product's intended
+ * appearance (`docs/DESIGN.md`), and a demo that showed the fallback would be arguing for the
+ * wrong thing. `?theme=default` is the escape hatch, and it exists for a real reason rather than
+ * for symmetry: `domPresentation` is a frozen compatibility surface, so being able to put the two
+ * side by side on the same page, in the same browser, with one query parameter is how you check
+ * that the split kept its promise.
+ *
+ * @param {string} search
+ * @returns {'glass' | 'default'}
+ */
+export function resolveTheme(search = '') {
+  return new URLSearchParams(search).get('theme') === 'default' ? 'default' : 'glass'
+}
+
+/**
  * @param options {
  *   title, hint,                       // toolbar copy
+ *   theme,                             // 'glass' | 'default'; defaults to ?theme= then glass
  *   engine, ui,                        // overrides merged into the two option bags
  *   delay,                             // echo responder delay, ms
  * }
- * @returns { engine, ui, log, detach }
+ * @returns { engine, ui, log, theme, detach }
  */
 export function bootDemo(options = {}) {
-  const { Comments, CommentsUI } = globalThis
+  const { Comments, CommentsUI, CommentsUIGlass } = globalThis
   if (!Comments || !CommentsUI) {
     throw new Error(
       'load ../vendor/comment-core.iife.js and then ../vendor/comment-ui.iife.js first',
     )
+  }
+
+  const theme = options.theme ?? resolveTheme(globalThis.location?.search ?? '')
+  if (theme === 'glass' && !CommentsUIGlass) {
+    throw new Error('load ../vendor/comment-ui-glass.iife.js, or pass ?theme=default')
   }
 
   const engine = Comments.createCommentEngine({
@@ -64,10 +85,27 @@ export function bootDemo(options = {}) {
     ...options.engine,
   })
 
-  const ui = CommentsUI.mountCommentUI(engine, { panel: { defaultOpen: true }, ...options.ui })
+  const ui = CommentsUI.mountCommentUI(engine, {
+    panel: { defaultOpen: true },
+    // One field. That is the entire cost of a second appearance, and it is the whole argument
+    // for the presentation seam: none of the logic below knows which one is mounted.
+    ...(theme === 'glass' ? { presentation: CommentsUIGlass.glassPresentation() } : {}),
+    ...options.ui,
+  })
 
-  const bar = createToolbar(engine, options)
+  const bar = createToolbar(engine, { ...options, theme })
   const log = bar.log
+
+  // Signal S7 of the disclosure map: the panel seed is a dot until you ask for it, so there has
+  // to be a way to ask from the keyboard. The chord is the HOST's, not the widget's — a library
+  // that installs a global shortcut on somebody else's page has overstepped.
+  const onSummon = (event) => {
+    if (event.altKey && event.shiftKey && (event.key === 'C' || event.key === 'c')) {
+      event.preventDefault()
+      ui.panel.toggle()
+    }
+  }
+  globalThis.addEventListener('keydown', onSummon)
 
   // Host-owned badge chrome (SPEC-comment-core §7.2): comment-ui knows nothing about copilots,
   // so the *host* decorates while a reply is in flight and clears it afterwards.
@@ -91,10 +129,12 @@ export function bootDemo(options = {}) {
     engine,
     ui,
     log,
+    theme,
     detach() {
       unsubscribeEvents()
       unsubscribeThreads()
       detachEcho()
+      globalThis.removeEventListener('keydown', onSummon)
       ui.unmount()
       engine.destroy()
       bar.element.remove()
@@ -121,13 +161,22 @@ function createToolbar(engine, options) {
       <button type="button" data-demo="comment">Comment <kbd>C</kbd></button>
       <button type="button" data-demo="ask">Ask <kbd>A</kbd></button>
       <button type="button" data-demo="reset">Reset this page</button>
-      <a href="../index.html">← all scenarios</a>
+      <a data-demo="theme" href="?theme=default"></a>
+      <a data-demo="index" href="../index.html">← all scenarios</a>
     </div>
     <p class="demo-bar-counts" data-demo="counts">0 threads</p>
     <ol class="demo-log" data-demo="log" aria-label="engine events"></ol>
   `
   element.querySelector('.demo-bar-title').textContent = options.title ?? 'exp-spec demo'
   element.querySelector('.demo-bar-hint').textContent = options.hint ?? ''
+  element.dataset.theme = options.theme ?? 'glass'
+
+  // The escape hatch, in the one place it is useful: a link back to the same page under the
+  // other appearance, so the two are one click apart rather than one rebuild apart.
+  const themeLink = element.querySelector('[data-demo="theme"]')
+  const glass = (options.theme ?? 'glass') === 'glass'
+  themeLink.textContent = glass ? 'Default theme →' : '← Glass theme'
+  themeLink.href = glass ? '?theme=default' : '?'
   document.body.prepend(element)
 
   const logList = element.querySelector('[data-demo="log"]')
