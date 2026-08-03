@@ -16,16 +16,13 @@ import {
   FAILED_PREFIX,
   hashIds,
   HOST_NS,
+  failedKey,
   idFromKey,
   LEGACY_SETTINGS_KEY,
-  parseRunIndexKey,
   pendingKey,
   pendingPagePrefix,
   PENDING_PREFIX,
-  RUN_INDEX_PREFIX,
   RUN_NS,
-  runIndexKey,
-  runIndexThreadPrefix,
   SETTINGS_KEY,
   singleRunId,
   threadRunPrefix,
@@ -102,7 +99,7 @@ describe('§6 key ranges', () => {
     store.subscribe('https://example.com/a', () => notified++)
 
     await kv.set({ [pendingKey('https://example.com/a', 't1')]: { threadId: 't1' } })
-    await kv.set({ [runIndexKey('t1', 'c:t1:c1')]: { runId: 'c:t1:c1' } })
+    await kv.set({ [failedKey('t1')]: { threadId: 't1', code: 'timeout' } })
     await kv.set({ [unreadKey('t1')]: { threadId: 't1' } })
     expect(notified).toBe(0)
 
@@ -123,17 +120,12 @@ describe('§6 key ranges', () => {
     }
   })
 
-  it('the run index is keyed on (thread, run), and both halves survive a colon', () => {
-    // One slot per thread lost a live run whenever a second one covered the same thread — a
-    // human reply during a batch review — and let the first run's settle clear the second's row.
-    for (const threadId of ['t1', 'a:b', 'ünïcode', 'with space']) {
-      for (const runId of ['c:t1:c9', 'b:https://x/y:abc']) {
-        expect(parseRunIndexKey(runIndexKey(threadId, runId))).toEqual({ threadId, runId })
-      }
-    }
-    expect(runIndexKey('t1', 'r1')).not.toBe(runIndexKey('t1', 'r2'))
-    expect(runIndexKey('t1', 'r1').startsWith(runIndexThreadPrefix('t1'))).toBe(true)
-    expect(runIndexKey('t1x', 'r1').startsWith(runIndexThreadPrefix('t1'))).toBe(false)
+  it('has no run subrange — the run store is the only record of which runs are live', () => {
+    // A thread → run index used to live at `exp-spec:host:run:`. Everything it answered is a
+    // projection of `copilot.list({ state: ['queued', 'processing'] })` over `run.context`, so
+    // the range is gone rather than mirrored. This asserts nothing re-introduces it silently.
+    const written = [pendingKey('p', 't1'), unreadKey('t1'), failedKey('t1'), SETTINGS_KEY]
+    for (const key of written) expect(key.startsWith(`${HOST_NS}:run:`)).toBe(false)
   })
 })
 
@@ -141,7 +133,7 @@ describe('settings live in the host range, not a fourth one', () => {
   it('is under exp-spec:host:, so §6 s three namespaces stay exhaustive', () => {
     expect(SETTINGS_KEY.startsWith(`${HOST_NS}:`)).toBe(true)
     // …and it collides with none of the range's per-record prefixes.
-    for (const prefix of [PENDING_PREFIX, RUN_INDEX_PREFIX, UNREAD_PREFIX, FAILED_PREFIX]) {
+    for (const prefix of [PENDING_PREFIX, UNREAD_PREFIX, FAILED_PREFIX]) {
       expect(SETTINGS_KEY.startsWith(prefix)).toBe(false)
     }
   })

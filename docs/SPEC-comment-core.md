@@ -1661,13 +1661,18 @@ namespaces and nothing else:
 |---|---|---|
 | `exp-spec:*` | `comment-core` | thread and comment records |
 | `runs:*` | `copilot` | run records, leases |
-| `exp-spec:host:*` | **the bridge** | pending-dispatch set, thread→runId index, observe cursor, unread |
+| `exp-spec:host:*` | **the bridge** | pending-dispatch set, observe cursors, unread, failed, settings |
 
 The third range is not optional bookkeeping. PLAN §5's default `manual` dispatch policy needs
 the pending set to survive, and an MV3 service worker's memory does not survive 30 s of idle —
 `markPending()` in worker memory loses it silently. The content script reads the same range on
 mount to re-render its chips. Each store filters `watch` to its own prefix (§2.8), so the three
 ranges never wake each other.
+
+It holds no thread→run index. One was specified here and built; it is deleted (SPEC-copilot
+§8.2 D11). Every question it answered is a projection of
+`copilot.list({ state: ['queued', 'processing'] })` over `run.context` — the same durability, in
+the range that already owns run records, with no second write path to fall out of step.
 
 ---
 

@@ -1,0 +1,825 @@
+{
+  "base": "http://127.0.0.1:4271",
+  "ranAt": "2026-08-03T01:13:04.143Z",
+  "results": [
+    {
+      "name": "reorder",
+      "page": "/pages/reorder.html",
+      "url": "http://127.0.0.1:4271/pages/reorder.html",
+      "id": "2cKmZ2RMlW1m",
+      "baseline": {
+        "domId": null,
+        "key": "LI|Kiwi — furry, sliced in half, eaten with a teaspoon",
+        "path": "html>body:nth-child(2)>main:nth-child(2)>ul:nth-child(4)>li:nth-child(3)",
+        "rect": {
+          "height": 52,
+          "left": 288,
+          "top": 888,
+          "width": 904
+        },
+        "tag": "LI",
+        "text": "Kiwi — furry, sliced in half, eaten with a teaspoon"
+      },
+      "checks": [
+        {
+          "label": "target",
+          "note": {
+            "path": "html>body:nth-child(2)>main:nth-child(2)>ul:nth-child(4)>li:nth-child(3)",
+            "selector": "#list > li:nth-child(3)"
+          },
+          "ok": true,
+          "fails": []
+        },
+        {
+          "label": "placed on Kiwi",
+          "expect": {
+            "status": "anchored",
+            "same": true,
+            "tracks": true
+          },
+          "fails": [],
+          "ok": true,
+          "probe": {
+            "badge": {
+              "anchorAttr": "anchored",
+              "approximate": false,
+              "borderStyle": "solid",
+              "center": {
+                "x": 1152,
+                "y": 883
+              },
+              "hidden": false,
+              "label": "comment (1)",
+              "marks": [],
+              "opacity": 1,
+              "statusAttr": "open"
+            },
+            "badgeOffset": {
+              "dx": -40,
+              "dy": -5
+            },
+            "comments": 1,
+            "confidence": 0.999,
+            "dockRect": {
+              "height": 52,
+              "left": 288,
+              "top": 888,
+              "width": 904
+            },
+            "element": {
+              "domId": null,
+              "key": "LI|Kiwi — furry, sliced in half, eaten with a teaspoon",
+              "path": "html>body:nth-child(2)>main:nth-child(2)>ul:nth-child(4)>li:nth-child(3)",
+              "rect": {
+                "height": 52,
+                "left": 288,
+                "top": 888,
+                "width": 904
+              },
+              "tag": "LI",
+              "text": "Kiwi — furry, sliced in half, eaten with a teaspoon"
+            },
+            "found": true,
+            "id": "2cKmZ2RMlW1m",
+            "isOrphaned": false,
+            "isResolved": false,
+            "pageKey": "http://127.0.0.1:4271/pages/reorder.html",
+            "panel": {
+              "counts": {
+                "open": 1,
+                "resolved": 0,
+                "unanchored": 0
+              },
+              "listed": true,
+              "section": "open"
+            },
+            "status": "anchored",
+            "threads": 1,
+            "via": "css"
+          }
+        },
+        {
+          "label": "trace @ placement",
+          "trace": {
+            "accepted": {
+              "confidence": 0.999,
+              "via": "css"
+            },
+            "attempts": [
+              {
+                "accepted": true,
+                "best": 0.999,
+                "candidates": 1,
+                "selector": "css"
+              }
+            ],
+            "totalMs": 0.10000002384185792
+          },
+          "ok": true,
+          "fails": []
+        },
+        {
+          "label": "after reload",
+          "expect": {
+            "status": "anchored",
+            "same": true,
+            "tracks": true
+          },
+          "fails": [],
+          "ok": true,
+          "probe": {
+            "badge": {
+              "anchorAttr": "anchored",
+              "approximate": false,
+              "borderStyle": "solid",
+              "center": {
+                "x": 1175,
+                "y": 844
+              },
+              "hidden": false,
+              "label": "comment (2)",
+              "marks": [],
+              "opacity": 1,
+              "statusAttr": "open"
+            },
+            "badgeOffset": {
+              "dx": -17,
+              "dy": -5
+            },
+            "comments": 2,
+            "confidence": 0.999,
+            "dockRect": {
+              "height": 52,
+              "left": 288,
+              "top": 849,
+              "width": 904
+            },
+            "element": {
+              "domId": null,
+              "key": "LI|Kiwi — furry, sliced in half, eaten with a teaspoon",
+              "path": "html>body:nth-child(2)>main:nth-child(2)>ul:nth-child(4)>li:nth-child(3)",
+              "rect": {
+                "height": 52,
+                "left": 288,
+                "top": 849,
+                "width": 904
+              },
+              "tag": "LI",
+              "text": "Kiwi — furry, sliced in half, eaten with a teaspoon"
+            },
+            "found": true,
+            "id": "2cKmZ2RMlW1m",
+            "isOrphaned": false,
+            "isResolved": false,
+            "pageKey": "http://127.0.0.1:4271/pages/reorder.html",
+            "panel": {
+              "counts": {
+                "open": 1,
+                "resolved": 0,
+                "unanchored": 0
+              },
+              "listed": true,
+              "section": "open"
+            },
+            "status": "anchored",
+            "threads": 1,
+            "via": "css"
+          }
+        },
+        {
+          "label": "perturbation: Shuffle",
+          "note": {
+            "selector": "#shuffle",
+            "how": "cdp-click"
+          },
+          "ok": true,
+          "fails": []
+        },
+        {
+          "label": "after shuffle",
+          "expect": {
+            "status": "anchored",
+            "same": true,
+            "tracks": true
+          },
+          "fails": [],
+          "ok": true,
+          "probe": {
+            "badge": {
+              "anchorAttr": "anchored",
+              "approximate": false,
+              "borderStyle": "solid",
+              "center": {
+                "x": 1175,
+                "y": 730
+              },
+              "hidden": false,
+              "label": "comment (2)",
+              "marks": [],
+              "opacity": 1,
+              "statusAttr": "open"
+            },
+            "badgeOffset": {
+              "dx": -17,
+              "dy": -5
+            },
+            "comments": 2,
+            "confidence": 0.999,
+            "dockRect": {
+              "height": 52,
+              "left": 288,
+              "top": 1007,
+              "width": 904
+            },
+            "element": {
+              "domId": null,
+              "key": "LI|Kiwi — furry, sliced in half, eaten with a teaspoon",
+              "path": "html>body:nth-child(2)>main:nth-child(2)>ul:nth-child(4)>li:nth-child(5)",
+              "rect": {
+                "height": 52,
+                "left": 288,
+                "top": 735,
+                "width": 904
+              },
+              "tag": "LI",
+              "text": "Kiwi — furry, sliced in half, eaten with a teaspoon"
+            },
+            "found": true,
+            "id": "2cKmZ2RMlW1m",
+            "isOrphaned": false,
+            "isResolved": false,
+            "pageKey": "http://127.0.0.1:4271/pages/reorder.html",
+            "panel": {
+              "counts": {
+                "open": 1,
+                "resolved": 0,
+                "unanchored": 0
+              },
+              "listed": true,
+              "section": "open"
+            },
+            "status": "anchored",
+            "threads": 1,
+            "via": "fingerprint-scan"
+          }
+        },
+        {
+          "label": "DOM path across the shuffle",
+          "note": {
+            "placed": "html>body:nth-child(2)>main:nth-child(2)>ul:nth-child(4)>li:nth-child(3)",
+            "shuffled": "html>body:nth-child(2)>main:nth-child(2)>ul:nth-child(4)>li:nth-child(5)",
+            "moved": true
+          },
+          "ok": true,
+          "fails": []
+        },
+        {
+          "label": "trace @ shuffle",
+          "trace": {
+            "accepted": {
+              "confidence": 0.999,
+              "via": "fingerprint-scan"
+            },
+            "attempts": [
+              {
+                "accepted": false,
+                "best": 0.773,
+                "candidates": 1,
+                "selector": "css"
+              },
+              {
+                "accepted": false,
+                "best": 0.773,
+                "candidates": 1,
+                "selector": "nthPath"
+              },
+              {
+                "accepted": true,
+                "best": 0.999,
+                "candidates": 13,
+                "selector": "fingerprint-scan"
+              }
+            ],
+            "totalMs": 0.3999999761581421
+          },
+          "ok": true,
+          "fails": []
+        },
+        {
+          "label": "stored anchor re-resolved after shuffle",
+          "resolve": {
+            "fingerprint": {
+              "attrs": {},
+              "id": null,
+              "stableClasses": ["item"],
+              "tag": "li",
+              "textDigest": "kiwi — furry, sliced in half, eaten with a teaspoon"
+            },
+            "matches": {
+              "@0.62": {
+                "confidence": 0.773,
+                "element": {
+                  "domId": null,
+                  "key": "LI|Apricot — ripens in July, bruises if you look at it",
+                  "path": "html>body:nth-child(2)>main:nth-child(2)>ul:nth-child(4)>li:nth-child(3)",
+                  "rect": {
+                    "height": 52,
+                    "left": 288,
+                    "top": 616,
+                    "width": 904
+                  },
+                  "tag": "LI",
+                  "text": "Apricot — ripens in July, bruises if you look at it"
+                },
+                "via": "css"
+              },
+              "@0.85": {
+                "confidence": 0.999,
+                "element": {
+                  "domId": null,
+                  "key": "LI|Kiwi — furry, sliced in half, eaten with a teaspoon",
+                  "path": "html>body:nth-child(2)>main:nth-child(2)>ul:nth-child(4)>li:nth-child(5)",
+                  "rect": {
+                    "height": 52,
+                    "left": 288,
+                    "top": 735,
+                    "width": 904
+                  },
+                  "tag": "LI",
+                  "text": "Kiwi — furry, sliced in half, eaten with a teaspoon"
+                },
+                "via": "fingerprint-scan"
+              },
+              "@0.9": {
+                "confidence": 0.999,
+                "element": {
+                  "domId": null,
+                  "key": "LI|Kiwi — furry, sliced in half, eaten with a teaspoon",
+                  "path": "html>body:nth-child(2)>main:nth-child(2)>ul:nth-child(4)>li:nth-child(5)",
+                  "rect": {
+                    "height": 52,
+                    "left": 288,
+                    "top": 735,
+                    "width": 904
+                  },
+                  "tag": "LI",
+                  "text": "Kiwi — furry, sliced in half, eaten with a teaspoon"
+                },
+                "via": "fingerprint-scan"
+              }
+            },
+            "mode": "element",
+            "selectors": [
+              {
+                "type": "css",
+                "value": "#list > li:nth-of-type(3)"
+              },
+              {
+                "type": "nthPath",
+                "value": "html > body:nth-child(2) > main:nth-child(2) > ul:nth-child(4) > li:nth-child(3)"
+              }
+            ]
+          },
+          "ok": true,
+          "fails": []
+        },
+        {
+          "label": "perturbation: Sort A→Z",
+          "note": {
+            "selector": "#sort",
+            "how": "cdp-click"
+          },
+          "ok": true,
+          "fails": []
+        },
+        {
+          "label": "after sort",
+          "expect": {
+            "status": "anchored",
+            "same": true,
+            "tracks": true
+          },
+          "fails": [],
+          "ok": true,
+          "probe": {
+            "badge": {
+              "anchorAttr": "anchored",
+              "approximate": false,
+              "borderStyle": "solid",
+              "center": {
+                "x": 1175,
+                "y": 790
+              },
+              "hidden": false,
+              "label": "comment (2)",
+              "marks": [],
+              "opacity": 1,
+              "statusAttr": "open"
+            },
+            "badgeOffset": {
+              "dx": -17,
+              "dy": -5
+            },
+            "comments": 2,
+            "confidence": 0.999,
+            "dockRect": {
+              "height": 52,
+              "left": 288,
+              "top": 1106,
+              "width": 904
+            },
+            "element": {
+              "domId": null,
+              "key": "LI|Kiwi — furry, sliced in half, eaten with a teaspoon",
+              "path": "html>body:nth-child(2)>main:nth-child(2)>ul:nth-child(4)>li:nth-child(6)",
+              "rect": {
+                "height": 52,
+                "left": 288,
+                "top": 795,
+                "width": 904
+              },
+              "tag": "LI",
+              "text": "Kiwi — furry, sliced in half, eaten with a teaspoon"
+            },
+            "found": true,
+            "id": "2cKmZ2RMlW1m",
+            "isOrphaned": false,
+            "isResolved": false,
+            "pageKey": "http://127.0.0.1:4271/pages/reorder.html",
+            "panel": {
+              "counts": {
+                "open": 1,
+                "resolved": 0,
+                "unanchored": 0
+              },
+              "listed": true,
+              "section": "open"
+            },
+            "status": "anchored",
+            "threads": 1,
+            "via": "fingerprint-scan"
+          }
+        },
+        {
+          "label": "perturbation: Move first row down",
+          "note": {
+            "selector": "#up",
+            "how": "cdp-click"
+          },
+          "ok": true,
+          "fails": []
+        },
+        {
+          "label": "after single-row move",
+          "expect": {
+            "status": "anchored",
+            "same": true,
+            "tracks": true
+          },
+          "fails": [],
+          "ok": true,
+          "probe": {
+            "badge": {
+              "anchorAttr": "anchored",
+              "approximate": false,
+              "borderStyle": "solid",
+              "center": {
+                "x": 1175,
+                "y": 790
+              },
+              "hidden": false,
+              "label": "comment (2)",
+              "marks": [],
+              "opacity": 1,
+              "statusAttr": "open"
+            },
+            "badgeOffset": {
+              "dx": -17,
+              "dy": -5
+            },
+            "comments": 2,
+            "confidence": 0.999,
+            "dockRect": {
+              "height": 52,
+              "left": 288,
+              "top": 1128,
+              "width": 904
+            },
+            "element": {
+              "domId": null,
+              "key": "LI|Kiwi — furry, sliced in half, eaten with a teaspoon",
+              "path": "html>body:nth-child(2)>main:nth-child(2)>ul:nth-child(4)>li:nth-child(6)",
+              "rect": {
+                "height": 52,
+                "left": 288,
+                "top": 795,
+                "width": 904
+              },
+              "tag": "LI",
+              "text": "Kiwi — furry, sliced in half, eaten with a teaspoon"
+            },
+            "found": true,
+            "id": "2cKmZ2RMlW1m",
+            "isOrphaned": false,
+            "isResolved": false,
+            "pageKey": "http://127.0.0.1:4271/pages/reorder.html",
+            "panel": {
+              "counts": {
+                "open": 1,
+                "resolved": 0,
+                "unanchored": 0
+              },
+              "listed": true,
+              "section": "open"
+            },
+            "status": "anchored",
+            "threads": 1,
+            "via": "fingerprint-scan"
+          }
+        },
+        {
+          "label": "perturbation: Remove Kiwi",
+          "note": {
+            "selector": "#remove",
+            "how": "cdp-click"
+          },
+          "ok": true,
+          "fails": []
+        },
+        {
+          "label": "after removal",
+          "expect": {
+            "status": "orphaned",
+            "docked": true,
+            "panelSection": "unanchored"
+          },
+          "fails": [],
+          "ok": true,
+          "probe": {
+            "badge": {
+              "anchorAttr": "orphaned",
+              "approximate": false,
+              "borderStyle": "dashed",
+              "center": {
+                "x": 1172,
+                "y": 790
+              },
+              "hidden": false,
+              "label": "comment (2)",
+              "marks": ["orphaned"],
+              "opacity": 0.55,
+              "statusAttr": "open"
+            },
+            "comments": 2,
+            "confidence": 0,
+            "dockRect": {
+              "height": 52,
+              "left": 288,
+              "top": 1128,
+              "width": 904
+            },
+            "element": null,
+            "found": true,
+            "id": "2cKmZ2RMlW1m",
+            "isOrphaned": true,
+            "isResolved": false,
+            "pageKey": "http://127.0.0.1:4271/pages/reorder.html",
+            "panel": {
+              "counts": {
+                "open": 0,
+                "resolved": 0,
+                "unanchored": 1
+              },
+              "listed": true,
+              "section": "unanchored"
+            },
+            "status": "orphaned",
+            "threads": 1,
+            "via": null
+          }
+        },
+        {
+          "label": "stored anchor re-resolved with Kiwi gone",
+          "resolve": {
+            "fingerprint": {
+              "attrs": {},
+              "id": null,
+              "stableClasses": ["item"],
+              "tag": "li",
+              "textDigest": "kiwi — furry, sliced in half, eaten with a teaspoon"
+            },
+            "matches": {
+              "@0.62": {
+                "confidence": 0.759,
+                "element": {
+                  "domId": null,
+                  "key": "LI|Damson — too sharp raw, unbeatable as jam",
+                  "path": "html>body:nth-child(2)>main:nth-child(2)>ul:nth-child(4)>li:nth-child(3)",
+                  "rect": {
+                    "height": 52,
+                    "left": 288,
+                    "top": 616,
+                    "width": 904
+                  },
+                  "tag": "LI",
+                  "text": "Damson — too sharp raw, unbeatable as jam"
+                },
+                "via": "css"
+              },
+              "@0.85": null,
+              "@0.9": null
+            },
+            "mode": "element",
+            "selectors": [
+              {
+                "type": "css",
+                "value": "#list > li:nth-of-type(3)"
+              },
+              {
+                "type": "nthPath",
+                "value": "html > body:nth-child(2) > main:nth-child(2) > ul:nth-child(4) > li:nth-child(3)"
+              }
+            ]
+          },
+          "ok": true,
+          "fails": []
+        },
+        {
+          "label": "store untouched by orphaning",
+          "note": {
+            "equal": true
+          },
+          "ok": true,
+          "fails": []
+        },
+        {
+          "label": "perturbation: Restore all rows",
+          "note": {
+            "selector": "#restore",
+            "how": "cdp-click"
+          },
+          "ok": true,
+          "fails": []
+        },
+        {
+          "label": "after restore",
+          "expect": {
+            "status": "anchored",
+            "same": true,
+            "tracks": true
+          },
+          "fails": [],
+          "ok": true,
+          "probe": {
+            "badge": {
+              "anchorAttr": "anchored",
+              "approximate": false,
+              "borderStyle": "solid",
+              "center": {
+                "x": 1175,
+                "y": 611
+              },
+              "hidden": false,
+              "label": "comment (2)",
+              "marks": [],
+              "opacity": 1,
+              "statusAttr": "open"
+            },
+            "badgeOffset": {
+              "dx": -17,
+              "dy": -5
+            },
+            "comments": 2,
+            "confidence": 0.999,
+            "dockRect": {
+              "height": 52,
+              "left": 288,
+              "top": 949,
+              "width": 904
+            },
+            "element": {
+              "domId": null,
+              "key": "LI|Kiwi — furry, sliced in half, eaten with a teaspoon",
+              "path": "html>body:nth-child(2)>main:nth-child(2)>ul:nth-child(4)>li:nth-child(3)",
+              "rect": {
+                "height": 52,
+                "left": 288,
+                "top": 616,
+                "width": 904
+              },
+              "tag": "LI",
+              "text": "Kiwi — furry, sliced in half, eaten with a teaspoon"
+            },
+            "found": true,
+            "id": "2cKmZ2RMlW1m",
+            "isOrphaned": false,
+            "isResolved": false,
+            "pageKey": "http://127.0.0.1:4271/pages/reorder.html",
+            "panel": {
+              "counts": {
+                "open": 1,
+                "resolved": 0,
+                "unanchored": 0
+              },
+              "listed": true,
+              "section": "open"
+            },
+            "status": "anchored",
+            "threads": 1,
+            "via": "css"
+          }
+        },
+        {
+          "label": "trace @ restore",
+          "trace": {
+            "accepted": {
+              "confidence": 0.999,
+              "via": "css"
+            },
+            "attempts": [
+              {
+                "accepted": true,
+                "best": 0.999,
+                "candidates": 1,
+                "selector": "css"
+              }
+            ],
+            "totalMs": 0.10000002384185792
+          },
+          "ok": true,
+          "fails": []
+        },
+        {
+          "label": "reload after the round trip",
+          "expect": {
+            "status": "anchored",
+            "same": true,
+            "tracks": true
+          },
+          "fails": [],
+          "ok": true,
+          "probe": {
+            "badge": {
+              "anchorAttr": "anchored",
+              "approximate": false,
+              "borderStyle": "solid",
+              "center": {
+                "x": 1175,
+                "y": 611
+              },
+              "hidden": false,
+              "label": "comment (2)",
+              "marks": [],
+              "opacity": 1,
+              "statusAttr": "open"
+            },
+            "badgeOffset": {
+              "dx": -17,
+              "dy": -5
+            },
+            "comments": 2,
+            "confidence": 0.999,
+            "dockRect": {
+              "height": 52,
+              "left": 288,
+              "top": 849,
+              "width": 904
+            },
+            "element": {
+              "domId": null,
+              "key": "LI|Kiwi — furry, sliced in half, eaten with a teaspoon",
+              "path": "html>body:nth-child(2)>main:nth-child(2)>ul:nth-child(4)>li:nth-child(3)",
+              "rect": {
+                "height": 52,
+                "left": 288,
+                "top": 616,
+                "width": 904
+              },
+              "tag": "LI",
+              "text": "Kiwi — furry, sliced in half, eaten with a teaspoon"
+            },
+            "found": true,
+            "id": "2cKmZ2RMlW1m",
+            "isOrphaned": false,
+            "isResolved": false,
+            "pageKey": "http://127.0.0.1:4271/pages/reorder.html",
+            "panel": {
+              "counts": {
+                "open": 1,
+                "resolved": 0,
+                "unanchored": 0
+              },
+              "listed": true,
+              "section": "open"
+            },
+            "status": "anchored",
+            "threads": 1,
+            "via": "css"
+          }
+        }
+      ],
+      "error": null,
+      "ms": 6840
+    }
+  ]
+}

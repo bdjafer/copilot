@@ -408,12 +408,12 @@ describe('thread:delete → cancel', () => {
     await settle()
 
     expect((await built.bridge.copilot.get(runId))?.state).toBe('cancelled')
-    expect(await built.bridge.host.runsForThreads()).toEqual([])
     expect(await built.bridge.host.listAllPending()).toEqual([])
   })
 
-  it('cancels a batch run that covered the deleted thread, via the run index', async () => {
-    // A batch run id is page-prefixed, so `cancelByPrefix('c:{threadId}:')` cannot see it.
+  it('cancels a batch run that covered the deleted thread, found by scanning live runs', async () => {
+    // A batch run id is page-prefixed, so `cancelByPrefix('c:{threadId}:')` cannot see it — the
+    // live-run scan does, because the run itself names every thread it covers.
     const built = await scene()
     const a = await built.domain.createThread(threadInput())
     await settle()
@@ -854,24 +854,41 @@ describe('settings changes reach a live worker', () => {
   })
 })
 
-describe('the run index survives two runs over one thread', () => {
-  it('keeps both rows, and one settling does not clear the other', async () => {
-    const built = await scene()
-    await built.bridge.host.indexRun('b:page:abc', ['t1', 't2'], 'batch')
-    await built.bridge.host.indexRun('c:t1:c9', ['t1'], 'single')
+describe('two live runs over one thread', () => {
+  it('stays busy until both settle, and answers each thread once', async () => {
+    // This is what the deleted `exp-spec:host:run:*` index existed for. The derivation cannot
+    // get it wrong: a thread is busy iff *some* live run names it, and the run store is the
+    // thing that knows which runs are live.
+    const built = await scene({ dispatch: { comment: 'immediate', ask: 'immediate' } })
+    // One slow step per run: `scriptedModel` shares one cursor across every run it serves, so a
+    // single-step script would let runs two and three finish instantly.
+    built.script([
+      { text: 'slow', delayMs: 500 },
+      { text: 'slow', delayMs: 500 },
+      { text: 'slow', delayMs: 500 },
+    ])
+    const a = await built.domain.createThread(threadInput())
+    const b = await built.domain.createThread(threadInput({ body: 'second' }))
+    await settle()
 
-    const rows = await built.bridge.host.runsForThreads()
-    expect(
-      rows
-        .filter((row) => row.threadId === 't1')
-        .map((row) => row.runId)
-        .sort(),
-    ).toEqual(['b:page:abc', 'c:t1:c9'])
+    const batch = await built.channel.page.sendMessage('copilot:sendBatch', {
+      pageKey: PAGE,
+      threadIds: [a.thread.id, b.thread.id],
+    })
+    await settle(2)
 
-    await built.bridge.host.clearRunIndex('c:t1:c9')
-    const left = await built.bridge.host.runsForThreads()
-    // The batch row is still there — it belongs to a run that is still going.
-    expect(left.some((row) => row.threadId === 't1' && row.runId === 'b:page:abc')).toBe(true)
+    // Three live runs over two threads — deduped, not tripled.
+    const busy = await built.channel.page.sendMessage('copilot:busyThreads', undefined)
+    expect(busy.sort()).toEqual([a.thread.id, b.thread.id].sort())
+
+    // One of the two runs covering thread a settles. A durable index needed its settle sweep to
+    // remove exactly its own rows and nobody else's; there is nothing left to get wrong.
+    await built.bridge.copilot.cancel(singleRunId(a.thread.id, a.comment.id), 'test')
+    await settle()
+    expect(await built.channel.page.sendMessage('copilot:busyThreads', undefined)).toContain(
+      a.thread.id,
+    )
+    expect((await built.bridge.copilot.get(batch.runId!))?.state).not.toBe('cancelled')
   })
 })
 

@@ -97,20 +97,24 @@ export const hostChromeStyles = `
 export interface HostChromeOptions {
   onSend(): void
   onDismiss?(): void
-  labels?: Partial<{ send: string; dismiss: string; sending: string }>
   /** Injected so the toast timer is assertable without real timers. */
   setTimeout?(handler: () => void, ms: number): number
   clearTimeout?(handle: number): void
 }
 
-const DEFAULT_LABELS = { send: 'Send to copilot', dismiss: 'Dismiss', sending: 'Sending…' }
+/**
+ * Constants, not an option. This overlay is bridge-owned chrome with exactly one caller and no
+ * localization story; a `labels` override would be a second place for the pill's wording to live
+ * and a second thing to keep in step with `defaultLabels` in `comment-ui`.
+ */
+const LABELS = { send: 'Send to copilot', dismiss: 'Dismiss', sending: 'Sending…' }
 
 /** Toast dwell time. Long enough to read two sentences, short enough not to sit on the page. */
 export const TOAST_MS = 8000
 
 export function mountHostChrome(container: ParentNode & Node, options: HostChromeOptions) {
-  const doc = (container.ownerDocument ?? (container as unknown as Document)) as Document
-  const labels = { ...DEFAULT_LABELS, ...options.labels }
+  // A ParentNode is either a Document (ownerDocument is null, per DOM) or a node inside one.
+  const doc = container.ownerDocument ?? (container as Document)
   const setTimer = options.setTimeout ?? ((handler, ms) => setTimeout(handler, ms) as never)
   const clearTimer = options.clearTimeout ?? ((handle: number) => clearTimeout(handle))
 
@@ -132,7 +136,7 @@ export function mountHostChrome(container: ParentNode & Node, options: HostChrom
   const send = doc.createElement('button')
   send.type = 'button'
   send.className = 'cc-pill-send'
-  send.textContent = labels.send
+  send.textContent = LABELS.send
   send.addEventListener('click', () => {
     if (send.disabled) return
     options.onSend()
@@ -141,8 +145,8 @@ export function mountHostChrome(container: ParentNode & Node, options: HostChrom
   const dismiss = doc.createElement('button')
   dismiss.type = 'button'
   dismiss.className = 'cc-pill-dismiss'
-  dismiss.textContent = labels.dismiss
-  dismiss.setAttribute('aria-label', labels.dismiss)
+  dismiss.textContent = LABELS.dismiss
+  dismiss.setAttribute('aria-label', LABELS.dismiss)
   dismiss.addEventListener('click', () => options.onDismiss?.())
 
   pill.append(count, send, dismiss)
@@ -171,7 +175,7 @@ export function mountHostChrome(container: ParentNode & Node, options: HostChrom
     },
     setSending(sending: boolean): void {
       send.disabled = sending
-      send.textContent = sending ? labels.sending : labels.send
+      send.textContent = sending ? LABELS.sending : LABELS.send
     },
     toast(text: string, tone: 'info' | 'warn' = 'info'): void {
       if (toastTimer !== undefined) clearTimer(toastTimer)

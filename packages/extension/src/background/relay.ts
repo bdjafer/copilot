@@ -46,8 +46,6 @@ export interface ProjectedError {
   toolName?: string
 }
 
-export type RelayEvent = { type: string; runId: string | null; seq: number; instanceId: string }
-
 const projectError = (error: unknown): ProjectedError | null =>
   CopilotError.is(error) ? (error.toJSON() as ProjectedError) : null
 

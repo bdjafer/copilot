@@ -7,7 +7,7 @@
 import { describe, expect, it } from 'vitest'
 
 import { createHostState } from '../src/host-state.ts'
-import { failedKey, pendingKey, runIndexKey } from '../src/keys.ts'
+import { failedKey, pendingKey } from '../src/keys.ts'
 import { createStorageKv } from '../src/kv.ts'
 import { createFakeStorage } from './support/fake-chrome.ts'
 
@@ -98,83 +98,6 @@ describe('pending set', () => {
   })
 })
 
-describe('thread → run index', () => {
-  it('records one entry per thread a batch run covers', async () => {
-    const { host } = scene()
-    await host.indexRun('b:page:abc', ['t1', 't2', 't3'], 'batch')
-    const rows = await host.runsForThreads()
-    expect(rows.map((row) => row.threadId).sort()).toEqual(['t1', 't2', 't3'])
-    expect(rows.every((row) => row.runId === 'b:page:abc' && row.mode === 'batch')).toBe(true)
-  })
-
-  it('is what makes a batch run findable — its id is not thread-prefixed', async () => {
-    const { host } = scene()
-    await host.indexRun('b:page:abc', ['t7'], 'batch')
-    const rows = await host.runsForThreads()
-    // `cancelByPrefix('c:t7:')` cannot see this; the index can.
-    expect(rows[0]!.runId.startsWith('c:t7:')).toBe(false)
-    expect(rows[0]!.threadId).toBe('t7')
-  })
-
-  it('indexRun with no threads writes nothing', async () => {
-    const { host, storage } = scene()
-    await host.indexRun('r', [], 'single')
-    expect(Object.keys(storage.dump())).toEqual([])
-  })
-
-  it('clearRunIndex removes every thread of one run and leaves others', async () => {
-    const { host } = scene()
-    await host.indexRun('r1', ['t1', 't2'], 'batch')
-    await host.indexRun('r2', ['t3'], 'single')
-    await host.clearRunIndex('r1')
-    expect((await host.runsForThreads()).map((row) => row.threadId)).toEqual(['t3'])
-  })
-
-  it('defaults a missing mode to single rather than dropping the row', async () => {
-    const { host, kv } = scene()
-    await kv.set({ [runIndexKey('t1', 'r1')]: { runId: 'r1' } })
-    expect(await host.runsForThreads()).toEqual([{ threadId: 't1', runId: 'r1', mode: 'single' }])
-  })
-
-  it('falls back to the key when the value lost its runId', async () => {
-    const { host, kv } = scene()
-    await kv.set({ [runIndexKey('t1', 'r1')]: { mode: 'batch' } })
-    // The key is the authority on the pair, so a value with no runId still yields the row it
-    // was written under — what must never happen is losing a live run from the index.
-    expect(await host.runsForThreads()).toEqual([{ threadId: 't1', runId: 'r1', mode: 'batch' }])
-  })
-})
-
-describe('two runs over one thread', () => {
-  it('keeps a row per run, so neither can erase the other', async () => {
-    // One slot per thread lost the batch row the moment a human reply triggered a single run —
-    // and the single run's settle then cleared an index row for a batch that was still live.
-    const { host } = scene()
-    await host.indexRun('b:page:abc', ['t1', 't2'], 'batch')
-    await host.indexRun('c:t1:c9', ['t1'], 'single')
-    const rows = (await host.runsForThreads()).filter((row) => row.threadId === 't1')
-    expect(rows.map((row) => row.runId).sort()).toEqual(['b:page:abc', 'c:t1:c9'])
-    expect(rows.find((row) => row.runId === 'b:page:abc')?.mode).toBe('batch')
-  })
-
-  it('clearRunIndex removes one run s rows and leaves the other run s', async () => {
-    const { host } = scene()
-    await host.indexRun('b:page:abc', ['t1'], 'batch')
-    await host.indexRun('c:t1:c9', ['t1'], 'single')
-    await host.clearRunIndex('c:t1:c9')
-    expect((await host.runsForThreads()).map((row) => row.runId)).toEqual(['b:page:abc'])
-  })
-
-  it('clearRunIndexForThread drops every run covering that thread', async () => {
-    const { host } = scene()
-    await host.indexRun('b:page:abc', ['t1'], 'batch')
-    await host.indexRun('c:t1:c9', ['t1'], 'single')
-    await host.indexRun('c:t2:c1', ['t2'], 'single')
-    await host.clearRunIndexForThread('t1')
-    expect((await host.runsForThreads()).map((row) => row.threadId)).toEqual(['t2'])
-  })
-})
-
 describe('failed', () => {
   it('survives a worker death, which is the whole reason it is not a chip flag', async () => {
     // The chip map is rebuilt from durable state on every refresh: an in-memory failure is
@@ -223,8 +146,6 @@ describe('forgetThread', () => {
   it('drops everything the range holds about one thread', async () => {
     const { host, storage } = scene()
     await host.markPending({ threadId: 't1', pageKey: PAGE, kind: 'comment' })
-    await host.indexRun('r1', ['t1'], 'single')
-    await host.indexRun('b:page:x', ['t1'], 'batch')
     await host.markUnread('t1')
     await host.markFailed('t1', 'max_attempts')
     await host.markPending({ threadId: 't2', pageKey: PAGE, kind: 'comment' })

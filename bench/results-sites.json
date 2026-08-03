@@ -1,0 +1,39 @@
+{
+  "ranAt": "2026-08-03T01:15:05.108Z",
+  "results": [
+    {
+      "site": "wikipedia",
+      "url": "https://en.wikipedia.org/wiki/Anchor",
+      "steps": {
+        "csp": {
+          "inlineScriptRuns": true
+        },
+        "boot": {
+          "pageKey": "https://en.wikipedia.org/wiki/Anchor",
+          "threads": 0
+        }
+      },
+      "error": "agent-browser eval --stdin failed: ✗ Evaluation error: TypeError: Cannot read properties of undefined (reading 'parentElement')\n    at <anonymous>:147:27\n    at <anonymous>:150:3",
+      "cleanup": {
+        "removed": 0
+      }
+    },
+    {
+      "site": "mdn",
+      "url": "https://developer.mozilla.org/en-US/docs/Web/API/MutationObserver",
+      "steps": {
+        "csp": {
+          "inlineScriptRuns": false
+        },
+        "boot": {
+          "pageKey": "https://developer.mozilla.org/en-US/docs/Web/API/MutationObserver",
+          "threads": 0
+        }
+      },
+      "error": "agent-browser eval --stdin failed: ✗ Evaluation error: TypeError: Cannot read properties of null (reading 'querySelectorAll')\n    at <anonymous>:146:26\n    at <anonymous>:151:3",
+      "cleanup": {
+        "removed": 0
+      }
+    }
+  ]
+}

@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from 'vitest'
 
-import { createStorageAreaKv, createStorageKv, KV_SATISFIES_BOTH } from '../src/kv.ts'
+import { createStorageKv, KV_SATISFIES_BOTH } from '../src/kv.ts'
 import { createFakeStorage } from './support/fake-chrome.ts'
 
 describe('createStorageKv', () => {
@@ -72,7 +72,7 @@ describe('createStorageKv', () => {
   it('watch ignores changes in another storage area', async () => {
     // A `sync` write must not wake every tab's thread re-read.
     const storage = createFakeStorage()
-    const kv = createStorageKv(storage, { areaName: 'local' })
+    const kv = createStorageKv(storage)
     const seen: string[][] = []
     kv.watch!((keys) => seen.push(keys))
     ;(storage.onChanged as unknown as { emit(c: object, a: string): void }).emit(
@@ -89,13 +89,6 @@ describe('createStorageKv', () => {
     kv.watch!((keys) => seen.push(keys))
     await kv.remove(['never-existed'])
     expect(seen).toEqual([])
-  })
-
-  it('createStorageAreaKv is the area-level form of the same adapter', async () => {
-    const storage = createFakeStorage()
-    const kv = createStorageAreaKv(storage.local, storage.onChanged, { areaName: 'local' })
-    await kv.set({ k: 'v' })
-    expect(await kv.get(['k'])).toEqual({ k: 'v' })
   })
 
   it('one adapter satisfies both packages KeyValueAdapter declarations', () => {

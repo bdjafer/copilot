@@ -1026,9 +1026,13 @@ export function createTestCopilot<
     to be killed anyway. This is the direct consequence of "runs are data, not promises".
 * **Tool failures go back to the model.** A throwing tool becomes a tool-result message
   describing the failure, surfaces as `tool:result` with `ok: false` and a typed `ToolCall`,
-  and the loop continues. This is not configurable: it is what lets
-  `get_thread_element_html` fail on a closed tab and the model fall back to the stored capture
-  in the same step. A tool that exhausts `timeoutMs` produces `tool_timeout` the same way.
+  and the loop continues. This is not configurable: a run whose one unreachable tool killed it
+  is strictly worse than a run that learned the tool is unreachable and carried on with what it
+  had. A tool that exhausts `timeoutMs` produces `tool_timeout` the same way. (A host may of
+  course degrade *inside* the tool instead — §6's `get_thread_element_html` catches its own
+  transport failure and answers with the stored capture, so the model gets a labelled fallback
+  rather than an error to recover from. That is a host choice this policy makes possible, not a
+  second error mode in the runtime.)
 * **Input validation happens on both ends.** `remoteTool` validates against the schema before
   transport; `serveTools` validates again on arrival. A malformed model call never reaches the
   content script. Validation failure ⇒ `tool_input_invalid`, fed back to the model. **The
@@ -1174,25 +1178,60 @@ import {
 import { createAnthropic } from '@ai-sdk/anthropic'
 import { onMessage, sendMessage } from '@webext-core/messaging'
 import { z } from 'zod'
-import { kv, tabForPageKey } from './kv'
+import { kv } from './kv'
+import { createTabRouter } from './tabs'
 
 const store = createKeyValueStore(kv, { namespace: 'exp-spec' })
 const comments = createDomain(store) // §3.5 rules, no DOM, works with the tab closed
 
-type Ctx = { threadId: string; kind: string; pageKey: string; mode: 'single' | 'batch' }
+// `threadIds` is set by batch runs only, and it is what every fan-out below iterates: a batch
+// run speaks for N threads, a single run for its own. `context.threadIds ?? [context.threadId]`
+// is the one expression that says so, and it lives in exactly one helper (`threadsOf`).
+type Ctx = {
+  threadId: string
+  kind: string
+  pageKey: string
+  mode: 'single' | 'batch'
+  threadIds?: string[]
+}
+const threadsOf = (c: Ctx): readonly string[] => c.threadIds ?? [c.threadId]
+
+/** What `get_thread_element_html` answers with. `source` is the part the model must read. */
+type ThreadElementHtml = { source: 'live' | 'capture'; html: string | null; note?: string }
+
 const { defineTool, remoteTool } = toolsFor<Ctx>()
+
+// pageKey → **every** tab showing it, recomputed from `tabs.query` on every call. Plural, and
+// not a cached map: a map in worker memory dies with the worker every 30 s, and a run that
+// outlives its worker would then find "no open tab" for a page that is right there. This is the
+// bridge's ONLY tab lookup — a `sendMessage` from the worker with no tab target reaches extension
+// pages and never a content script, so making the fan-out form the one available primitive is
+// what stops a tab-less send from being re-introduced.
+const tabs = createTabRouter(chrome.tabs) // tabsForPageKey(pageKey): Promise<number[]>
 
 // The transport routes by the RUN's page, not by whatever tab happens to be focused: a
 // background run outlives tab focus and tab existence (PLAN §1 step 4). No tab ⇒ a real
 // tool failure, which the model can react to, rather than `null`, which it cannot
-// distinguish from "the element is gone".
+// distinguish from "the element is gone". First tab wins: a tool answers about *the* page, and
+// two tabs on the same URL are the same document as far as the anchor is concerned. (Page
+// *notifications* take all of them — see the fan-out below.)
 const transport: ToolTransport<Ctx> = {
   call: async (name, input, { signal, context }) => {
-    const tabId = await tabForPageKey(context.pageKey)
-    if (tabId == null) throw new CopilotError('tool_failed', `no open tab for ${context.pageKey}`)
+    const [tabId] = await tabs.tabsForPageKey(context.pageKey)
+    if (tabId === undefined) {
+      throw new CopilotError('tool_failed', `no open tab for ${context.pageKey}`, { toolName: name })
+    }
     return sendMessage(`tool:${name}`, input as never, tabId, { signal })
   },
 }
+
+// Best-effort SW → page fan-out. Every notification below goes to EVERY tab on the run's page:
+// the same document open in two tabs is two content scripts, each with its own chip map, and a
+// notification that reaches only one of them is a bug in the other.
+const toPage = (pageKey: string, send: (tabId: number) => Promise<unknown>) =>
+  tabs.tabsForPageKey(pageKey)
+    .then((ids) => Promise.all(ids.map((tabId) => send(tabId).catch(() => undefined))))
+    .catch(() => [])
 
 // Listeners first, provider later: MV3 only wakes a terminated worker for listeners
 // registered in the FIRST turn of initial evaluation. A top-level `await getKey()` above
@@ -1214,8 +1253,34 @@ const copilot = createCopilot({
   tools: [
     remoteTool({ name: 'get_page_context', description: 'URL, title, heading outline, selection',
                  inputSchema: z.object({}) }, transport),
-    remoteTool({ name: 'get_thread_element_html', description: 'Live HTML of the anchored element',
-                 inputSchema: z.object({ threadId: z.string() }) }, transport),
+    // NOT a bare `remoteTool`. PLAN §5's tool table promises a fallback to the stored capture,
+    // so the SW half calls the transport itself and answers `{ source, html, note? }` — a
+    // discriminated answer the model must read, instead of a `string | null` in which "the
+    // element is gone" and "no tab has this page open" are the same value. `source` is the part
+    // that carries the meaning; `note` is prose for the model, never parsed.
+    defineTool({ name: 'get_thread_element_html',
+                 description: 'HTML of the element a thread is anchored to. Returns ' +
+                   '{ source, html }: "live" is the element as it is on the page right now, ' +
+                   '"capture" is the snapshot taken when the thread was created, returned when ' +
+                   'the element is gone or no tab has that page open. Never guess which one you ' +
+                   'got — read `source`.',
+                 inputSchema: z.object({ threadId: z.string() }),
+                 execute: async ({ threadId }, ctx): Promise<ThreadElementHtml> => {
+                   let live: unknown = null
+                   try {
+                     live = await transport.call('get_thread_element_html', { threadId }, ctx)
+                   } catch (error) {
+                     // A cancelled run is not a page that failed to answer: propagate it, or a
+                     // cancel silently becomes a successful capture read.
+                     if (CopilotError.is(error, 'aborted')) throw error
+                   }
+                   if (typeof live === 'string') return { source: 'live', html: live }
+                   const record = await comments.get(threadId)
+                   if (!record) return { source: 'capture', html: null, note: 'thread not found' }
+                   return { source: 'capture', html: record.thread.capture.outerHTML,
+                            note: 'the live element is gone or the page is not open; this is the '
+                              + 'capture taken when the thread was created' }
+                 } }),
     remoteTool({ name: 'show_message', description: 'Show a message on the page',
                  inputSchema: z.object({ text: z.string() }) }, transport),
     defineTool({ name: 'read_thread', description: 'Full thread with comments',
@@ -1272,7 +1337,23 @@ export const cancelRunsForThread = (threadId: string) =>
   copilot.cancelByPrefix(runPrefixFor(threadId), 'thread deleted')
 
 observeStore(store, async ({ type, payload }) => {
-  if (type === 'thread:delete') await cancelRunsForThread(payload.thread.id)
+  if (type !== 'thread:delete') return
+  const threadId = payload.thread.id
+  // A batch run's id is page-prefixed, so the prefix cancel above cannot see it. Scanning the
+  // LIVE RUNS finds it — and each one carries the threads it covers, so nothing else has to be
+  // stored to make this answerable. (A durable thread→run index used to; it was a second copy
+  // of a fact the run store already keeps, and it could only ever disagree.)
+  const batches = (await copilot.list({ state: ['queued', 'processing'] }))
+    .filter((r) => r.context.mode === 'batch' && threadsOf(r.context).includes(threadId))
+  await cancelRunsForThread(threadId)
+  for (const run of batches) {
+    // A batch run owes replies to every thread it covers; cancelling it because ONE was deleted
+    // throws away the other N−1 answers, and `reply_to_thread` already returns 'thread deleted'
+    // for the gone one. Cancel only when nothing it could still reply to is left.
+    const covered = threadsOf(run.context).filter((id) => id !== threadId)
+    const survivors = await Promise.all(covered.map((id) => comments.get(id)))
+    if (survivors.every((record) => record === null)) await copilot.cancel(run.id, 'thread deleted')
+  }
 }, { cursor: createKeyValueCursor(kv, { namespace: 'exp-spec:host', id: 'cancel' }) })
 
 // ── run:done → thread. Only SINGLE runs write a comment: a batch run's output is a summary
@@ -1287,23 +1368,42 @@ copilot.on('run:done', async ({ runId, run, output }) => {
 
 // ── a dead run must be visible. Three worker deaths terminate a run as `max_attempts`;
 // without this the user sees a comment with no reply, no error, and a cleared chip.
-copilot.on('run:error', async ({ run, error, willRetry }) => {
+// EVERY thread of the run, exactly like run:queued and run:settled: notifying `threadIds[0]`
+// alone left the other eleven threads of a dead batch with a cleared chip and no failure state.
+copilot.on('run:error', ({ run, error, willRetry }) => {
   if (willRetry) return
-  await sendMessage('copilot:failed', { threadId: run.context.threadId, code: error.code })
-    .catch(() => {})
+  for (const threadId of threadsOf(run.context)) {
+    void toPage(run.context.pageKey, (tabId) =>
+      sendMessage('copilot:failed', { threadId, code: error.code }, tabId))
+  }
 })
 
-// ── one event to clear the chip, whatever happened.
-copilot.on('run:settled', ({ run }) =>
-  sendMessage('copilot:busy', { threadId: run.context.threadId, busy: false }).catch(() => {}))
-copilot.on('run:queued', ({ run }) =>
-  sendMessage('copilot:busy', { threadId: run.context.threadId, busy: true }).catch(() => {}))
+// ── one event to clear the chip, whatever happened. Nothing durable to sweep here: a run
+// leaving `queued`/`processing` IS the sweep (see `copilot:busyThreads` below).
+copilot.on('run:settled', ({ run }) => {
+  for (const threadId of threadsOf(run.context)) {
+    void toPage(run.context.pageKey, (tabId) =>
+      sendMessage('copilot:busy', { threadId, busy: false }, tabId))
+  }
+})
+copilot.on('run:queued', ({ run }) => {
+  for (const threadId of threadsOf(run.context)) {
+    void toPage(run.context.pageKey, (tabId) =>
+      sendMessage('copilot:busy', { threadId, busy: true }, tabId))
+  }
+})
 
 // ── level-triggered chip recovery. run:queued/run:settled are edges emitted by ONE instance;
 // after a worker death a content script has no way to ask "who is busy?" without this.
+//
+// The run store is the whole answer, and there is **no side index** to consult: a run in
+// `queued`/`processing` is the definition of busy, and it names the threads it speaks for. No
+// `idPrefix` either — that filter silently excluded every page-prefixed batch run, which is
+// exactly the case a side index was once introduced to patch. Deduped, because two live runs
+// (a batch review plus a single run from a human reply) may cover the same thread.
 onMessage('copilot:busyThreads', async () => {
-  const live = await copilot.list({ state: ['queued', 'processing'], idPrefix: 'c:' })
-  return live.map((r) => r.context.threadId)
+  const live = await copilot.list({ state: ['queued', 'processing'] })
+  return [...new Set(live.flatMap((r) => threadsOf(r.context)))]
 })
 
 // ── MV3 host duties: three lines each, because the runtime says when.
@@ -1357,6 +1457,9 @@ const served = serveTools([
                execute: () => ({ url: location.href, title: document.title,
                                  headings: [...document.querySelectorAll('h1,h2,h3')].map((h) => h.textContent?.trim()),
                                  selection: getSelection()?.toString() ?? null }) }),
+  // The PAGE half answers `string | null` — the live element, or `null` for "orphaned",
+  // precisely. It is the SW half above that turns that (and an unreachable page) into the
+  // `{ source, html, note? }` the model sees; this end never knows about the capture.
   defineTool({ name: 'get_thread_element_html', description: '…',
                inputSchema: z.object({ threadId: z.string() }),
                execute: ({ threadId }) => {
@@ -1390,7 +1493,9 @@ copilot.on('run:step', ({ runId, step, calls }) => {
         console.debug(runId, step, call.input.text) // call.input.text is string
         break
       case 'get_thread_element_html':
-        if (!call.ok && CopilotError.is(call.error, 'tool_timeout')) degradeToCapture()
+        // `call.output` is `ThreadElementHtml` — the tool already degraded, so what is worth
+        // observing is HOW it answered, not whether it threw.
+        if (call.ok && call.output.source === 'capture') metrics.count('served_from_capture')
         break
       case 'reply_to_thread':
       case 'get_page_context':
@@ -1530,6 +1635,18 @@ they are recorded here so a reader never has to reconstruct why the locked text 
 | 31 | **D6 — run-store leases expire on the host clock (`Date.now()`); `createMemoryRunStore()` / `createKeyValueRunStore()` take no clock, by design.** | §2.7 | A lease coordinates *processes*, and every process reads the wall clock. `CopilotOptions.now` is an instance-local seam for heartbeats, staleness and event timestamps; letting it move leases would let a test clock take a lease a live offscreen document still holds. A host that wants otherwise writes its own adapter — which is what `claim` being optional is for. |
 | 32 | **D7 — `lazyModel` memoizes success only; a rejected factory is retried on the next attempt.** | §2.1 | "The factory is memoized" and "a rejection surfaces as `provider_error` on that attempt" only cohere under this reading, and it is the MV3 case: the first wake can precede the API key being stored, and a cached rejection would poison every run for the rest of the worker's life. |
 | 33 | **D8 — the build emits `.d.ts` (`dist/types/`), and `publishConfig.exports` must name files the build produces** — in this package and in `comment-core`. | §1, §9 | A `types` condition pointing at a file no build step writes is invisible in the workspace (where `exports` resolves to `src`) and resolves to `any` for every published consumer. `comment-core` already emits declarations; this package advertised them without producing them. |
+
+### 8.2 Wave-2 bridge rulings (D9–D11)
+
+Wave 2 built the §6 bridge for real. Three points where the listing above described something the
+extension does not (and should not) do. Nothing in §2 moved: all three are host-side, and §6 is
+now the code that ships.
+
+| # | Ruled | Where it lands | Why |
+|---|---|---|---|
+| 34 | **D9 — the bridge's one tab lookup is `TabRouter.tabsForPageKey(pageKey): Promise<number[]>`, plural**, recomputed from `tabs.query` per call; tool calls take the first tab, page notifications fan out to all of them. The singular `tabForPageKey` is gone. | §6 (transport, `toPage`, every `copilot.on` notifier) | Two facts the singular form cannot express. (a) The same document open in two tabs is two content scripts with two chip maps; a notification delivered to one is a bug in the other. (b) `sendMessage(type, data)` with no tab argument is `chrome.runtime.sendMessage`, which reaches extension pages and **never** a content script — so a tab-less notify rejects with `lastError`, is swallowed by its own `.catch`, and silently kills the chip, the pill, the failure state and every toast for the whole session. Making the plural, tab-targeting form the *only* available primitive is what keeps that from being re-introduced. Not cached, either: a map in worker memory dies every 30 s, and a run that outlived its worker would then find "no open tab" for a page that is right there. |
+| 35 | **D10 — `get_thread_element_html` is a SW-local `defineTool` that calls the transport itself and answers `{ source: 'live' \| 'capture'; html: string \| null; note?: string }`**, falling back to `thread.capture.outerHTML`; `aborted` propagates untouched. The page half still answers `string \| null`. | §6 (both halves), §3.4, §7.1 | PLAN §5's tool table promises the capture fallback, and a bare `remoteTool` cannot keep it: as a plain `string \| null`, "the element is gone" (orphaned thread — a real, useful answer) and "no tab has this page open" (transport failure) collapse into the same `null`, and the model has no way to tell what it is looking at. The wrapper makes the closed-tab case a *degraded answer* instead of an error the model must recover from, and `source` is what stops it from reading a stale capture as the live DOM. `aborted` is the one failure that must not become a successful capture read, or a cancel would silently produce output. |
+| 36 | **D11 — there is no thread → run index.** "Which threads are busy?" and "which batch run covers this thread?" are both projections of `copilot.list({ state: ['queued', 'processing'] })` over `run.context.threadIds ?? [run.context.threadId]`, deduped. The `exp-spec:host:run:*` range and its `indexRun` / `runsForThreads` / `clearRunIndex` / `clearRunIndexForThread` accessors are deleted. | §6 (`copilot:busyThreads`, the `thread:delete` observer), SPEC-comment-core §6 key table | The index existed because a batch run's id is page-prefixed, so `cancelByPrefix('c:{threadId}:')` cannot find it — but the run store already records, durably and in the same `chrome.storage`, both which runs are live and which threads each one speaks for. A mirror of a durable fact is not redundancy, it is a second truth with two ways to be wrong: stale, when a settle's sweep lost the race with a worker death, and missing, when a trigger's write did. It also had a failure mode of its own — one slot per thread erased a live run whenever a second covered the same thread — which the derivation cannot have, because it reads the runs themselves. The `idPrefix: 'c:'` filter in the old §6 listing was the same bug one level up: it excluded exactly the batch runs the index was added to find. |
 
 ---
 

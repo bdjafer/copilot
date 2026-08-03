@@ -18,9 +18,14 @@ import type { KeyValueAdapter } from '@astrale-os/comment-core/headless'
 
 import type { StorageAreaLike, StorageChangedEvent, StorageLike } from './platform.ts'
 
+/**
+ * The one area this adapter uses. Not an option: `createStorageKv` reads `storage.local` and
+ * nothing else, so an `areaName` that could disagree with the area actually being read is a way
+ * to build an adapter whose `watch` never fires — with no second area to make it worth having.
+ */
+const AREA_NAME = 'local'
+
 export interface StorageKvOptions {
-  /** Which `chrome.storage` area the `onChanged` listener filters on. Default `'local'`. */
-  areaName?: string
   /**
    * Called once if `getKeys()` is missing (Chrome < 130 / Firefox < 136). The adapter then
    * falls back to `get(null)`, which deserializes the whole area — see `keys()`.
@@ -40,16 +45,8 @@ function compact(raw: Record<string, unknown>): Record<string, unknown> {
 }
 
 export function createStorageKv(storage: StorageLike, options?: StorageKvOptions): KeyValueAdapter {
-  return createStorageAreaKv(storage.local, storage.onChanged, options)
-}
-
-/** The area-level form, so a test (or a future `session`-area cache) can name the area. */
-export function createStorageAreaKv(
-  area: StorageAreaLike,
-  onChanged: StorageChangedEvent,
-  options?: StorageKvOptions,
-): KeyValueAdapter {
-  const areaName = options?.areaName ?? 'local'
+  const area: StorageAreaLike = storage.local
+  const onChanged: StorageChangedEvent = storage.onChanged
   let warnedNoGetKeys = false
 
   return {
@@ -88,7 +85,7 @@ export function createStorageAreaKv(
 
     watch(cb) {
       const listener = (changes: Record<string, unknown>, changedArea: string): void => {
-        if (changedArea !== areaName) return
+        if (changedArea !== AREA_NAME) return
         cb(Object.keys(changes))
       }
       onChanged.addListener(listener)

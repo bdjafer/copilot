@@ -2,20 +2,22 @@
  * The `exp-spec:host:*` range of SPEC-comment-core §6 — the bridge's own durable side map,
  * keyed by threadId, holding what `Thread` deliberately has no field for.
  *
- * Four collections, all per-record (never one mutable set object):
+ * Three collections, all per-record (never one mutable set object):
  *
  * * **pending set** — PLAN §5's `manual` dispatch policy. Threads accumulate here while you are
  *   still forming thoughts; the pill sends them as one batch. In-worker memory loses this
  *   silently after 30 s of idle, which is the one piece of host state whose loss is
  *   user-visible.
- * * **thread → run index** — a *batch* run's id is page-prefixed, so `cancelByPrefix('c:{id}:')`
- *   cannot find it and a content script cannot ask "is my thread busy?" from the run id alone.
- *   Keyed on (thread, run), because one thread can be covered by two live runs at once.
  * * **unread** — a copilot reply written while the tab was closed. Cleared when the page shows
  *   the thread.
  * * **failed** — the last terminal failure per thread. Durable for the same reason `unread` is:
  *   the chip map is rebuilt from durable state on every refresh and every page load, so an
  *   in-memory-only failure is erased by the next SPA navigation.
+ *
+ * There is deliberately **no thread → run index**. One used to live here, to make a
+ * page-prefixed batch run findable from a thread id; every question it answered is a projection
+ * of `copilot.list({ state: ['queued', 'processing'] })` over `run.context`, which is the same
+ * durable storage without the second write path that could disagree with it.
  *
  * DOM-free and `chrome`-free: a `KeyValueAdapter` is the whole dependency.
  */
@@ -26,13 +28,9 @@ import {
   FAILED_PREFIX,
   failedKey,
   idFromKey,
-  parseRunIndexKey,
   pendingKey,
   pendingPagePrefix,
   PENDING_PREFIX,
-  runIndexKey,
-  RUN_INDEX_PREFIX,
-  runIndexThreadPrefix,
   unreadKey,
   UNREAD_PREFIX,
 } from './keys.ts'
@@ -107,59 +105,6 @@ export function createHostState(kv: KeyValueAdapter, now: () => Date = () => new
       await kv.remove(entries.map((entry) => pendingKey(entry.pageKey, entry.threadId)))
     },
 
-    /* ------------------------------------------------------- run index */
-
-    /**
-     * Written for every thread a run covers — one for a single run, N for a batch — so
-     * `copilot:busyThreads` is answerable for both from durable state alone.
-     *
-     * The key carries the run id too, so a second run over the same thread adds a row instead
-     * of overwriting one: a batch review and a single run triggered by a human reply are both
-     * live, and both have to stay cancellable.
-     */
-    async indexRun(runId: string, threadIds: readonly string[], mode: string): Promise<void> {
-      if (threadIds.length === 0) return
-      const at = now().toISOString()
-      const entries: Record<string, unknown> = {}
-      for (const threadId of threadIds) entries[runIndexKey(threadId, runId)] = { runId, mode, at }
-      await kv.set(entries)
-    },
-
-    async runsForThreads(): Promise<Array<{ threadId: string; runId: string; mode: string }>> {
-      const keys = await kv.keys(RUN_INDEX_PREFIX)
-      if (keys.length === 0) return []
-      const values = await kv.get(keys)
-      const out: Array<{ threadId: string; runId: string; mode: string }> = []
-      for (const key of keys) {
-        const parsed = parseRunIndexKey(key)
-        if (!parsed) continue
-        const value = values[key] as { runId?: unknown; mode?: unknown } | undefined
-        // The key is the authority on the pair; the value only carries the mode. A row whose
-        // stored runId disagrees with the key is corrupt, not ambiguous.
-        if (value === undefined) continue
-        out.push({
-          threadId: parsed.threadId,
-          runId: typeof value.runId === 'string' ? value.runId : parsed.runId,
-          mode: typeof value.mode === 'string' ? value.mode : 'single',
-        })
-      }
-      return out
-    },
-
-    async clearRunIndex(runId: string): Promise<void> {
-      const rows = await this.runsForThreads()
-      const doomed = rows
-        .filter((row) => row.runId === runId)
-        .map((row) => runIndexKey(row.threadId, runId))
-      if (doomed.length > 0) await kv.remove(doomed)
-    },
-
-    /** Every run row for one thread — however many runs currently cover it. */
-    async clearRunIndexForThread(threadId: string): Promise<void> {
-      const keys = await kv.keys(runIndexThreadPrefix(threadId))
-      if (keys.length > 0) await kv.remove(keys)
-    },
-
     /* ---------------------------------------------------------- unread */
 
     async markUnread(threadId: string): Promise<void> {
@@ -205,7 +150,6 @@ export function createHostState(kv: KeyValueAdapter, now: () => Date = () => new
     /** Everything this range holds about one thread, dropped in one call on `thread:delete`. */
     async forgetThread(threadId: string): Promise<void> {
       await this.dropPendingThread(threadId)
-      await this.clearRunIndexForThread(threadId)
       await kv.remove([unreadKey(threadId), failedKey(threadId)])
     },
   }

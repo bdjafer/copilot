@@ -33,7 +33,7 @@ export interface ContentToolDeps {
   getSelection?: () => string | null
 }
 
-export function buildContentTools(deps: ContentToolDeps) {
+export function createToolServer(deps: ContentToolDeps) {
   const { engine, document: doc, toast } = deps
   const readSelection =
     deps.getSelection ??
@@ -43,7 +43,7 @@ export function buildContentTools(deps: ContentToolDeps) {
       return text.length > 0 ? text : null
     })
 
-  return [
+  return serveTools([
     defineTool({
       name: 'get_page_context',
       description: 'URL, title, heading outline and current selection of the live page.',
@@ -84,11 +84,5 @@ export function buildContentTools(deps: ContentToolDeps) {
         return 'shown'
       },
     }),
-  ] as const
+  ] as const)
 }
-
-export function createToolServer(deps: ContentToolDeps) {
-  return serveTools(buildContentTools(deps))
-}
-
-export type ToolServer = ReturnType<typeof createToolServer>

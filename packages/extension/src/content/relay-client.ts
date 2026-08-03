@@ -94,5 +94,3 @@ export function createRelayClient(options: RelayClientOptions) {
     },
   }
 }
-
-export type RelayClient = ReturnType<typeof createRelayClient>

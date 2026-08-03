@@ -133,5 +133,3 @@ export function createChipStore(apply: (threadId: string, decoration: Decoration
     },
   }
 }
-
-export type ChipStore = ReturnType<typeof createChipStore>

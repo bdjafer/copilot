@@ -49,10 +49,6 @@ export interface ContentDeps {
    * chips then run on the message channel alone, which is a degradation, not a failure.
    */
   runtime?: Pick<RuntimeLike, 'connect'>
-  /** Test seam. Defaults to `globalThis.document`. */
-  document?: Document
-  /** Test seam for `comment-ui`, which needs a real shadow root. */
-  mountUI?: (engine: CommentEngine) => CommentUI
 }
 
 export interface ContentHandle {
@@ -69,26 +65,23 @@ export interface ContentHandle {
 
 export async function startContent(deps: ContentDeps): Promise<ContentHandle> {
   const { kv, messenger } = deps
-  const doc = deps.document ?? globalThis.document
+  // The content script owns one document — the one it was injected into. A `document` seam here
+  // would have to agree with the one `createCommentEngine` and `mountCommentUI` resolve on their
+  // own, and nothing (test or entrypoint) ever needed a second one.
+  const doc = globalThis.document
 
   const store = createKeyValueStore(kv, { namespace: COMMENT_NS })
   const host = createHostState(kv)
   let settings: Settings = await loadSettings(kv)
 
-  const engine = createCommentEngine({
-    store,
-    modes: modesFromSettings(settings),
-    ...(deps.document ? { document: deps.document } : {}),
-  })
+  const engine = createCommentEngine({ store, modes: modesFromSettings(settings) })
 
-  const ui =
-    deps.mountUI?.(engine) ??
-    mountCommentUI(engine, {
-      isolateEvents: true,
-      // The documented WXT caveat: `all: initial` does not cover the page's `<html>`
-      // font-size, so nothing here may be rem-dependent without an explicit anchor.
-      rootFontSize: '16px',
-    })
+  const ui = mountCommentUI(engine, {
+    isolateEvents: true,
+    // The documented WXT caveat: `all: initial` does not cover the page's `<html>`
+    // font-size, so nothing here may be rem-dependent without an explicit anchor.
+    rootFontSize: '16px',
+  })
 
   const chips = createChipStore((threadId, decoration) => ui.decorate(threadId, decoration))
 
@@ -113,10 +106,7 @@ export async function startContent(deps: ContentDeps): Promise<ContentHandle> {
     toast: (text) => hostChrome.toast(text),
   })
   const offTools = served.names.map((name) =>
-    messenger.onMessage(
-      toolMessageKey(name) as 'tool:get_page_context',
-      ({ data }) => served.handle(name, data) as never,
-    ),
+    messenger.onMessage(toolMessageKey(name), ({ data }) => served.handle(name, data)),
   )
 
   /* --------------------------------------------------- bridge-owned chrome */

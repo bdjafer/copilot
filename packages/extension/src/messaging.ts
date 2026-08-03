@@ -71,10 +71,20 @@ export interface ProtocolMap {
   'tool:show_message': (data: unknown) => unknown
 }
 
-/** The tool half of the protocol, kept in one place so both ends agree on the key format. */
+/**
+ * The tool half of the protocol, kept in one place so both ends agree on the key format.
+ *
+ * The return type is the `tool:` **subset**, not all of `ProtocolMap`. Every member of that
+ * subset has the same `(data: unknown) => unknown` signature, so `sendMessage` / `onMessage`
+ * accept the union directly — which is what lets both call sites drop the
+ * `as 'tool:get_page_context'` they used to need. That cast named one arbitrary member of the
+ * union to stand in for whichever key was actually built: it type-checked precisely because the
+ * three signatures agree, and would have gone on type-checking if they ever stopped agreeing.
+ */
+export type ToolMessageKey = Extract<keyof ProtocolMap, `tool:${string}`>
 export const TOOL_MESSAGE_PREFIX = 'tool:' as const
-export const toolMessageKey = (name: string): keyof ProtocolMap =>
-  `${TOOL_MESSAGE_PREFIX}${name}` as keyof ProtocolMap
+export const toolMessageKey = (name: string): ToolMessageKey =>
+  `${TOOL_MESSAGE_PREFIX}${name}` as ToolMessageKey
 
 /**
  * The injectable seam. Every bridge module takes one of these; only the entrypoints construct

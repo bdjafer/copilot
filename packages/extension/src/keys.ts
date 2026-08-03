@@ -5,7 +5,7 @@
  * |--------------------|----------------|-------------------------------------------------------|
  * | `exp-spec:*`       | `comment-core` | thread and comment records (`:t:` / `:c:` subranges)   |
  * | `runs:*`           | `copilot`      | run records, leases                                   |
- * | `exp-spec:host:*`  | **the bridge** | pending set, thread→run index, cursors, unread, failed, settings |
+ * | `exp-spec:host:*`  | **the bridge** | pending set, cursors, unread, failed, settings         |
  *
  * There is no fourth range: everything the bridge owns, settings included, is under
  * `exp-spec:host:*`.
@@ -33,7 +33,7 @@ export const CURSOR_CANCEL = 'cancel'
  * Settings are bridge-owned state, so they live in the bridge's own range. §6 binds the three
  * namespaces "and nothing else"; a fourth top-level key is exactly the drift that table exists
  * to prevent. Nothing else in the range starts with `settings` — every other member is under
- * `:pending:` / `:run:` / `:unread:` / `:failed:` / `:cursor:`.
+ * `:pending:` / `:unread:` / `:failed:` / `:cursor:`.
  */
 export const SETTINGS_KEY = `${HOST_NS}:settings`
 
@@ -60,33 +60,13 @@ export const pendingKey = (pageKey: string, threadId: string): string =>
   `${pendingPagePrefix(pageKey)}${enc(threadId)}`
 
 /**
- * thread → run index. Batch runs are not thread-prefixed, so `cancelByPrefix` cannot find them.
- *
- * Keyed on **(thread, run)**, not on the thread alone: a thread can be covered by a live batch
- * run and a single run at the same time (a human reply during a review). One slot per thread
- * would let the second `indexRun` erase the first, and the first run's `run:settled` would then
- * clear an index row belonging to a run that is still going.
+ * There is no `:run:` subrange. A thread → run index lived here, because a batch run's id is
+ * page-prefixed and `cancelByPrefix('c:{threadId}:')` cannot see it — but the run store already
+ * holds that mapping durably: `copilot.list({ state: ['queued', 'processing'] })` returns the
+ * live runs and each one names the threads it covers in `run.context`. The index was a second
+ * copy of a durable fact, with its own write on trigger and its own sweep on settle, either of
+ * which a worker death could drop.
  */
-export const RUN_INDEX_PREFIX = `${HOST_NS}:run:`
-export const runIndexThreadPrefix = (threadId: string): string =>
-  `${RUN_INDEX_PREFIX}${enc(threadId)}:`
-export const runIndexKey = (threadId: string, runId: string): string =>
-  `${runIndexThreadPrefix(threadId)}${enc(runId)}`
-
-/**
- * Splits a run-index key back into its two encoded segments. Unambiguous because `enc` escapes
- * `:` in both components, so the first `:` after the prefix is always the separator.
- */
-export function parseRunIndexKey(key: string): { threadId: string; runId: string } | null {
-  if (!key.startsWith(RUN_INDEX_PREFIX)) return null
-  const rest = key.slice(RUN_INDEX_PREFIX.length)
-  const cut = rest.indexOf(':')
-  if (cut <= 0) return null
-  return {
-    threadId: decodeURIComponent(rest.slice(0, cut)),
-    runId: decodeURIComponent(rest.slice(cut + 1)),
-  }
-}
 
 /** Unread copilot replies, cleared when the page shows the thread. */
 export const UNREAD_PREFIX = `${HOST_NS}:unread:`

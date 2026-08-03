@@ -74,7 +74,7 @@ describe('manifest', () => {
   }
 
   it('declares the permissions the code actually calls', () => {
-    // storage → the KeyValueAdapter; alarms → the watchdog; tabs → tabForPageKey;
+    // storage → the KeyValueAdapter; alarms → the watchdog; tabs → tabsForPageKey;
     // unlimitedStorage → captures are HTML.
     expect(manifest.permissions.sort()).toEqual(['alarms', 'storage', 'tabs', 'unlimitedStorage'])
   })

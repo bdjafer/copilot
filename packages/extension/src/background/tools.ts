@@ -95,11 +95,7 @@ export function createToolTransport(
           toolName: name,
         })
       }
-      const send = messenger.sendMessage(
-        toolMessageKey(name) as 'tool:get_page_context',
-        input as never,
-        tabId,
-      )
+      const send = messenger.sendMessage(toolMessageKey(name), input, tabId)
       if (signal.aborted) throw new CopilotError('aborted', 'run cancelled before tool call')
       return Promise.race([
         send,

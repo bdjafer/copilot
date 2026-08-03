@@ -14,6 +14,7 @@ import type {
   Copilot,
   CopilotEvent,
   LanguageModelLike,
+  Run,
   RunHandle,
 } from '@astrale-os/browser-copilot'
 import type { CommentDomain, KeyValueAdapter, StoreEvent } from '@astrale-os/comment-core/headless'
@@ -46,7 +47,7 @@ import {
   threadRunPrefix,
 } from '../keys.ts'
 import { RELAY_PORT_NAME } from '../messaging.ts'
-import { BATCH_PROMPT, isKind, loadSettings } from '../settings.ts'
+import { BATCH_PROMPT, isKind, loadSettings, watchSettings } from '../settings.ts'
 import { attachRelay } from './relay.ts'
 import { renderContext, renderReview, renderThread } from './render.ts'
 import {
@@ -201,6 +202,27 @@ export function startBackground(deps: BackgroundDeps): BackgroundHandle {
     renderContext,
   })
 
+  /* ------------------------------------------------------- live-run derivation */
+
+  /**
+   * **The bridge keeps no thread→run index.** It used to: a durable `exp-spec:host:run:*` range,
+   * written at every trigger and swept at every settle, so that "which threads are busy?" and
+   * "which batch run covers this thread?" were answerable. Both questions are answered by the run
+   * store itself — a live run already carries every thread it covers in `run.context`, and the run
+   * store is the same `chrome.storage` durability the index was mirroring. A mirror of a durable
+   * record is not extra safety, it is a second truth that can only ever be *wrong*: stale when a
+   * settle's sweep lost the race with a worker death, missing when a trigger's write did.
+   */
+  const liveRuns = (): Promise<Run<RunCtx>[]> => copilot.list({ state: ['queued', 'processing'] })
+
+  /**
+   * Every thread a run speaks for. A single run covers exactly its own thread; a batch run
+   * carries the list. The `??` is the whole difference, and it belongs in one place — every
+   * notification, the busy answer and the cancel scan must agree on it or a batch run drops
+   * eleven of its twelve threads somewhere.
+   */
+  const threadsOf = (context: RunCtx): readonly string[] => context.threadIds ?? [context.threadId]
+
   /* --------------------------------------------------------------- dispatch */
 
   async function dispatchSingle(
@@ -211,7 +233,7 @@ export function startBackground(deps: BackgroundDeps): BackgroundHandle {
   ): Promise<RunHandle<BridgeTools, RunCtx> | null> {
     const record = await comments.get(threadId)
     if (!record) return null // deleted between the write and the wake
-    const handle = copilot.trigger({
+    return copilot.trigger({
       // Idempotency key: an SW replay of the same store event cannot double-trigger.
       runId: singleRunId(threadId, commentId),
       input: renderThread(record),
@@ -222,8 +244,6 @@ export function startBackground(deps: BackgroundDeps): BackgroundHandle {
       ...(kind === 'ask' ? { model: 'fast' as const } : {}),
       tools: SINGLE_TOOLS,
     })
-    if (!handle.deduped) await host.indexRun(handle.id, [threadId], 'single')
-    return handle
   }
 
   async function dispatchBatch(
@@ -253,7 +273,6 @@ export function startBackground(deps: BackgroundDeps): BackgroundHandle {
       tools: BATCH_TOOLS,
       maxSteps: BATCH_MAX_STEPS,
     })
-    if (!handle.deduped) await host.indexRun(handle.id, ids, 'batch')
     // The pending set has served its purpose the moment the run exists durably; leaving it
     // would make the pill re-offer work that is already running.
     await host.clearPendingMany(
@@ -347,20 +366,21 @@ export function startBackground(deps: BackgroundDeps): BackgroundHandle {
     async (event: StoreEvent) => {
       if (event.type !== 'thread:delete') return
       const threadId = event.payload.thread.id
-      // Batch runs are page-prefixed, so the prefix scan cannot see them — the run index can.
-      const indexed = (await host.runsForThreads()).filter((row) => row.threadId === threadId)
+      // Batch runs are page-prefixed, so the prefix scan cannot see them — the live-run scan can,
+      // and it carries the covered thread list with it, so no second `copilot.get` is needed.
+      const batches = (await liveRuns()).filter(
+        (run) => run.context.mode === 'batch' && threadsOf(run.context).includes(threadId),
+      )
       await cancelRunsForThread(threadId)
-      for (const row of indexed) {
-        if (row.mode !== 'batch') continue
+      for (const run of batches) {
         // A batch run owes replies to every thread it covers. Cancelling all of them because
         // one was deleted throws away the other N−1 answers — and `reply_to_thread` already
         // returns `'thread deleted'` for the gone one, so the run degrades on its own. Cancel
         // only when nothing it could still reply to is left.
-        const run = await copilot.get(row.runId)
-        const covered = (run?.context.threadIds ?? []).filter((id) => id !== threadId)
+        const covered = threadsOf(run.context).filter((id) => id !== threadId)
         const survivors = await Promise.all(covered.map((id) => comments.get(id)))
         if (survivors.every((record) => record === null)) {
-          await copilot.cancel(row.runId, 'thread deleted')
+          await copilot.cancel(run.id, 'thread deleted')
         }
       }
       await host.forgetThread(threadId)
@@ -394,7 +414,7 @@ export function startBackground(deps: BackgroundDeps): BackgroundHandle {
     // EVERY thread of the run, exactly like run:queued and run:settled. Notifying only
     // `threadIds[0]` left the other eleven threads of a dead batch with their busy chip cleared
     // and no failure state — the "a dead run must not look like no run" case, one thread wide.
-    for (const threadId of run.context.threadIds ?? [run.context.threadId]) {
+    for (const threadId of threadsOf(run.context)) {
       // Durable, because `refresh()` rebuilds the chip map from durable state and would
       // otherwise erase this on the next SPA navigation or page load.
       void host.markFailed(threadId, error.code).catch(() => {})
@@ -406,33 +426,30 @@ export function startBackground(deps: BackgroundDeps): BackgroundHandle {
   })
 
   const offQueued = copilot.on('run:queued', ({ run }) => {
-    for (const threadId of run.context.threadIds ?? [run.context.threadId]) {
+    for (const threadId of threadsOf(run.context)) {
       // A new run supersedes the previous run's failure, durably as well as on screen.
       void host.clearFailed(threadId).catch(() => {})
       notifyBusy(run.context.pageKey, threadId, true)
     }
   })
 
-  // One event to clear the chip, whatever happened.
-  const offSettled = copilot.on('run:settled', ({ runId, run }) => {
-    for (const threadId of run.context.threadIds ?? [run.context.threadId]) {
+  // One event to clear the chip, whatever happened. Nothing durable to sweep: the run record
+  // leaving `queued`/`processing` *is* the sweep.
+  const offSettled = copilot.on('run:settled', ({ run }) => {
+    for (const threadId of threadsOf(run.context)) {
       notifyBusy(run.context.pageKey, threadId, false)
     }
-    void host.clearRunIndex(runId).catch(() => {})
   })
 
   /* -------------------------------------------------------------- messaging */
 
   messenger.onMessage('copilot:busyThreads', async () => {
     // Level-triggered: run:queued/run:settled are edges emitted by ONE instance, so after a
-    // worker death the page has no other way to ask "who is busy?".
-    const live = await copilot.list({ state: ['queued', 'processing'] })
-    const liveIds = new Set(live.map((run) => run.id))
-    const single = live.flatMap((run) => run.context.threadIds ?? [run.context.threadId])
-    const indexed = (await host.runsForThreads())
-      .filter((row) => liveIds.has(row.runId))
-      .map((row) => row.threadId)
-    return [...new Set([...single, ...indexed])]
+    // worker death the page has no other way to ask "who is busy?". The run store answers it
+    // directly — a run in `queued`/`processing` is the definition of busy, and it names its own
+    // threads. Deduped because two live runs may cover the same thread.
+    const live = await liveRuns()
+    return [...new Set(live.flatMap((run) => threadsOf(run.context)))]
   })
 
   messenger.onMessage('copilot:sendBatch', async ({ data }) => {
@@ -446,11 +463,10 @@ export function startBackground(deps: BackgroundDeps): BackgroundHandle {
   // enable is `tabs.query`-derived (`createTabRouter`), which survives a worker death and needs
   // no announcement — so it was one extra service-worker wake per page load in every tab.
 
-  const stopSettingsWatch = kv.watch
-    ? kv.watch((changed) => {
-        if (changed.some((key) => key.endsWith(':settings'))) invalidateSettings()
-      })
-    : () => {}
+  // `watchSettings`, not a hand-rolled `kv.watch` with an `endsWith(':settings')` predicate: the
+  // content script already watches the same key through it, and two spellings of "the settings
+  // changed" is how one of them ends up watching a key nothing writes.
+  const stopSettingsWatch = watchSettings(kv, invalidateSettings)
 
   /* ------------------------------------------------------- MV3 host duties */
 

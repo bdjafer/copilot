@@ -68,8 +68,9 @@ export const DEFAULT_PROMPTS: Record<Kind, string> = {
     '- Reply with the answer body only. No preamble, no restating the question.',
     '- Read the page before answering when the answer depends on it: call get_page_context for',
     '  the URL, title and outline, and get_thread_element_html for the anchored element.',
-    '- If the element is gone the tool returns null — say what you can from the stored capture',
-    '  rather than pretending you saw it.',
+    '- get_thread_element_html answers { source, html }: source "capture" means you are looking',
+    '  at a snapshot from when the thread was created, not the live page. Say so rather than',
+    '  pretending you saw the element as it is now.',
     '- If you genuinely cannot answer, say that in one sentence.',
   ].join('\n'),
 }
