@@ -1,5 +1,5 @@
 {
-  "ranAt": "2026-08-03T05:00:11.793Z",
+  "ranAt": "2026-08-03T06:44:49.427Z",
   "results": [
     {
       "site": "wikipedia",
@@ -18,7 +18,7 @@
           "text": "Anchors can either be temporary or permanent. Permanent anchors are used in the "
         },
         "placed": {
-          "id": "MlfTgA-db6pH",
+          "id": "bnbJvC3z3a8E",
           "status": "anchored",
           "confidence": 1,
           "via": "attr",
@@ -178,7 +178,7 @@
           "text": "Creates and returns a new MutationObserver which will invoke a specified callbac"
         },
         "placed": {
-          "id": "PYq5H_2CEBar",
+          "id": "diFeMT_u8isZ",
           "status": "anchored",
           "confidence": 1,
           "via": "css",

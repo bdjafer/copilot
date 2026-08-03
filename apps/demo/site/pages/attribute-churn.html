@@ -20,20 +20,23 @@
           <li>Comment on a paragraph below.</li>
           <li>
             <em>Churn hashed classes</em> — the paragraphs are re-created with new
-            <code>css-…</code> / <code>sc-…</code> class names. The badge does not move: finder's
-            word-like heuristic drops hashed classes from the fingerprint before they are ever
-            compared. Confidence stays at 1.00.
+            <code>css-…</code> / <code>sc-…</code> class names. The badge does not move, and
+            <strong>deterministically</strong> so: a class becomes evidence only when it is
+            word-like <em>and</em> carried by a second element (SPEC §2.5, decision log #28), so a
+            per-render random name — unique in the document by construction — never reaches the
+            fingerprint. Confidence stays at 1.00. Before that rule it was a coin flip:
+            <code>css-&lt;hash&gt;</code> passes the word-like test about one render in seventeen.
           </li>
           <li>
-            <em>Churn ids and data attributes too</em> — this is the honest failure case.
+            <em>Churn ids and data attributes too</em> — the framework-hydration case.
             <code>id</code> is worth 0.2 of the score and the <code>data-*</code>/<code
               >aria-*</code
             >
-            set another 0.3, so regenerating them drops even a perfect text-and-structure match to
-            ≈0.5. The thread <strong>orphans</strong>: the badge docks in the panel, nothing is
-            written, nothing is lost — and no badge lands on the wrong paragraph. Whether the
-            fingerprint should treat a generated id as evidence at all is exactly what the M2
-            anchoring bench is for (PLAN §3.8); a React app regenerates those on every hydration.
+            set another 0.3, but a value that was <em>rewritten</em> and now matches nothing
+            anywhere in the document carries no information — it cannot mean "not this element"
+            (decision log #27). The thread <strong>re-anchors, flagged approximate</strong>: the
+            text still verifies, the confidence honestly drops to ≈0.75, and the badge shows the
+            "approximately re-anchored" marker. Rewrite the text as well and it orphans instead.
           </li>
           <li>
             <em>Rewrite the text too</em> is the other honest degradation: change what an element
@@ -59,7 +62,7 @@
 
       const { log } = bootDemo({
         title: 'Attribute churn',
-        hint: 'Hashed classes are survivable. Regenerated ids and data attributes are not — yet.',
+        hint: 'Hashed classes are a non-event. Regenerated ids cost confidence, not the anchor.',
       })
 
       const ORIGINAL = [
@@ -104,7 +107,9 @@
       document.querySelector('#churn-all').addEventListener('click', () => {
         identity += 1
         render()
-        log(`regenerated ids + data attributes (identity ${identity}) — expect an orphan`)
+        log(
+          `regenerated ids + data attributes (identity ${identity}) — expect an approximate re-anchor`,
+        )
       })
       document.querySelector('#auto').addEventListener('change', (event) => {
         clearInterval(timer)

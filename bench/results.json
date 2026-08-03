@@ -1,12 +1,12 @@
 {
   "base": "http://127.0.0.1:4272",
-  "ranAt": "2026-08-03T04:54:36.981Z",
+  "ranAt": "2026-08-03T07:13:47.683Z",
   "results": [
     {
       "name": "static",
       "page": "/pages/basic.html",
       "url": "http://127.0.0.1:4272/pages/basic.html",
-      "id": "e5xDzDbjT3Ab",
+      "id": "1aJSWYYuXhlh",
       "baseline": {
         "domId": "intro",
         "key": "P|Anchoring is a scoring problem, not a lookup: the engine stores several selectors per thre",
@@ -72,7 +72,7 @@
               "text": "Anchoring is a scoring problem, not a lookup: the engine stores several selectors per thre"
             },
             "found": true,
-            "id": "e5xDzDbjT3Ab",
+            "id": "1aJSWYYuXhlh",
             "isOrphaned": false,
             "isResolved": false,
             "pageKey": "http://127.0.0.1:4272/pages/basic.html",
@@ -105,7 +105,7 @@
                 "selector": "attr"
               }
             ],
-            "totalMs": 0.10000002384185792
+            "totalMs": 0.20000004768371585
           },
           "ok": true,
           "fails": []
@@ -162,7 +162,7 @@
               "text": "Anchoring is a scoring problem, not a lookup: the engine stores several selectors per thre"
             },
             "found": true,
-            "id": "e5xDzDbjT3Ab",
+            "id": "1aJSWYYuXhlh",
             "isOrphaned": false,
             "isResolved": false,
             "pageKey": "http://127.0.0.1:4272/pages/basic.html",
@@ -249,7 +249,7 @@
               "text": "Anchoring is a scoring problem, not a lookup: the engine stores several selectors per thre"
             },
             "found": true,
-            "id": "e5xDzDbjT3Ab",
+            "id": "1aJSWYYuXhlh",
             "isOrphaned": false,
             "isResolved": false,
             "pageKey": "http://127.0.0.1:4272/pages/basic.html",
@@ -317,7 +317,7 @@
               "text": "Anchoring is a scoring problem, not a lookup: the engine stores several selectors per thre"
             },
             "found": true,
-            "id": "e5xDzDbjT3Ab",
+            "id": "1aJSWYYuXhlh",
             "isOrphaned": false,
             "isResolved": false,
             "pageKey": "http://127.0.0.1:4272/pages/basic.html",
@@ -337,13 +337,13 @@
         }
       ],
       "error": null,
-      "ms": 5097
+      "ms": 3560
     },
     {
       "name": "ambiguous",
       "page": "/pages/basic.html",
       "url": "http://127.0.0.1:4272/pages/basic.html",
-      "id": "Ln4aQIsJ9abS",
+      "id": "K70lROpLvJ18",
       "baseline": {
         "domId": null,
         "key": "P|Identical siblings — the fingerprint has to break the tie.",
@@ -408,7 +408,7 @@
               "text": "Identical siblings — the fingerprint has to break the tie."
             },
             "found": true,
-            "id": "Ln4aQIsJ9abS",
+            "id": "K70lROpLvJ18",
             "isOrphaned": false,
             "isResolved": false,
             "pageKey": "http://127.0.0.1:4272/pages/basic.html",
@@ -476,7 +476,7 @@
               "text": "Identical siblings — the fingerprint has to break the tie."
             },
             "found": true,
-            "id": "Ln4aQIsJ9abS",
+            "id": "K70lROpLvJ18",
             "isOrphaned": false,
             "isResolved": false,
             "pageKey": "http://127.0.0.1:4272/pages/basic.html",
@@ -516,13 +516,13 @@
         }
       ],
       "error": null,
-      "ms": 2417
+      "ms": 2426
     },
     {
       "name": "reorder",
       "page": "/pages/reorder.html",
       "url": "http://127.0.0.1:4272/pages/reorder.html",
-      "id": "aTAzxpExqbv2",
+      "id": "QO4JwaSH_4DW",
       "baseline": {
         "domId": null,
         "key": "LI|Kiwi — furry, sliced in half, eaten with a teaspoon",
@@ -596,7 +596,7 @@
               "text": "Kiwi — furry, sliced in half, eaten with a teaspoon"
             },
             "found": true,
-            "id": "aTAzxpExqbv2",
+            "id": "QO4JwaSH_4DW",
             "isOrphaned": false,
             "isResolved": false,
             "pageKey": "http://127.0.0.1:4272/pages/reorder.html",
@@ -684,7 +684,7 @@
               "text": "Kiwi — furry, sliced in half, eaten with a teaspoon"
             },
             "found": true,
-            "id": "aTAzxpExqbv2",
+            "id": "QO4JwaSH_4DW",
             "isOrphaned": false,
             "isResolved": false,
             "pageKey": "http://127.0.0.1:4272/pages/reorder.html",
@@ -727,7 +727,7 @@
               "borderStyle": "solid",
               "center": {
                 "x": 1175,
-                "y": 611
+                "y": 551
               },
               "hidden": false,
               "label": "comment (2)",
@@ -744,24 +744,24 @@
             "dockRect": {
               "height": 52,
               "left": 288,
-              "top": 888,
+              "top": 828,
               "width": 904
             },
             "element": {
               "domId": null,
               "key": "LI|Kiwi — furry, sliced in half, eaten with a teaspoon",
-              "path": "html>body:nth-child(2)>main:nth-child(2)>ul:nth-child(4)>li:nth-child(3)",
+              "path": "html>body:nth-child(2)>main:nth-child(2)>ul:nth-child(4)>li:nth-child(2)",
               "rect": {
                 "height": 52,
                 "left": 288,
-                "top": 616,
+                "top": 556,
                 "width": 904
               },
               "tag": "LI",
               "text": "Kiwi — furry, sliced in half, eaten with a teaspoon"
             },
             "found": true,
-            "id": "aTAzxpExqbv2",
+            "id": "QO4JwaSH_4DW",
             "isOrphaned": false,
             "isResolved": false,
             "pageKey": "http://127.0.0.1:4272/pages/reorder.html",
@@ -776,15 +776,15 @@
             },
             "status": "anchored",
             "threads": 1,
-            "via": "css"
+            "via": "fingerprint-scan"
           }
         },
         {
           "label": "DOM path across the shuffle",
           "note": {
             "placed": "html>body:nth-child(2)>main:nth-child(2)>ul:nth-child(4)>li:nth-child(3)",
-            "shuffled": "html>body:nth-child(2)>main:nth-child(2)>ul:nth-child(4)>li:nth-child(3)",
-            "moved": false
+            "shuffled": "html>body:nth-child(2)>main:nth-child(2)>ul:nth-child(4)>li:nth-child(2)",
+            "moved": true
           },
           "ok": true,
           "fails": []
@@ -794,14 +794,26 @@
           "trace": {
             "accepted": {
               "confidence": 0.999,
-              "via": "css"
+              "via": "fingerprint-scan"
             },
             "attempts": [
               {
-                "accepted": true,
-                "best": 0.999,
+                "accepted": false,
+                "best": 0,
                 "candidates": 1,
                 "selector": "css"
+              },
+              {
+                "accepted": false,
+                "best": 0,
+                "candidates": 1,
+                "selector": "nthPath"
+              },
+              {
+                "accepted": true,
+                "best": 0.999,
+                "candidates": 13,
+                "selector": "fingerprint-scan"
               }
             ],
             "totalMs": 0.19999992847442627
@@ -825,51 +837,51 @@
                 "element": {
                   "domId": null,
                   "key": "LI|Kiwi — furry, sliced in half, eaten with a teaspoon",
-                  "path": "html>body:nth-child(2)>main:nth-child(2)>ul:nth-child(4)>li:nth-child(3)",
+                  "path": "html>body:nth-child(2)>main:nth-child(2)>ul:nth-child(4)>li:nth-child(2)",
                   "rect": {
                     "height": 52,
                     "left": 288,
-                    "top": 616,
+                    "top": 556,
                     "width": 904
                   },
                   "tag": "LI",
                   "text": "Kiwi — furry, sliced in half, eaten with a teaspoon"
                 },
-                "via": "css"
+                "via": "fingerprint-scan"
               },
               "@0.85": {
                 "confidence": 0.999,
                 "element": {
                   "domId": null,
                   "key": "LI|Kiwi — furry, sliced in half, eaten with a teaspoon",
-                  "path": "html>body:nth-child(2)>main:nth-child(2)>ul:nth-child(4)>li:nth-child(3)",
+                  "path": "html>body:nth-child(2)>main:nth-child(2)>ul:nth-child(4)>li:nth-child(2)",
                   "rect": {
                     "height": 52,
                     "left": 288,
-                    "top": 616,
+                    "top": 556,
                     "width": 904
                   },
                   "tag": "LI",
                   "text": "Kiwi — furry, sliced in half, eaten with a teaspoon"
                 },
-                "via": "css"
+                "via": "fingerprint-scan"
               },
               "@0.9": {
                 "confidence": 0.999,
                 "element": {
                   "domId": null,
                   "key": "LI|Kiwi — furry, sliced in half, eaten with a teaspoon",
-                  "path": "html>body:nth-child(2)>main:nth-child(2)>ul:nth-child(4)>li:nth-child(3)",
+                  "path": "html>body:nth-child(2)>main:nth-child(2)>ul:nth-child(4)>li:nth-child(2)",
                   "rect": {
                     "height": 52,
                     "left": 288,
-                    "top": 616,
+                    "top": 556,
                     "width": 904
                   },
                   "tag": "LI",
                   "text": "Kiwi — furry, sliced in half, eaten with a teaspoon"
                 },
-                "via": "css"
+                "via": "fingerprint-scan"
               }
             },
             "mode": "element",
@@ -946,7 +958,7 @@
               "text": "Kiwi — furry, sliced in half, eaten with a teaspoon"
             },
             "found": true,
-            "id": "aTAzxpExqbv2",
+            "id": "QO4JwaSH_4DW",
             "isOrphaned": false,
             "isResolved": false,
             "pageKey": "http://127.0.0.1:4272/pages/reorder.html",
@@ -1023,7 +1035,7 @@
               "text": "Kiwi — furry, sliced in half, eaten with a teaspoon"
             },
             "found": true,
-            "id": "aTAzxpExqbv2",
+            "id": "QO4JwaSH_4DW",
             "isOrphaned": false,
             "isResolved": false,
             "pageKey": "http://127.0.0.1:4272/pages/reorder.html",
@@ -1084,7 +1096,7 @@
             },
             "element": null,
             "found": true,
-            "id": "aTAzxpExqbv2",
+            "id": "QO4JwaSH_4DW",
             "isOrphaned": true,
             "isResolved": false,
             "pageKey": "http://127.0.0.1:4272/pages/reorder.html",
@@ -1113,23 +1125,7 @@
               "textDigest": "kiwi — furry, sliced in half, eaten with a teaspoon"
             },
             "matches": {
-              "@0.62": {
-                "confidence": 0.759,
-                "element": {
-                  "domId": null,
-                  "key": "LI|Damson — too sharp raw, unbeatable as jam",
-                  "path": "html>body:nth-child(2)>main:nth-child(2)>ul:nth-child(4)>li:nth-child(3)",
-                  "rect": {
-                    "height": 52,
-                    "left": 288,
-                    "top": 616,
-                    "width": 904
-                  },
-                  "tag": "LI",
-                  "text": "Damson — too sharp raw, unbeatable as jam"
-                },
-                "via": "css"
-              },
+              "@0.62": null,
               "@0.85": null,
               "@0.9": null
             },
@@ -1215,7 +1211,7 @@
               "text": "Kiwi — furry, sliced in half, eaten with a teaspoon"
             },
             "found": true,
-            "id": "aTAzxpExqbv2",
+            "id": "QO4JwaSH_4DW",
             "isOrphaned": false,
             "isResolved": false,
             "pageKey": "http://127.0.0.1:4272/pages/reorder.html",
@@ -1303,7 +1299,7 @@
               "text": "Kiwi — furry, sliced in half, eaten with a teaspoon"
             },
             "found": true,
-            "id": "aTAzxpExqbv2",
+            "id": "QO4JwaSH_4DW",
             "isOrphaned": false,
             "isResolved": false,
             "pageKey": "http://127.0.0.1:4272/pages/reorder.html",
@@ -1323,13 +1319,13 @@
         }
       ],
       "error": null,
-      "ms": 6955
+      "ms": 7253
     },
     {
       "name": "popover",
       "page": "/pages/popover.html",
       "url": "http://127.0.0.1:4272/pages/popover.html",
-      "id": "GKZ5PNwwraOV",
+      "id": "2yrl0CmElFa_",
       "baseline": {
         "domId": null,
         "key": "LI|Only show threads I authored",
@@ -1404,7 +1400,7 @@
               "text": "Only show threads I authored"
             },
             "found": true,
-            "id": "GKZ5PNwwraOV",
+            "id": "2yrl0CmElFa_",
             "isOrphaned": false,
             "isResolved": false,
             "pageKey": "http://127.0.0.1:4272/pages/popover.html",
@@ -1485,7 +1481,7 @@
             },
             "element": null,
             "found": true,
-            "id": "GKZ5PNwwraOV",
+            "id": "2yrl0CmElFa_",
             "isOrphaned": true,
             "isResolved": false,
             "pageKey": "http://127.0.0.1:4272/pages/popover.html",
@@ -1507,7 +1503,7 @@
           "label": "orphaning wrote nothing to the store",
           "note": {
             "equal": true,
-            "bytes": 1504
+            "bytes": 1580
           },
           "ok": true,
           "fails": []
@@ -1571,7 +1567,7 @@
               "text": "Only show threads I authored"
             },
             "found": true,
-            "id": "GKZ5PNwwraOV",
+            "id": "2yrl0CmElFa_",
             "isOrphaned": false,
             "isResolved": false,
             "pageKey": "http://127.0.0.1:4272/pages/popover.html",
@@ -1613,7 +1609,7 @@
                 "selector": "css"
               }
             ],
-            "totalMs": 0.19999992847442627
+            "totalMs": 0
           },
           "ok": true,
           "fails": []
@@ -1677,7 +1673,7 @@
               "text": "Only show threads I authored"
             },
             "found": true,
-            "id": "GKZ5PNwwraOV",
+            "id": "2yrl0CmElFa_",
             "isOrphaned": false,
             "isResolved": false,
             "pageKey": "http://127.0.0.1:4272/pages/popover.html",
@@ -1713,13 +1709,31 @@
           "fails": [],
           "ok": true,
           "probe": {
-            "badge": null,
+            "badge": {
+              "anchorAttr": "orphaned",
+              "approximate": false,
+              "borderStyle": "dashed",
+              "center": {
+                "x": 1403,
+                "y": 861
+              },
+              "hidden": false,
+              "label": "comment (2)",
+              "marks": ["orphaned"],
+              "opacity": 0.55,
+              "statusAttr": "open"
+            },
             "comments": 2,
             "confidence": 0,
-            "dockRect": null,
+            "dockRect": {
+              "height": 52,
+              "left": 57,
+              "top": 866,
+              "width": 1366
+            },
             "element": null,
             "found": true,
-            "id": "GKZ5PNwwraOV",
+            "id": "2yrl0CmElFa_",
             "isOrphaned": true,
             "isResolved": false,
             "pageKey": "http://127.0.0.1:4272/pages/popover.html",
@@ -1742,16 +1756,34 @@
           "expect": {
             "docked": true
           },
-          "fails": ["orphan has no docked badge", "orphan kept no dock rect"],
-          "ok": false,
+          "fails": [],
+          "ok": true,
           "probe": {
-            "badge": null,
+            "badge": {
+              "anchorAttr": "orphaned",
+              "approximate": false,
+              "borderStyle": "dashed",
+              "center": {
+                "x": 1403,
+                "y": 861
+              },
+              "hidden": false,
+              "label": "comment (2)",
+              "marks": ["orphaned"],
+              "opacity": 0.55,
+              "statusAttr": "open"
+            },
             "comments": 2,
             "confidence": 0,
-            "dockRect": null,
+            "dockRect": {
+              "height": 52,
+              "left": 57,
+              "top": 866,
+              "width": 1366
+            },
             "element": null,
             "found": true,
-            "id": "GKZ5PNwwraOV",
+            "id": "2yrl0CmElFa_",
             "isOrphaned": true,
             "isResolved": false,
             "pageKey": "http://127.0.0.1:4272/pages/popover.html",
@@ -1828,7 +1860,7 @@
               "text": "Only show threads I authored"
             },
             "found": true,
-            "id": "GKZ5PNwwraOV",
+            "id": "2yrl0CmElFa_",
             "isOrphaned": false,
             "isResolved": false,
             "pageKey": "http://127.0.0.1:4272/pages/popover.html",
@@ -1894,13 +1926,13 @@
         }
       ],
       "error": null,
-      "ms": 7306
+      "ms": 7625
     },
     {
       "name": "infinite-scroll",
       "page": "/pages/infinite-scroll.html",
       "url": "http://127.0.0.1:4272/pages/infinite-scroll.html",
-      "id": "LWH8kvgkz5aH",
+      "id": "BIn_EjuOzNxw",
       "baseline": {
         "domId": null,
         "key": "ARTICLE|Post #2The 1974 pressing has a wider stereo image than every reissue since. Fight me. (pos",
@@ -1982,7 +2014,7 @@
               "text": "Post #2The 1974 pressing has a wider stereo image than every reissue since. Fight me. (pos"
             },
             "found": true,
-            "id": "LWH8kvgkz5aH",
+            "id": "BIn_EjuOzNxw",
             "isOrphaned": false,
             "isResolved": false,
             "pageKey": "http://127.0.0.1:4272/pages/infinite-scroll.html",
@@ -2070,7 +2102,7 @@
               "text": "Post #2The 1974 pressing has a wider stereo image than every reissue since. Fight me. (pos"
             },
             "found": true,
-            "id": "LWH8kvgkz5aH",
+            "id": "BIn_EjuOzNxw",
             "isOrphaned": false,
             "isResolved": false,
             "pageKey": "http://127.0.0.1:4272/pages/infinite-scroll.html",
@@ -2139,7 +2171,7 @@
               "text": "Post #2The 1974 pressing has a wider stereo image than every reissue since. Fight me. (pos"
             },
             "found": true,
-            "id": "LWH8kvgkz5aH",
+            "id": "BIn_EjuOzNxw",
             "isOrphaned": false,
             "isResolved": false,
             "pageKey": "http://127.0.0.1:4272/pages/infinite-scroll.html",
@@ -2208,7 +2240,7 @@
               "text": "Post #2The 1974 pressing has a wider stereo image than every reissue since. Fight me. (pos"
             },
             "found": true,
-            "id": "LWH8kvgkz5aH",
+            "id": "BIn_EjuOzNxw",
             "isOrphaned": false,
             "isResolved": false,
             "pageKey": "http://127.0.0.1:4272/pages/infinite-scroll.html",
@@ -2285,7 +2317,7 @@
               "text": "Post #2The 1974 pressing has a wider stereo image than every reissue since. Fight me. (pos"
             },
             "found": true,
-            "id": "LWH8kvgkz5aH",
+            "id": "BIn_EjuOzNxw",
             "isOrphaned": false,
             "isResolved": false,
             "pageKey": "http://127.0.0.1:4272/pages/infinite-scroll.html",
@@ -2318,90 +2350,76 @@
             "status": "orphaned",
             "docked": true
           },
-          "fails": [
-            "status=anchored",
-            "MIS-ANCHOR: badge sits on \"Post #14The 1974 pressing has a wider stereo image than \" — expected \"Post #2The 1974 pressing has a wider stereo image than e\"",
-            "badge data-anchor=anchored",
-            "docked badge is not dimmed (opacity 1)",
-            "docked badge border solid",
-            "docked badge has no orphan glyph"
-          ],
-          "ok": false,
+          "fails": [],
+          "ok": true,
           "probe": {
             "badge": {
-              "anchorAttr": "anchored",
+              "anchorAttr": "orphaned",
               "approximate": false,
-              "borderStyle": "solid",
+              "borderStyle": "dashed",
               "center": {
-                "x": 1175,
-                "y": 635
+                "x": 1172,
+                "y": 595
               },
               "hidden": false,
               "label": "comment (2)",
-              "marks": [],
-              "opacity": 1,
+              "marks": ["orphaned"],
+              "opacity": 0.55,
               "statusAttr": "open"
             },
-            "badgeOffset": {
-              "dx": -17,
-              "dy": -5
-            },
             "comments": 2,
-            "confidence": 0.946,
+            "confidence": 0,
             "dockRect": {
               "height": 134,
               "left": 248,
-              "top": 809,
+              "top": 769,
               "width": 944
             },
-            "element": {
-              "domId": null,
-              "key": "ARTICLE|Post #14The 1974 pressing has a wider stereo image than every reissue since. Fight me. (po",
-              "path": "html>body:nth-child(2)>main:nth-child(2)>div:nth-child(4)>article:nth-child(2)",
-              "rect": {
-                "height": 134,
-                "left": 248,
-                "top": 640,
-                "width": 944
-              },
-              "tag": "ARTICLE",
-              "text": "Post #14The 1974 pressing has a wider stereo image than every reissue since. Fight me. (po"
-            },
+            "element": null,
             "found": true,
-            "id": "LWH8kvgkz5aH",
-            "isOrphaned": false,
+            "id": "BIn_EjuOzNxw",
+            "isOrphaned": true,
             "isResolved": false,
             "pageKey": "http://127.0.0.1:4272/pages/infinite-scroll.html",
             "panel": {
               "counts": {
-                "open": 1,
+                "open": 0,
                 "resolved": 0,
-                "unanchored": 0
+                "unanchored": 1
               },
               "listed": true,
-              "section": "open"
+              "section": "unanchored"
             },
-            "status": "anchored",
+            "status": "orphaned",
             "threads": 1,
-            "via": "css"
+            "via": null
           }
         },
         {
           "label": "trace @ trim",
           "trace": {
-            "accepted": {
-              "confidence": 0.946,
-              "via": "css"
-            },
+            "accepted": null,
             "attempts": [
               {
-                "accepted": true,
-                "best": 0.946,
+                "accepted": false,
+                "best": 0,
                 "candidates": 1,
                 "selector": "css"
+              },
+              {
+                "accepted": false,
+                "best": 0,
+                "candidates": 1,
+                "selector": "nthPath"
+              },
+              {
+                "accepted": false,
+                "best": 0,
+                "candidates": 10,
+                "selector": "fingerprint-scan"
               }
             ],
-            "totalMs": 0.2999999523162842
+            "totalMs": 0.30000007152557373
           },
           "ok": true,
           "fails": []
@@ -2417,57 +2435,9 @@
               "textDigest": "post #2the 1974 pressing has a wider stereo image than every reissue since. fight me. (pos"
             },
             "matches": {
-              "@0.62": {
-                "confidence": 0.946,
-                "element": {
-                  "domId": null,
-                  "key": "ARTICLE|Post #14The 1974 pressing has a wider stereo image than every reissue since. Fight me. (po",
-                  "path": "html>body:nth-child(2)>main:nth-child(2)>div:nth-child(4)>article:nth-child(2)",
-                  "rect": {
-                    "height": 134,
-                    "left": 248,
-                    "top": 640,
-                    "width": 944
-                  },
-                  "tag": "ARTICLE",
-                  "text": "Post #14The 1974 pressing has a wider stereo image than every reissue since. Fight me. (po"
-                },
-                "via": "css"
-              },
-              "@0.85": {
-                "confidence": 0.946,
-                "element": {
-                  "domId": null,
-                  "key": "ARTICLE|Post #14The 1974 pressing has a wider stereo image than every reissue since. Fight me. (po",
-                  "path": "html>body:nth-child(2)>main:nth-child(2)>div:nth-child(4)>article:nth-child(2)",
-                  "rect": {
-                    "height": 134,
-                    "left": 248,
-                    "top": 640,
-                    "width": 944
-                  },
-                  "tag": "ARTICLE",
-                  "text": "Post #14The 1974 pressing has a wider stereo image than every reissue since. Fight me. (po"
-                },
-                "via": "css"
-              },
-              "@0.9": {
-                "confidence": 0.946,
-                "element": {
-                  "domId": null,
-                  "key": "ARTICLE|Post #14The 1974 pressing has a wider stereo image than every reissue since. Fight me. (po",
-                  "path": "html>body:nth-child(2)>main:nth-child(2)>div:nth-child(4)>article:nth-child(2)",
-                  "rect": {
-                    "height": 134,
-                    "left": 248,
-                    "top": 640,
-                    "width": 944
-                  },
-                  "tag": "ARTICLE",
-                  "text": "Post #14The 1974 pressing has a wider stereo image than every reissue since. Fight me. (po"
-                },
-                "via": "css"
-              }
+              "@0.62": null,
+              "@0.85": null,
+              "@0.9": null
             },
             "mode": "element",
             "selectors": [
@@ -2543,7 +2513,7 @@
               "text": "Post #2The 1974 pressing has a wider stereo image than every reissue since. Fight me. (pos"
             },
             "found": true,
-            "id": "LWH8kvgkz5aH",
+            "id": "BIn_EjuOzNxw",
             "isOrphaned": false,
             "isResolved": false,
             "pageKey": "http://127.0.0.1:4272/pages/infinite-scroll.html",
@@ -2576,20 +2546,20 @@
                 "selector": "css"
               }
             ],
-            "totalMs": 0.2999999523162842
+            "totalMs": 0.10000002384185792
           },
           "ok": true,
           "fails": []
         }
       ],
       "error": null,
-      "ms": 6426
+      "ms": 6360
     },
     {
       "name": "spa",
       "page": "/pages/spa.html",
       "url": "http://127.0.0.1:4272/pages/spa.html",
-      "id": "ZvIi4xgKba31",
+      "id": "Zz0I1gS0IS7o",
       "baseline": {
         "domId": null,
         "key": "LI|Re: the orphan dock — Wednesday",
@@ -2664,7 +2634,7 @@
               "text": "Re: the orphan dock — Wednesday"
             },
             "found": true,
-            "id": "ZvIi4xgKba31",
+            "id": "Zz0I1gS0IS7o",
             "isOrphaned": false,
             "isResolved": false,
             "pageKey": "http://127.0.0.1:4272/pages/spa.html?route=inbox",
@@ -2775,7 +2745,7 @@
               "text": "Re: the orphan dock — Wednesday"
             },
             "found": true,
-            "id": "ZvIi4xgKba31",
+            "id": "Zz0I1gS0IS7o",
             "isOrphaned": false,
             "isResolved": false,
             "pageKey": "http://127.0.0.1:4272/pages/spa.html?route=inbox",
@@ -2857,7 +2827,7 @@
               "text": "Re: the orphan dock — Wednesday"
             },
             "found": true,
-            "id": "ZvIi4xgKba31",
+            "id": "Zz0I1gS0IS7o",
             "isOrphaned": false,
             "isResolved": false,
             "pageKey": "http://127.0.0.1:4272/pages/spa.html?route=inbox",
@@ -2925,7 +2895,7 @@
               "text": "Re: the orphan dock — Wednesday"
             },
             "found": true,
-            "id": "ZvIi4xgKba31",
+            "id": "Zz0I1gS0IS7o",
             "isOrphaned": false,
             "isResolved": false,
             "pageKey": "http://127.0.0.1:4272/pages/spa.html?route=inbox",
@@ -2958,20 +2928,20 @@
                 "selector": "css"
               }
             ],
-            "totalMs": 0.10000002384185792
+            "totalMs": 0.20000004768371585
           },
           "ok": true,
           "fails": []
         }
       ],
       "error": null,
-      "ms": 7066
+      "ms": 7367
     },
     {
       "name": "attribute-churn",
       "page": "/pages/attribute-churn.html",
       "url": "http://127.0.0.1:4272/pages/attribute-churn.html",
-      "id": "lsAEm2VVEKJQ",
+      "id": "57N-wJOg4tzq",
       "baseline": {
         "domId": ":r01:",
         "key": "P|A fingerprint records the tag, the role, the depth and the neighbours — not the class list",
@@ -2979,7 +2949,7 @@
         "rect": {
           "height": 52,
           "left": 248,
-          "top": 825,
+          "top": 871,
           "width": 944
         },
         "tag": "P",
@@ -3002,7 +2972,7 @@
               "borderStyle": "solid",
               "center": {
                 "x": 1152,
-                "y": 820
+                "y": 866
               },
               "hidden": false,
               "label": "comment (1)",
@@ -3019,7 +2989,7 @@
             "dockRect": {
               "height": 52,
               "left": 248,
-              "top": 825,
+              "top": 871,
               "width": 944
             },
             "element": {
@@ -3029,14 +2999,14 @@
               "rect": {
                 "height": 52,
                 "left": 248,
-                "top": 825,
+                "top": 871,
                 "width": 944
               },
               "tag": "P",
               "text": "A fingerprint records the tag, the role, the depth and the neighbours — not the class list"
             },
             "found": true,
-            "id": "lsAEm2VVEKJQ",
+            "id": "57N-wJOg4tzq",
             "isOrphaned": false,
             "isResolved": false,
             "pageKey": "http://127.0.0.1:4272/pages/attribute-churn.html",
@@ -3069,7 +3039,7 @@
                 "selector": "attr"
               }
             ],
-            "totalMs": 0.20000004768371585
+            "totalMs": 0.19999992847442627
           },
           "ok": true,
           "fails": []
@@ -3090,7 +3060,7 @@
               "borderStyle": "solid",
               "center": {
                 "x": 1175,
-                "y": 781
+                "y": 827
               },
               "hidden": false,
               "label": "comment (2)",
@@ -3107,7 +3077,7 @@
             "dockRect": {
               "height": 52,
               "left": 248,
-              "top": 786,
+              "top": 832,
               "width": 944
             },
             "element": {
@@ -3117,14 +3087,14 @@
               "rect": {
                 "height": 52,
                 "left": 248,
-                "top": 786,
+                "top": 832,
                 "width": 944
               },
               "tag": "P",
               "text": "A fingerprint records the tag, the role, the depth and the neighbours — not the class list"
             },
             "found": true,
-            "id": "lsAEm2VVEKJQ",
+            "id": "57N-wJOg4tzq",
             "isOrphaned": false,
             "isResolved": false,
             "pageKey": "http://127.0.0.1:4272/pages/attribute-churn.html",
@@ -3157,7 +3127,7 @@
                 "selector": "attr"
               }
             ],
-            "totalMs": 0.10000002384185792
+            "totalMs": 0.19999992847442627
           },
           "ok": true,
           "fails": []
@@ -3204,7 +3174,7 @@
             "dockRect": {
               "height": 52,
               "left": 248,
-              "top": 825,
+              "top": 871,
               "width": 944
             },
             "element": {
@@ -3221,7 +3191,7 @@
               "text": "A fingerprint records the tag, the role, the depth and the neighbours — not the class list"
             },
             "found": true,
-            "id": "lsAEm2VVEKJQ",
+            "id": "57N-wJOg4tzq",
             "isOrphaned": false,
             "isResolved": false,
             "pageKey": "http://127.0.0.1:4272/pages/attribute-churn.html",
@@ -3254,7 +3224,7 @@
                 "selector": "attr"
               }
             ],
-            "totalMs": 0.19999992847442627
+            "totalMs": 0.20000004768371585
           },
           "ok": true,
           "fails": []
@@ -3274,55 +3244,74 @@
             "status": "anchored",
             "same": true
           },
-          "fails": ["status=orphaned", "no anchored element"],
-          "ok": false,
+          "fails": [],
+          "ok": true,
           "probe": {
             "badge": {
-              "anchorAttr": "orphaned",
-              "approximate": false,
-              "borderStyle": "dashed",
+              "anchorAttr": "anchored",
+              "approximate": true,
+              "borderStyle": "solid",
               "center": {
                 "x": 1172,
-                "y": 621
+                "y": 660
               },
               "hidden": false,
               "label": "comment (2)",
-              "marks": ["orphaned"],
-              "opacity": 0.55,
+              "marks": ["approximate"],
+              "opacity": 1,
               "statusAttr": "open"
             },
+            "badgeOffset": {
+              "dx": -20,
+              "dy": -5
+            },
             "comments": 2,
-            "confidence": 0,
+            "confidence": 0.75,
             "dockRect": {
               "height": 52,
               "left": 248,
-              "top": 825,
+              "top": 910,
               "width": 944
             },
-            "element": null,
+            "element": {
+              "domId": ":r11:",
+              "key": "P|A fingerprint records the tag, the role, the depth and the neighbours — not the class list",
+              "path": "html>body:nth-child(2)>main:nth-child(2)>section:nth-child(4)>p:nth-child(2)",
+              "rect": {
+                "height": 52,
+                "left": 248,
+                "top": 665,
+                "width": 944
+              },
+              "tag": "P",
+              "text": "A fingerprint records the tag, the role, the depth and the neighbours — not the class list"
+            },
             "found": true,
-            "id": "lsAEm2VVEKJQ",
-            "isOrphaned": true,
+            "id": "57N-wJOg4tzq",
+            "isOrphaned": false,
             "isResolved": false,
             "pageKey": "http://127.0.0.1:4272/pages/attribute-churn.html",
             "panel": {
               "counts": {
-                "open": 0,
+                "open": 1,
                 "resolved": 0,
-                "unanchored": 1
+                "unanchored": 0
               },
               "listed": true,
-              "section": "unanchored"
+              "section": "open"
             },
-            "status": "orphaned",
+            "status": "anchored",
             "threads": 1,
-            "via": null
+            "via": "css"
           }
         },
         {
           "label": "trace @ id churn",
           "trace": {
-            "accepted": null,
+            "accepted": {
+              "confidence": 0.75,
+              "via": "css"
+            },
             "attempts": [
               {
                 "accepted": false,
@@ -3331,25 +3320,13 @@
                 "selector": "attr"
               },
               {
-                "accepted": false,
-                "best": 0.575,
+                "accepted": true,
+                "best": 0.75,
                 "candidates": 1,
                 "selector": "css"
-              },
-              {
-                "accepted": false,
-                "best": 0.575,
-                "candidates": 1,
-                "selector": "nthPath"
-              },
-              {
-                "accepted": false,
-                "best": 0.575,
-                "candidates": 5,
-                "selector": "fingerprint-scan"
               }
             ],
-            "totalMs": 0.3999999761581421
+            "totalMs": 0.20000004768371585
           },
           "ok": true,
           "fails": []
@@ -3369,7 +3346,23 @@
               "textDigest": "a fingerprint records the tag, the role, the depth and the neighbours — not the class list"
             },
             "matches": {
-              "@0.62": null,
+              "@0.62": {
+                "confidence": 0.75,
+                "element": {
+                  "domId": ":r11:",
+                  "key": "P|A fingerprint records the tag, the role, the depth and the neighbours — not the class list",
+                  "path": "html>body:nth-child(2)>main:nth-child(2)>section:nth-child(4)>p:nth-child(2)",
+                  "rect": {
+                    "height": 52,
+                    "left": 248,
+                    "top": 665,
+                    "width": 944
+                  },
+                  "tag": "P",
+                  "text": "A fingerprint records the tag, the role, the depth and the neighbours — not the class list"
+                },
+                "via": "css"
+              },
               "@0.85": null,
               "@0.9": null
             },
@@ -3417,7 +3410,7 @@
               "borderStyle": "solid",
               "center": {
                 "x": 1175,
-                "y": 660
+                "y": 659
               },
               "hidden": false,
               "label": "comment (2)",
@@ -3434,7 +3427,7 @@
             "dockRect": {
               "height": 52,
               "left": 248,
-              "top": 886,
+              "top": 932,
               "width": 944
             },
             "element": {
@@ -3444,14 +3437,14 @@
               "rect": {
                 "height": 52,
                 "left": 248,
-                "top": 665,
+                "top": 664,
                 "width": 944
               },
               "tag": "P",
               "text": "A fingerprint records the tag, the role, the depth and the neighbours — not the class list"
             },
             "found": true,
-            "id": "lsAEm2VVEKJQ",
+            "id": "57N-wJOg4tzq",
             "isOrphaned": false,
             "isResolved": false,
             "pageKey": "http://127.0.0.1:4272/pages/attribute-churn.html",
@@ -3509,7 +3502,7 @@
             "dockRect": {
               "height": 52,
               "left": 248,
-              "top": 886,
+              "top": 932,
               "width": 944
             },
             "element": {
@@ -3526,7 +3519,7 @@
               "text": "A fingerprint records the tag, the role, the depth and the neighbours — not the class list"
             },
             "found": true,
-            "id": "lsAEm2VVEKJQ",
+            "id": "57N-wJOg4tzq",
             "isOrphaned": false,
             "isResolved": false,
             "pageKey": "http://127.0.0.1:4272/pages/attribute-churn.html",
@@ -3559,14 +3552,14 @@
                 "selector": "attr"
               }
             ],
-            "totalMs": 0.10000002384185792
+            "totalMs": 0.19999992847442627
           },
           "ok": true,
           "fails": []
         }
       ],
       "error": null,
-      "ms": 5672
+      "ms": 5636
     }
   ]
 }

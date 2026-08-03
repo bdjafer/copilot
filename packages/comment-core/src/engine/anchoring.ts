@@ -275,17 +275,23 @@ export function createAnchoringController(deps: AnchoringDeps): AnchoringControl
         entry.ref = null
         // §4.2.6: `pending → orphaned` fires only after the first full-document pass, so a cold
         // load never flashes orphans. `rect` is retained so an orphaned badge can still dock.
-        candidate = {
-          status: firstPassDone
+        const status: AnchorStatus = firstPassDone
+          ? 'orphaned'
+          : previous.status === 'anchored'
             ? 'orphaned'
-            : previous.status === 'anchored'
-              ? 'orphaned'
-              : 'pending',
+            : 'pending'
+        candidate = {
+          status,
           element: null,
           range: null,
           confidence: 0,
           via: null,
-          rect: previous.rect,
+          // A thread that orphans on the FIRST pass after a cold load has never had a live
+          // rect — orphanhood is derived, never persisted, so nothing carried one across the
+          // reload. `capture.rect` is that missing position: written once at placement time,
+          // it is what makes PLAN §3.3's "docked at last-known position" true for a cold
+          // orphan too (bench F1) instead of drawing no badge at all.
+          rect: previous.rect ?? (status === 'orphaned' ? (thread.capture?.rect ?? null) : null),
         }
       }
 

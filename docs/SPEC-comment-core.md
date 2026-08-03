@@ -264,6 +264,14 @@ export interface ElementCapture {
   cssPath: string
   page: { url: string; title: string }
   capturedAt: string
+  /**
+   * Document-space rect of the target at capture time — the dock position of last resort
+   * (decision log #29). `Anchoring.rect` is a live derivation and orphanhood is never a write,
+   * so a thread that orphans on the FIRST pass after a cold load has no last-known position at
+   * all. Written once, by `captureElement`, never updated. Additive and optional: a record
+   * written before this field existed simply has none and behaves exactly as it did.
+   */
+  rect?: DocumentRect
 }
 
 export interface AnchorMatch {
@@ -351,10 +359,32 @@ export interface AnchorAttempt {
   ms: number
 }
 
-/** Fingerprint similarity, 0..1. Tag mismatch ⇒ 0. Semantics > classes > structure > text. */
+/**
+ * Fingerprint similarity, 0..1. Tag mismatch ⇒ 0. Semantics > classes > structure > text.
+ *
+ * That weight ordering governs the *average*; two rules govern what a component's mismatch
+ * proves, and both can veto it (decision log #26, #27):
+ *
+ *  - **The text digest is the final verifier.** A candidate that no live identity signal
+ *    confirms — no `id` and no attribute value that both matches AND is unique in the
+ *    document — must score ≥ 0.90 on the digest (exact match or containment) or the whole
+ *    candidate is refused. A candidate that IS identified is refused only on a total
+ *    contradiction: two non-empty digests with no word in common.
+ *  - **Regenerated evidence is absent, not contradicted.** An `id`/attribute the candidate
+ *    carries under a *different* value scores 0.5 ("no information") when the stored value
+ *    matches nothing anywhere in the document; a value the candidate does not carry at all
+ *    still scores 0.
+ *
+ * `stableClasses` is compared by **coverage of the stored set** — extra classes on the live
+ * element are not looked at, so a per-render hash or a `is-selected` state class costs nothing.
+ */
 export function scoreCandidate(element: Element, fingerprint: ElementFingerprint): number
 
-/** Build a fingerprint. Filters hashed/utility class names (finder v4 heuristics). */
+/**
+ * Build a fingerprint. A class is admitted as evidence only when it is **word-like** (finder v4
+ * heuristics) **and corroborated** — carried by more than one element in the document
+ * (decision log #28). Without a document (a detached node) only the word-like half applies.
+ */
 export function fingerprintElement(
   element: Element,
   options?: { classFilter?: (className: string) => boolean },
@@ -1550,6 +1580,14 @@ comments on read. Both GC passes are silent (no events).
    above classes/structure; `textDigest` as final verifier). This is Hypothesis's
    `maybeAssertQuote` discipline as a property of the pipeline, not a per-strategy opt-in — a
    stale-but-valid CSS path can never silently attach to the wrong element.
+   **"Final verifier" is a veto, not a weight (normative).** A candidate no live identity signal
+   confirms is refused outright below a 0.90 digest similarity, whatever the other components
+   say; a candidate that is identified is refused on a total text contradiction. The bench's F2
+   is the case this exists for: `class` and `rect` are shared by every card of a templated feed,
+   so without the veto they carried a *different* post to 0.946 and the badge moved to it.
+   Resolution asks the document at most `1 + min(attrs, 8)` questions per resolve — "does this
+   stored id / attribute value still match anything?" — and shares the answers across every
+   candidate of that resolve, including all `scanLimit` of the scan.
 3. First candidate at or above `threshold` (0.62) wins. Otherwise a fingerprint scan over the
    first `scanLimit` (500) same-tag elements in `root`. Below threshold ⇒ `null`.
 4. Text mode additionally runs the vendored Hypothesis `TextQuote → TextPosition` chain with
@@ -1560,6 +1598,11 @@ comments on read. Both GC passes are silent (no events).
    untouched). Added nodes ⇒ orphaned threads retried scoped to the added subtrees first
    (`cheap` strategies only), full-document retry when `rescanIdle` and the browser is idle.
    Per-thread `WeakRef<Element>` cache short-circuits an unchanged element.
+   **The orphan dock (normative).** An orphaned thread keeps the last `Anchoring.rect` it had;
+   a thread that orphans with no rect at all — the first pass after a cold load, where the
+   element was already absent — docks at `capture.rect` instead. Both are reads: orphanhood is
+   still never a write (§4.1 row 14). Only a record captured before `ElementCapture.rect`
+   existed can end up with `rect: null`, and comment-ui draws no badge for it.
 6. **SPA navigation (normative): poll, do not patch.** `history.pushState` / `replaceState` are
    **not** patched. In an MV3 content script the isolated world has its own `history` binding,
    so a patch installed there never intercepts the page's own calls — `page:change` would
@@ -1595,9 +1638,9 @@ comments on read. Both GC passes are silent (no events).
 | `store/kv.ts` | 170 | `createKeyValueStore`, per-record key layout, namespace-filtered `watch` fan-out, quota mapping. |
 | `store/local-storage.ts` | 70 | `createLocalStorageStore` over `kv.ts` + `storage` event. |
 | `anchor/index.ts` | 45 | Anchor barrel. |
-| `anchor/fingerprint.ts` | 150 | `fingerprintElement`, class filtering, attr subset, text digest. |
-| `anchor/score.ts` | 120 | `scoreCandidate` weighting. |
-| `anchor/capture.ts` | 120 | `captureElement`, sanitizer, truncation, cssPath. |
+| `anchor/fingerprint.ts` | 175 | `fingerprintElement`, word-like + corroborated class filtering, attr subset, text digest. |
+| `anchor/score.ts` | 275 | `scoreCandidate` weighting, the text verifier (#26), the evidence index (#27). |
+| `anchor/capture.ts` | 130 | `captureElement`, sanitizer, truncation, cssPath, dock rect. |
 | `anchor/strategies/css.ts` | 60 | `@medv/finder` wrapper. |
 | `anchor/strategies/attr.ts` | 80 | id / data-testid / aria-label / role+name. |
 | `anchor/strategies/nth-path.ts` | 70 | Structural path. |
@@ -1920,6 +1963,10 @@ describe('chrome.storage store', () => {
 | 23 | Crash safety without transactions | Comment-first, thread-second + read-time GC (A) | thread-first; requiring `transaction` | The inverse order can create the empty thread the invariant forbids; this order can only create an invisible orphan comment. |
 | 24 | Testing kit | Runner-agnostic `ConformanceCase[]` arrays (A) | C's `runStoreConformance(factory, { describe, it, expect })` | Passing the runner's globals in couples the kit to vitest; returning arrays works in vitest, node:test and bun with one `for` loop. |
 | 25 | `inspect()` | Kept on the engine (A) | C's `snapshot()` + `metrics` + `EngineSnapshot` | One serializable method feeds the devtools panel and the options page. Two overlapping introspection APIs would not. |
+| 26 | The `textDigest`'s role in `scoreCandidate` | **Final verifier (a veto), in two tiers**: a candidate no live identity signal confirms needs ≥ 0.90 digest similarity (exact or containment) or is refused; an identified candidate is refused only on a total contradiction (two non-empty digests, no shared word) | leaving it a fifth weighted contribution at 0.12; requiring a margin over the runner-up; raising the global `threshold` | §4.6.2 already called it "the final verifier" and the code made it 0.12 of a weighted average, so it could never refuse anything. Bench F2: after a feed was trimmed, `stableClasses` + `rectHint` — identical for every card of a templated list — supplied 0.38 of the 0.50 available weight and carried the thread to a **different post at 0.946**, accepted at thresholds 0.62/0.85/0.9 alike. A margin rule does not help (0.946 vs 0.797 is a wide margin); raising the threshold breaks every honest low-signal anchor. The cost is explicit: an element with **no** id/attrs whose prose was substantially rewritten now orphans instead of re-anchoring approximately — the direction PLAN §3.1 demands. |
+| 27 | A regenerated `id` / attribute value | **No information (0.5), not a mismatch** — but only when the candidate carries the attribute under a *different* value AND the stored value matches nothing in the document | scoring it 0 / 0.25 unconditionally (the old rule); dropping volatile-looking values at capture with finder's `idName`/`attr` word-like tests | Bench F3: a paragraph whose text was byte-identical scored 0.575 and orphaned because React regenerated four bookkeeping attributes — an element cannot be "not itself" on the strength of a value that now identifies nothing. Capture-side filtering was rejected because finder's word-like test also throws away every legitimate value containing a digit (`data-testid="row-3"`, `href="/docs/page-2"`), which is a much larger loss of discrimination. The rescue is deliberately narrow: an attribute the candidate does not carry **at all** still scores 0, so "the app stopped emitting it" is not confused with "the app renamed it". Residual risk, accepted and recorded: two elements with byte-identical text and per-element ids, where the anchored one was deleted, now match the survivor. |
+| 28 | What makes a class stable evidence | **Word-like AND corroborated** — carried by a second element in the document — at capture; **coverage of that vetted set** (not a symmetric Jaccard) at resolve | word-like alone (finder v4, the old rule); filtering the live class list at resolve; "survive a second observation" over time | Bench F4 measured `css-<base36×6>` passing finder's word-like test **5.8 %** of the time, and such a class is unique in the document by construction. One render in seventeen therefore baked a per-render-random class into the fingerprint, and the symmetric Jaccard punished the *live* element for carrying new ones — `attribute-churn` scored 5/6, 4/6, 4/6, 2/6 over four runs of the same scenario. Corroboration is the cheapest signal that separates a hash from `card`; coverage makes the resolve side ignore new classes entirely, which also stops a `is-selected` state class from costing anything. The cost: a genuinely singleton semantic class (`sidebar`) is no longer evidence. Classes are 0.22 and, since #26, never decisive on their own — a fair trade for a deterministic anchor. |
+| 29 | Where an orphan's dock position comes from after a reload | **`ElementCapture.rect`** — additive optional field, written once at capture, read only when a thread orphans with no live rect | persisting `Anchoring.rect` on every pass; docking to the panel edge; narrowing PLAN §3.3's claim to warm orphans | PLAN §3.3 promises "dimmed badge docked at last-known position". Bench F1: after a reload with the anchor element absent, `anchoring.rect` was `null` — the rect is a live derivation and orphanhood is never persisted (§4.1 row 14) — so comment-ui drew **no badge at all**. Persisting the live rect would make orphaning a write and break the property the popover scenario asserts on raw bytes; docking to the panel edge answers a different question ("where is the panel") than the one PLAN asks ("where was it"). Capture time is the one moment the element is guaranteed present, and one field on a snapshot type that already exists to survive the element is the smallest correct place for it. |
 
 ---
 

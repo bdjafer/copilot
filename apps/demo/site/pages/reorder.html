@@ -23,15 +23,16 @@
         </ol>
         Rows deliberately have no <code>id</code>: position and CSS path are both worthless here, so
         the match has to come from the fingerprint and the row's own text. <br /><br />
-        <strong>Why the demo raises <code>anchoring.threshold</code> to 0.9</strong> (in
-        <code>assets/demo.js</code>, for every page). After a shuffle the stored CSS selector
+        <strong>Why the demo no longer raises <code>anchoring.threshold</code></strong> (see
+        <code>assets/demo.js</code>). After a shuffle the stored CSS selector
         <code>#list &gt; li:nth-of-type(3)</code> still matches — it now points at whoever moved
-        into that slot. That wrong row scores ≈0.76: tag, classes, depth and shape all still match,
-        and only the text differs, which is worth 0.12 of the total weight. The library's default
-        accept score is 0.62, so the resolver takes it and never runs the fingerprint scan that
-        would have found the row at its new position (score 1.00). Raising the accept score is the
-        documented knob; whether the default itself should move is a question for the M2 anchoring
-        bench against real sites (PLAN §3.8).
+        into that slot. That wrong row used to score ≈0.76, because tag, classes, depth and shape
+        all still matched and only the text differed, which was worth 0.12 of a weighted average;
+        the page defended itself by demanding 0.9 of every match. The text digest is now a
+        <em>verifier</em> rather than a fifth contribution (SPEC §2.5, decision log #26), so a row
+        that nothing identifies and whose text disagrees scores <strong>0</strong> at any threshold,
+        the fingerprint scan runs, and it finds the real row at 1.00. The demo is back on the
+        library's own 0.62.
       </div>
 
       <div class="demo-controls">

@@ -23,8 +23,20 @@ export const BUILT_ENTRIES = {
   '@astrale-os/comment-ui': resolve(packages, 'comment-ui/dist/index.js'),
 } as const
 
-/** The demo's canned-reply delay, shortened. Long enough that `settle()` never crosses it. */
-export const ECHO_DELAY = 25
+/**
+ * The demo's canned-reply delay, shortened. **Long enough that `settle()` never crosses it** —
+ * which is the whole contract, because `place → send → …` asserts "Send wrote exactly one
+ * comment" after two `settle()`s and a `reanchor()`, and a reply that lands inside that window
+ * makes it two.
+ *
+ * 25 ms did not hold that contract. `settle()` is four macrotask hops, and under a parallel
+ * five-package `pnpm --filter … test` run each hop can take tens of milliseconds — the failure
+ * reproduced 5 times in 6 on an untouched checkout, and never in an isolated `--filter
+ * exp-spec-demo` run, which is exactly the signature of a wall-clock budget being eaten by load
+ * elsewhere in the process. 400 ms costs the suite nothing: `waitForEcho`/`waitForLog` poll on a
+ * 2 s deadline and return as soon as the reply lands.
+ */
+export const ECHO_DELAY = 400
 
 /** The renderer coalesces onto a microtask and the domain writes are promises. */
 export async function settle(rounds = 4): Promise<void> {

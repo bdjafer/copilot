@@ -123,6 +123,17 @@ export interface ElementCapture {
   cssPath: string
   page: { url: string; title: string }
   capturedAt: string
+  /**
+   * Document-space rect of the target **at capture time** — the dock position of last resort
+   * (§4.6.5, PLAN §3.3 "dimmed badge docked at last-known position").
+   *
+   * `Anchoring.rect` is a live derivation and orphanhood is never a write, so a thread that
+   * orphans on the first pass after a cold load has no last-known position at all and
+   * comment-ui draws no badge (bench F1). This is the one position that survives a reload; it
+   * is written once, by `captureElement`, and never updated. Optional and additive: records
+   * written by earlier builds simply have none and behave exactly as they did.
+   */
+  rect?: DocumentRect
 }
 
 /* -------------------------------------------------------------------------------------- §2.6 */

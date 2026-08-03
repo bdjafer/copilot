@@ -212,6 +212,26 @@ async function perturb(api, label, selector, settle = 700) {
   api.note(`perturbation: ${label}`, { selector, how })
 }
 
+/**
+ * Wait until the store stops changing, and return the settled bytes.
+ *
+ * Every demo page attaches the echo responder, which replies to a new thread on an **800 ms
+ * timer** — and a reply is a store write. Any check that compares raw store bytes across a
+ * perturbation therefore has to take its "before" reading *after* that write has landed, or it
+ * measures the responder rather than the perturbation. Recorded runs have shown both outcomes
+ * from the same assertion, which is exactly the kind of coin flip a bench must not report.
+ */
+async function settledStoreBytes(timeoutMs = 4000) {
+  const deadline = Date.now() + timeoutMs
+  let previous = evalPage('return { bytes: storeBytes() }').bytes
+  for (;;) {
+    await sleep(300)
+    const current = evalPage('return { bytes: storeBytes() }').bytes
+    if (current === previous || Date.now() > deadline) return current
+    previous = current
+  }
+}
+
 /** Resolves a positional selector for the element whose text matches, at placement time. */
 function selectorFor(query) {
   return evalPage(`
@@ -315,12 +335,12 @@ const SCENARIOS = {
     await perturb(api, 'Move first row down', '#up')
     api.check('after single-row move', { status: 'anchored', same: true, tracks: true })
 
-    const before = evalPage('return { bytes: storeBytes() }')
+    const before = await settledStoreBytes()
     await perturb(api, 'Remove Kiwi', '#remove')
     api.check('after removal', { status: 'orphaned', docked: true, panelSection: 'unanchored' })
     api.resolve('stored anchor re-resolved with Kiwi gone')
-    const after = evalPage('return { bytes: storeBytes() }')
-    api.note('store untouched by orphaning', { equal: before.bytes === after.bytes })
+    const after = evalPage('return { bytes: storeBytes() }').bytes
+    api.note('store untouched by orphaning', { equal: before === after })
     api.shot('orphaned')
 
     await perturb(api, 'Restore all rows', '#restore')
@@ -352,17 +372,17 @@ const SCENARIOS = {
     api.trace('trace @ placement')
     api.shot('anchored-open')
 
-    const before = evalPage('return { bytes: storeBytes() }')
+    const before = await settledStoreBytes()
     await perturb(api, 'close the popover (content unmounts)', '#toggle-portal')
     api.check('orphaned while closed', {
       status: 'orphaned',
       docked: true,
       panelSection: 'unanchored',
     })
-    const after = evalPage('return { bytes: storeBytes() }')
+    const after = evalPage('return { bytes: storeBytes() }').bytes
     api.note('orphaning wrote nothing to the store', {
-      equal: before.bytes === after.bytes,
-      bytes: before.bytes.length,
+      equal: before === after,
+      bytes: before.length,
     })
     api.shot('orphaned-closed')
 
@@ -391,10 +411,10 @@ const SCENARIOS = {
       status: 'orphaned',
       panelSection: 'unanchored',
     })
-    // Split out deliberately: this is the ONE claim in PLAN §3.3 / SPEC §5.1 that this bench
-    // finds untrue on a cold load. `anchoring.rect` is a live derivation and is never
-    // persisted, so a thread that orphans on the FIRST resolution pass has no rect to dock at
-    // and comment-ui draws no badge at all (`badgeVisible`, badge.ts). See bench/results.md.
+    // Split out deliberately: PLAN §3.3 / SPEC §5.1's cold-load dock, filed as F1 and fixed in
+    // wave 4. `anchoring.rect` is still a live derivation that is never persisted, so a thread
+    // orphaning on the FIRST resolution pass has no rect of its own — it now docks at
+    // `capture.rect` (SPEC §2.4, decision log #29) instead of drawing no badge at all.
     api.check('after reload, popover closed — badge docks (PLAN §3.3)', { docked: true })
     api.shot('orphaned-after-reload')
 
@@ -477,13 +497,14 @@ const SCENARIOS = {
     })
     api.shot('placed-inbox')
 
-    const before = evalPage('return { bytes: storeBytes(), pageKey: engine.pageKey }')
+    const beforeBytes = await settledStoreBytes()
+    const beforeKey = evalPage('return { pageKey: engine.pageKey }').pageKey
     await perturb(api, 'route → settings', '[data-route="settings"]', 600)
     api.check('gone on another route', { absent: true, threads: 0 })
     const after = evalPage('return { bytes: storeBytes(), pageKey: engine.pageKey }')
     api.note('leaving the route deletes nothing', {
-      pageKeyChanged: before.pageKey !== after.pageKey,
-      storeUnchanged: before.bytes === after.bytes,
+      pageKeyChanged: beforeKey !== after.pageKey,
+      storeUnchanged: beforeBytes === after.bytes,
       recordStillStored: after.bytes.includes(placed.id),
     })
     api.shot('other-route')

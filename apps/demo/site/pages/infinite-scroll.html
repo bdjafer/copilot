@@ -56,10 +56,12 @@
       const all = []
 
       // Every card has the same shape, so the ONLY thing telling two posts apart is what they
-      // say. Shared boilerplate would defeat that: the score gives text 0.12 against 0.22 for
-      // classes and 0.16 for structure, so two rows reading "Item N of an endless feed" are the
-      // same row as far as the anchor is concerned. Real feeds do not read like that, and
-      // neither does this one.
+      // say — and with 12 bodies over a 22-post feed, post N and post N+12 say very nearly the
+      // same thing. That near-duplicate is the point: it is what the bench used to mis-anchor on
+      // (results.md F2), and what SPEC §2.5's text verifier now refuses. A card carries no id
+      // and no data-*, so `class` and box size — identical for every card here — cannot carry a
+      // match on their own; the digest has to agree, and 15 shared tokens out of 17 is not
+      // agreement.
       const BODIES = [
         'Sourdough starter died over the holidays. Anyone still keeping one alive on rye?',
         'Found a heron standing in the canal at dawn, completely still, for eleven minutes.',

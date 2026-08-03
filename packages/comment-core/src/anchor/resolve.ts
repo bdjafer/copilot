@@ -25,7 +25,7 @@ import type {
 } from './types.ts'
 
 import { elementOf, elementOfNode, isElement, isRange, rootContains, textRootOf } from './dom.ts'
-import { scoreCandidate } from './score.ts'
+import { createEvidenceIndex, scoreAgainst } from './score.ts'
 import { byCostThenWeight, mergeStrategies } from './strategies/index.ts'
 import { matchQuote } from './vendor/hypothesis/match-quote.ts'
 import { textOffsets, textPositionToRange } from './vendor/hypothesis/text-range.ts'
@@ -92,7 +92,14 @@ function run(anchor: AnchorDescriptor, options?: ResolveOptions): ResolveRun {
   const threshold = options?.threshold ?? DEFAULT_THRESHOLD
   const scanLimit = options?.scanLimit ?? DEFAULT_SCAN_LIMIT
   const budgetMs = options?.budgetMs ?? DEFAULT_BUDGET_MS
-  const score = options?.scoring ?? scoreCandidate
+  // One index per resolve: "does the document still contain this stored id / attribute value?"
+  // depends on the fingerprint and the document, never on the candidate, so the lookups are
+  // paid once and shared by every candidate — including all `scanLimit` of a fingerprint scan.
+  const evidence = createEvidenceIndex(doc)
+  const score =
+    options?.scoring ??
+    ((element: Element, fingerprint: ElementFingerprint): number =>
+      scoreAgainst(element, fingerprint, evidence))
   const strategies = (options?.strategies as readonly AnyStrategy[] | undefined) ?? undefined
   const ordered = mergeStrategies(strategies).sort(byCostThenWeight)
 

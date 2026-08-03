@@ -43,7 +43,10 @@ describe('§4.6.2 strategy order + unconditional verification', () => {
     const { anchor } = captureTarget(range)
     doc.body.innerHTML = '' // force every strategy to be attempted
 
-    const order = explainAnchor(anchor, { document: doc }).attempts.map((a) =>
+    // `budgetMs` is pinned wide open on purpose: this asserts the ORDER of six attempts, and the
+    // 12 ms default is a wall clock a loaded machine can exhaust after three of them — which
+    // turns an ordering assertion into a machine-speed one. The budget has its own test below.
+    const order = explainAnchor(anchor, { document: doc, budgetMs: 60_000 }).attempts.map((a) =>
       a.selector === 'fingerprint-scan' ? a.selector : a.selector.type,
     )
     // textQuote is weight 70 but cost 'fuzzy', so nthPath (40, cheap) precedes it.
@@ -215,7 +218,9 @@ describe('§2.5 explainAnchor', () => {
     const doc = page('<div id="t" data-testid="c" class="card">hello world</div>')
     const { anchor } = captureTarget(doc.querySelector('#t')!)
     doc.body.innerHTML = ''
-    const trace = explainAnchor(anchor, { document: doc })
+    // Same reason as "cheap strategies run before fuzzy ones": counting attempts under the
+    // 12 ms default makes the assertion depend on how busy the machine is.
+    const trace = explainAnchor(anchor, { document: doc, budgetMs: 60_000 })
     const kinds = trace.attempts.map((a) =>
       a.selector === 'fingerprint-scan' ? a.selector : a.selector.type,
     )

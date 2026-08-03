@@ -148,7 +148,8 @@ describe('§2.5 captureTarget', () => {
   })
 
   test('the fingerprint is captured alongside the selectors — never hand-built', () => {
-    const doc = page('<div id="t" class="card" role="button">hello</div>')
+    // Two cards: §2.5 admits a class as evidence only once a second element corroborates it.
+    const doc = page('<div id="t" class="card" role="button">hello</div><div class="card">x</div>')
     const { anchor } = captureTarget(doc.querySelector('#t')!)
     expect(anchor.fingerprint.tag).toBe('div')
     expect(anchor.fingerprint.id).toBe('t')

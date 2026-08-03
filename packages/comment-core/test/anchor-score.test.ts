@@ -32,9 +32,30 @@ describe('§2.5 fingerprintElement', () => {
     expect(fingerprintElement(el('<p>x</p>')).id).toBeUndefined()
   })
 
-  test('hashed and utility class names are filtered out; word-like ones survive', () => {
-    const fp = fingerprintElement(el('<p class="card sc-bdVaJa css-1a2b3c p-4 article-body">x</p>'))
+  test('hashed and utility class names are filtered out; corroborated word-like ones survive', () => {
+    const doc = page(
+      '<p class="card sc-bdVaJa css-1a2b3c p-4 article-body">x</p>' +
+        '<p class="card css-9z8y7x article-body">y</p>',
+    )
+    const fp = fingerprintElement(doc.querySelector('p')!)
     expect(fp.stableClasses).toEqual(['article-body', 'card'])
+  })
+
+  test('a word-like class carried by ONE element is not evidence (§2.5 corroboration)', () => {
+    // The bench measured `css-<base36×6>` passing finder's word-like filter 5.8 % of the time,
+    // and such a class is unique in the document by construction — so "seen twice" is what
+    // separates a per-render hash from `card`. A genuinely singleton class pays the same price.
+    const doc = page('<p class="card css-heroic sidebar">x</p><p class="card">y</p>')
+    expect(fingerprintElement(doc.querySelector('p')!).stableClasses).toEqual(['card'])
+  })
+
+  test('the measured adversarial hashes never survive, whatever they spell', () => {
+    // Every one of these passes finder's word-like test; every one is regenerated per render.
+    const hashed = ['css-heroic', 'css-tuvalu', 'sc-bdvaja', 'css-liaise']
+    for (const name of hashed) {
+      const doc = page(`<p class="deck ${name}">x</p><p class="deck">y</p>`)
+      expect(fingerprintElement(doc.querySelector('p')!).stableClasses).toEqual(['deck'])
+    }
   })
 
   test('classFilter overrides the built-in heuristic', () => {
@@ -91,14 +112,24 @@ describe('§2.5 scoreCandidate', () => {
   })
 
   test('classes outweigh text: losing the text costs less than losing the classes', () => {
+    // Degrade ONE component at a time on the element itself, so its id keeps identifying it and
+    // the §4.6.2 text verifier — which refuses an unidentified candidate outright — stays out of
+    // the way. That is the only context in which the weight ordering is still observable.
     const doc = page(
-      '<p class="card article-body">hello world</p>' +
-        '<p class="card article-body">totally other prose</p>' +
-        '<p class="nav sidebar">hello world</p>',
+      '<p id="row" class="card article-body">hello world</p><p class="card article-body">x</p>',
     )
-    const [target, textChanged, classesChanged] = Array.from(doc.querySelectorAll('p'))
-    const fp = fingerprintElement(target!)
-    expect(scoreCandidate(textChanged!, fp)).toBeGreaterThan(scoreCandidate(classesChanged!, fp))
+    const target = doc.querySelector('#row')!
+    const fp = fingerprintElement(target)
+
+    target.className = 'nav sidebar'
+    const classesLost = scoreCandidate(target, fp)
+    target.className = 'card article-body'
+    // Rewritten, but still about something: a digest with NO word in common is refused
+    // outright by the verifier, which is a different rule from the weight ordering.
+    target.textContent = 'hello, mostly other prose now'
+    const textLost = scoreCandidate(target, fp)
+
+    expect(textLost).toBeGreaterThan(classesLost)
   })
 
   test('an element whose only evidence is its text is scored on its text alone', () => {

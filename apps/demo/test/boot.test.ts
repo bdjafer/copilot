@@ -102,7 +102,9 @@ describe('bootDemo wires the page', () => {
     expect(api.ui.root.querySelector('.cc-panel')?.getAttribute('data-open')).toBe('true')
     // The pages' own configuration reached the engine, rather than the library defaults.
     expect(api.engine.modes.map((mode) => mode.kind)).toEqual(DEMO_MODES.map((mode) => mode.kind))
-    expect(DEMO_ANCHORING.threshold).toBe(0.9)
+    // Back on the library default: the 0.9 the demo used to demand was a workaround for the
+    // scoring arithmetic SPEC §2.5 / decision log #26 replaced.
+    expect(DEMO_ANCHORING.threshold).toBe(0.62)
     expect(bar('[data-demo="counts"]').textContent).toBe('0 open · 0 resolved · 0 orphaned')
   })
 
@@ -152,18 +154,21 @@ describe('bootDemo wires the page', () => {
     expect(lines.some((line) => /^echo → .+ reopened=false deduped=false$/.test(line))).toBe(true)
     expect(lines.every((line) => !line.includes('undefined'))).toBe(true)
 
-    // The two anchoring branches of `describe()`, which only a TRANSITION reaches. Renaming the
-    // class the selector matched drops the thread below the demo's 0.9 threshold — it orphans
-    // rather than pointing at the wrong element, which is what that threshold is for…
-    const intro = document.querySelector('.intro')
-    intro?.setAttribute('class', 'intro-renamed')
+    // The two anchoring branches of `describe()`, which only a TRANSITION reaches. Taking the
+    // paragraph out of the page orphans the thread: the badge docks instead of moving to some
+    // other paragraph. (Renaming its class used to be enough. §2.5's class rule now ignores a
+    // class that no second element corroborates — bench F4 — and an element whose text is
+    // unchanged is still the same element, so a rename is no longer a transition at all.)
+    const intro = document.querySelector('.intro')!
+    const host = intro.parentElement!
+    intro.remove()
     await api.engine.reanchor()
     await settle()
     expect(api.engine.getThreadView(threadId)?.isOrphaned).toBe(true)
     expect(logLines()[0]).toMatch(/^thread:orphaned \S+ — badge docks, nothing is written$/)
 
     // …and putting it back re-anchors at 1.00, which is the `p.confidence.toFixed(2)` line.
-    intro?.setAttribute('class', 'intro')
+    host.append(intro)
     await api.engine.reanchor()
     await settle()
     expect(logLines()[0]).toMatch(/^thread:anchored \S+ via \S+ \(\d\.\d{2}\) ← orphaned$/)

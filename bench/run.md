@@ -4,8 +4,10 @@ PLAN §3.8's benchmark, as actually executed: a real Chromium driven by
 [`agent-browser`](https://github.com/agent-browser/agent-browser) over CDP, placing real comment
 threads with real keystrokes and real clicks, then asserting against the live DOM.
 
-Results — including the three failures — are in [`results.md`](./results.md). Raw evidence is in
-`results.json` (demo pages) and `results-sites.json` (real sites); screenshots in `shots/`.
+Results are in [`results.md`](./results.md) — including the four findings this bench filed and
+wave 4 fixed (SPEC-comment-core decision log #26–#29), which are kept there with their original
+diagnosis and their new numbers. Raw evidence is in `results.json` (demo pages) and
+`results-sites.json` (real sites); screenshots in `shots/`.
 
 ## What this bench proves, and what it does not
 
@@ -63,9 +65,10 @@ Outputs: `bench/results.json`, `bench/results-sites.json`, `bench/shots/*.png`.
 `run.mjs` has no repeat mode and `results.json` holds a single execution. A scenario is only
 known to be deterministic once it has been run more than once, so **`results.md` must state the
 repeat count behind every claim of stability** and must not promote an n = 1 pass to a general
-statement. Not hypothetical: `attribute-churn` reads 5/6 in the recorded run and scores 2/6–5/6
-across four (`results.md` F4), and the page's headline conclusion had to be withdrawn. Before
-quoting a scenario as stable:
+statement. Not hypothetical: `attribute-churn` once read 5/6 in the recorded run and scored
+2/6–5/6 across four (`results.md` F4), and the page's headline conclusion had to be withdrawn.
+The engine bug behind that is fixed and the scenario is now 6/6 in 4 runs out of 4 — which is a
+claim that also had to be earned by running it four times. Before quoting a scenario as stable:
 
 ```bash
 for i in 1 2 3 4; do BENCH_BASE=http://127.0.0.1:4272 node bench/run.mjs <scenario>; done
@@ -146,6 +149,16 @@ can never quietly stop being real. Every perturbation in the recorded run is `cd
 The viewport is pinned to 1440×900 for the same reason: at the default 1280×577 the demo pages'
 control rows sit on the fold.
 
+### Reading the store across a perturbation needs `settledStoreBytes()`
+
+Three notes compare raw `localStorage` bytes before and after a perturbation, to show that
+orphaning and route changes write nothing (`popover`, `reorder`, `spa`). Every demo page also
+attaches the echo responder, which replies to a new thread on an **800 ms timer** — and a reply
+*is* a store write. Taking the "before" reading inside that window makes the note report the
+responder rather than the perturbation, and recorded runs have shown it both ways from the same
+assertion. The before reading therefore goes through `settledStoreBytes()`, which polls until the
+store stops changing. Any new byte-comparison check must do the same.
+
 ## The scenario matrix
 
 Seven scenarios in `run.mjs`, one per demo page plus one extra for identical siblings.
@@ -196,7 +209,10 @@ sort and single-row-move steps instead, where `via` degrades to `fingerprint-sca
    path. Assert **re-anchored to the same row**;
 4. re-render the open popover in place (`#churn`) → still anchored;
 5. close it, **reload the page**, assert the record survives as an orphan, and separately assert
-   the badge docks (this second assertion is the one that fails — see `results.md`);
+   the badge docks. That second assertion is split out because it is the cold-load dock, which
+   has no live rect to fall back on and docks at `capture.rect` instead (SPEC §2.4, decision log
+   #29). It was `results.md` F1 and is the one step of this scenario a regression there breaks
+   first;
 6. reopen after the reload → re-anchored.
 
 ### 4 — `infinite-scroll`
@@ -205,6 +221,11 @@ Auto-append is switched off first for determinism (then `blurActive()`, see abov
 Post #2 → reload → scroll it off-screen (badge must be `hidden` but still `anchored` and still
 listed in the panel) → scroll back → **Load 10 more** → **Trim to the last 10** (Post #2 is gone;
 must orphan) → **Restore every post** (must re-anchor).
+
+**Load 10 more before the trim is load-bearing.** It is what puts Post #14 in the feed, whose
+body is `BODIES[14 % 12]` — the same text as Post #2, differing only in two numbers. That
+near-duplicate is what the thread used to mis-anchor to at 0.946 (`results.md` F2). Trimming
+without it leaves no twin and proves much less.
 
 ### 5 — `spa`
 
@@ -219,9 +240,16 @@ Place on a paragraph carrying a React-style `id` (`:r01:`), `data-testid`, `data
 **Churn hashed classes** → **Churn ids and data attributes too** → **Reset** → **Rewrite the text**
 (the baseline key legitimately cannot match here, so only "still resolves" is asserted).
 
-**This is the one scenario that does not reproduce** — 2/6 to 5/6 across four runs, because the
-page's per-render `Math.random()` class hashes pass finder's word-like filter about one time in
-seventeen (`results.md` F4). Never quote a single run of it.
+**This used to be the one scenario that did not reproduce** — 2/6 to 5/6 across four runs,
+because the page's per-render `Math.random()` class hashes passed finder's word-like filter about
+one time in seventeen and leaked into the fingerprint (`results.md` F4). A class must now be
+corroborated by a second element before it is evidence, and the scenario reads 6/6 in 4 runs out
+of 4. It is still the scenario most worth running four times: it is the only page here that
+mutates identity under a live anchor, so it is where a scoring regression shows up first.
+
+Its `Churn ids and data attributes too` step is deliberately the bench's only **approximate**
+re-anchor (0.750, `data-approximate="true"`). A run that reports 1.000 there is as much a
+regression as one that orphans.
 
 ## Real-site smoke (`sites.mjs`)
 

@@ -11,7 +11,7 @@ import { finder } from '@medv/finder'
 import type { ElementCapture } from '../types.ts'
 import type { CaptureOptions } from './types.ts'
 
-import { elementOf, isRange, normalizeText, ownerDocumentOf } from './dom.ts'
+import { documentRect, elementOf, isRange, normalizeText, ownerDocumentOf } from './dom.ts'
 
 /** §2.5 defaults. */
 export const DEFAULT_HTML_LIMIT = 8192
@@ -133,6 +133,11 @@ export function captureElement(target: Element | Range, options?: CaptureOptions
     },
     capturedAt,
   }
+
+  // §2.4: the dock position of last resort for an orphan that never resolved once. Written
+  // here because this is the only moment the engine is guaranteed to have the live element.
+  const rect = element ? documentRect(element) : null
+  if (rect) capture.rect = rect
 
   if (isRange(target)) {
     let selectionText = ''

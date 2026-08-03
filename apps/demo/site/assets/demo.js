@@ -19,23 +19,23 @@ export const DEMO_MODES = [
 ]
 
 /**
- * Raised from the 0.62 default, deliberately and with a measurement behind it.
+ * The library default, restored — this was 0.9 until wave 4.
  *
- * A positional selector keeps matching after a list mutation — it just points at whoever moved
- * into the slot. That WRONG element scores 0.76 when its text shares nothing with the captured
- * digest, and ~0.97 on a feed whose rows share boilerplate: `text` carries 0.12 of the weight
- * against 0.22 for classes and 0.16 for structure, so being the same shape in the same place
- * nearly clears the bar on its own. At 0.62 the resolver accepts that match and short-circuits,
- * so the fingerprint scan that would have found the real element (1.00) never runs. Every
- * correct re-anchor across these six pages measures ≥0.95.
+ * The measurement behind 0.9 was real: a positional selector keeps matching after a list
+ * mutation and simply points at whoever moved into the slot, and that WRONG element used to
+ * score 0.76 (nothing in common but shape) or ~0.97 on a feed whose rows share boilerplate,
+ * because `text` was 0.12 of a weighted average against 0.22 for classes and 0.16 for structure.
+ * A page could only defend itself by demanding near-certainty of every match.
  *
- * 0.9 therefore buys "orphan rather than point at the wrong thing", which is the design's own
- * stated preference. Whether the LIBRARY default should move is a question for the M2 anchoring
- * bench against a real-site corpus (PLAN §3.8), not for a demo page.
+ * SPEC §2.5 / decision log #26 moved that defence into the engine: the text digest is now a
+ * **verifier**, so a candidate that nothing identifies and whose text disagrees scores 0 rather
+ * than 0.76 — at any threshold. Both measurements above are now 0. Keeping 0.9 would buy only
+ * one thing: throwing away the honest approximate matches the same change makes safe, such as a
+ * paragraph whose framework regenerated every bookkeeping attribute (0.75, decision log #27).
  *
  * @type {import('@astrale-os/comment-core').AnchoringOptions}
  */
-export const DEMO_ANCHORING = { threshold: 0.9 }
+export const DEMO_ANCHORING = { threshold: 0.62 }
 
 /**
  * @param options {
