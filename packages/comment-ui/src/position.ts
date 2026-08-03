@@ -81,6 +81,13 @@ export interface TrackOptions {
   onPlaced?: (placement: string) => void
   /** DESIGN §8.7: a rect this surface must not land on, re-read every pass. */
   avoid?: () => Obstacle | null
+  /**
+   * DESIGN §8.1: **the pin's tip is the origin.** A point-anchored pin is placed so its box's
+   * top-left lands exactly on the click point, and which way the body hangs is `pinCorner` plus
+   * the presentation's `translate` — so `flip` and `shift` must not run, or they would move the
+   * tip off the coordinate the user chose. Every other surface keeps the full middleware stack.
+   */
+  exact?: boolean
 }
 
 export function track(
@@ -98,15 +105,17 @@ export function track(
     computePosition(reference, floating, {
       strategy: 'fixed',
       placement: options.placement ?? 'top-end',
-      middleware: [
-        offset({ mainAxis, crossAxis }),
-        flip({ padding }),
-        // §8.7 / DESIGN amendment A3: `crossAxis` is what keeps a badge whose anchor sits at the
-        // very top of the document *inside the viewport* — without it, a `top-end` badge that
-        // cannot flip resolves at a negative y and paints a clipped half-dot over the page.
-        shift({ padding, crossAxis: true }),
-        ...(avoid ? [avoidRect(avoid, padding)] : []),
-      ],
+      middleware: options.exact
+        ? [offset({ mainAxis, crossAxis })]
+        : [
+            offset({ mainAxis, crossAxis }),
+            flip({ padding }),
+            // §8.7 / DESIGN amendment A3: `crossAxis` is what keeps a badge whose anchor sits at
+            // the very top of the document *inside the viewport* — without it, a `top-end` badge
+            // that cannot flip resolves at a negative y and paints a clipped half-dot.
+            shift({ padding, crossAxis: true }),
+            ...(avoid ? [avoidRect(avoid, padding)] : []),
+          ],
     })
       .then((result) => {
         if (stopped) return
@@ -162,6 +171,33 @@ export function dockedReference(rect: DocumentRect, win: Window): ReferenceEleme
         height: rect.height,
         right: left + rect.width,
         bottom: top + rect.height,
+      }
+    },
+  }
+}
+
+/**
+ * A **virtual reference at the click point** (decision log #44, DESIGN §0 D8) — a 0×0 rect at the
+ * live coordinate. floating-ui's whole middleware stack keeps working unmodified against it, so
+ * "open exactly where I clicked, and flip near the edge" costs one reference rather than a fork
+ * of the hardest positioning case in the package.
+ *
+ * The point is read on **every** pass, not captured once: `autoUpdate`'s frame loop is what makes
+ * a coordinate anchored to a scrolling document stay put, exactly as for the orphan dock.
+ */
+export function pointReference(read: () => { x: number; y: number } | null): ReferenceElement {
+  return {
+    getBoundingClientRect() {
+      const point = read() ?? { x: 0, y: 0 }
+      return {
+        x: point.x,
+        y: point.y,
+        left: point.x,
+        top: point.y,
+        width: 0,
+        height: 0,
+        right: point.x,
+        bottom: point.y,
       }
     },
   }
@@ -229,6 +265,8 @@ export interface SurfaceRef {
   active: boolean
   /** DESIGN §8.7: a rect this surface must not land on, re-read every positioning pass. */
   avoid?: () => Obstacle | null
+  /** DESIGN §8.1: offset only, no flip, no shift — the pin's tip must stay on its point. */
+  exact?: boolean
 }
 
 interface Surface {
@@ -239,6 +277,7 @@ interface Surface {
   offset: readonly [number, number]
   active: boolean
   avoid: (() => Obstacle | null) | undefined
+  exact: boolean
   tracker: Tracker | null
   resolved: string | null
 }
@@ -279,6 +318,7 @@ export function createPositioner(options: { onError: (error: unknown) => void })
       // A getter, not a rect: the obstacle moves (rail mode, hover peek, a corner change) and
       // the tracker outlives every one of those without a rebuild.
       avoid: surface.avoid,
+      exact: surface.exact,
       onError: options.onError,
       onPlaced: (placement) => {
         surface.resolved = placement
@@ -297,6 +337,7 @@ export function createPositioner(options: { onError: (error: unknown) => void })
         offset: [0, 6],
         active: false,
         avoid: undefined,
+        exact: false,
         tracker: null,
         resolved: null,
       }
@@ -344,6 +385,7 @@ export function createPositioner(options: { onError: (error: unknown) => void })
         surface.offset = ref.offset
         surface.active = ref.active
         surface.avoid = ref.avoid
+        surface.exact = ref.exact ?? false
         if (ref.active) start(surface)
         else stop(surface)
       }

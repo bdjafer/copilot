@@ -40,8 +40,12 @@ const DARK = `
   --_border: var(--cc-border, oklch(38.0% 0.012 264));
   --_danger: var(--cc-danger, oklch(66.0% 0.214 28));
   --_shadow: var(--cc-shadow, 0 0.5px 1px oklch(0% 0 0/.5), 0 10px 22px -8px oklch(0% 0 0/.55), 0 28px 64px -20px oklch(0% 0 0/.72));
-  --_line-out: oklch(0% 0 0 / .58);
-  --_line-in: oklch(100% 0 0 / .09);
+  /* §0 D1: .58 → .16. At .58 a 0.5 px ring around a popover on a dark page reads as a STROKE,
+     not as an edge — the surface behind it is only ~24 % L and the ring is nearly black, which
+     is exactly the "heavy dark outline" the decree kills. Dark mode keeps the same black shadows
+     and lifts the surface instead; separation comes from the INSIDE, via --_line-in. */
+  --_line-out: oklch(0% 0 0 / .16);
+  --_line-in: oklch(100% 0 0 / .10);
   --_glass-bg: color-mix(in oklab, var(--_surface) 64%, transparent);
   --_glass-bg-2: color-mix(in oklab, var(--_surface-2) 70%, transparent);
   --_glass-fx: blur(28px) saturate(170%) brightness(0.86);
@@ -57,7 +61,7 @@ const LIGHT = `
   --_border: var(--cc-border, oklch(89.0% 0.005 264));
   --_danger: var(--cc-danger, oklch(58.5% 0.222 27.3));
   --_shadow: var(--cc-shadow, 0 0.5px 1px oklch(0% 0 0/.06), 0 8px 20px -6px oklch(0% 0 0/.14), 0 24px 56px -16px oklch(0% 0 0/.18));
-  --_line-out: oklch(from var(--_text) l c h / .13);
+  --_line-out: oklch(from var(--_text) l c h / .10);
   --_line-in: oklch(100% 0 0 / .55);
   --_glass-bg: color-mix(in oklab, var(--_surface) 74%, transparent);
   --_glass-bg-2: color-mix(in oklab, var(--_surface-2) 78%, transparent);
@@ -73,11 +77,12 @@ export const glassStyles = `
   font-synthesis: none;
   font-optical-sizing: auto;
 ${LIGHT}
-  --_badge-size: var(--cc-badge-size, 22px);
+  /* §0 D5/D9: 22 → 28. The pin's payload is one full-bleed mark inside 3 px of padding, which
+     is 22 px of glyph — the old number, now the inner one. \`domPresentation\` keeps 22 px. */
+  --_badge-size: var(--cc-badge-size, 28px);
   --_radius: var(--cc-radius, 10px);
-  /* One width for the popover and for the reply composer that docks under it: §7's mutual
-     exclusion asks for one sheet growing downward, and two numbers cannot promise that. */
-  --_w-thread: 320px;
+  /* §0 D6: one width for the popover and for the reply field that lives inside it. */
+  --_w-thread: 350px;
 
   /* The derived ramp — about thirty values out of the eleven public ones. */
   --_accent-hi: oklch(from var(--_accent) calc(l + 0.055) c h);
@@ -93,7 +98,6 @@ ${LIGHT}
   --_warn: oklch(76.0% 0.166 62.4);
   --_ok: oklch(74.5% 0.180 145.6);
   --_line-sep: oklch(from var(--_border) l c h / .70);
-  --_wash: color-mix(in oklab, var(--_surface) 26%, transparent);
 
   /* Radii, concentric: inner equals outer minus padding. */
   --_r-xs: 4px;
@@ -107,11 +111,20 @@ ${LIGHT}
   --_e0: 0 0 0 .5px var(--_line-out), 0 1px 2px -1px oklch(0% 0 0/.16);
   --_e1: 0 0 0 .5px var(--_line-out), 0 1px 1.5px oklch(0% 0 0/.07), 0 4px 10px -3px oklch(0% 0 0/.15);
   --_e2: 0 0 0 .5px var(--_line-out), 0 2px 4px -1px oklch(0% 0 0/.08), 0 10px 24px -8px oklch(0% 0 0/.19);
-  --_e3: 0 0 0 .5px var(--_line-out), inset 0 .5px 0 var(--_line-in), 0 1px 2px oklch(0% 0 0/.06), var(--_shadow);
+  /* §0 D1: the inset became a FULL ring. It was \`inset 0 .5px 0\` — a top-edge-only specular,
+     which left the bottom and side edges relying entirely on the outer ring, which is why that
+     ring had to be pushed to α .58 in dark mode and why the result read as a border. A full
+     \`inset 0 0 0 .5px\` hairline closes all four edges from the inside, so the outer ring can
+     stay a true hairline in both schemes. Glass is elevation, never stroke. */
+  --_e3: 0 0 0 .5px var(--_line-out), inset 0 0 0 .5px var(--_line-in), 0 1px 2px oklch(0% 0 0/.06), var(--_shadow);
   --_focus: 0 0 0 3px var(--_ring);
   /* The keyline sandwich: a dark hairline outside, a light hairline inside. One hairline is
-     invisible on half the web; two are visible on all of it. */
+     invisible on half the web; two are visible on all of it. **Forbidden on glass** (§0 D1,
+     §3.3): it is for a ≤ 28 px opaque mark sitting directly on content nobody controls, where
+     there is no shadow tail to read an edge from. */
   --_keyline: 0 0 0 .5px oklch(0% 0 0/.28), 0 0 0 1.75px oklch(100% 0 0/.55);
+  /* §0 D9 / §3.4: pin focus + selected. Two-tone, and still not a border. */
+  --_halo: 0 0 0 2px var(--_surface), 0 0 0 4px var(--_accent);
 
   /* Two springs, 3 beziers, nothing else. Normalised, so one shape fits any duration. */
   --_spring-1: linear(0, .234 10%, .589 20%, .839 30%, .967 40%, 1.012 50%, 1.020 60%, 1.014 70%, 1.007 80%, 1.003 90%, 1);
@@ -143,7 +156,7 @@ ${LIGHT}
     --_accent-22: color-mix(in oklab, var(--_accent) 22%, transparent);
     --_ring: color-mix(in oklab, var(--_accent) 38%, transparent);
     --_on-accent: oklch(100% 0 0);
-    --_line-out: color-mix(in oklab, var(--_text) 13%, transparent);
+    --_line-out: color-mix(in oklab, var(--_text) 10%, transparent);
     --_line-sep: color-mix(in oklab, var(--_border) 70%, transparent);
     --_danger-fill: var(--_danger);
   }
@@ -187,10 +200,11 @@ ${LIGHT}
   font-size: inherit;
 }
 .cc-layer > * { pointer-events: auto; }
-/* Non-interactive overlays. The pick surfaces sit directly on the cursor's path into the
-   candidate, and the engine resolves the target from composedPath()[0] without filtering shadow
-   trees — an \`auto\` here would anchor the thread on our own overlay. */
-.cc-scrim, .cc-ring, .cc-pick-hint, .cc-cursor, .cc-status { pointer-events: none; }
+/* §0 D7: placement mode draws NOTHING — no scrim, no ring, no ticks, no hint capsule, no
+   cursor-riding disc — so the only non-interactive node left in the layer is the status region.
+   The rule survives because the hazard does: the engine resolves the pick target from
+   composedPath()[0] without filtering shadow trees. */
+.cc-status { pointer-events: none; }
 /* Same failure, wider: while picking EVERY widget must be click-through. */
 .cc-layer[data-picking='true'] > * { pointer-events: none; }
 
@@ -207,11 +221,14 @@ ${LIGHT}
 /* Size and colour only — the stroke spec rides on every instance as a presentation attribute,
    so a glyph in a class this list forgot is still a glyph and not a filled black blob. */
 .cc-sprite svg, .cc-layer svg { display: block; flex: none; }
+/* §5's size scale: 10 (marks) · 12 (row meta, chips, the copilot author mark) · 16 (controls) ·
+   20 (empty states) · 22 (the pin's payload, full-bleed inside a 28 px pin) · 24 (the cursor
+   image). 14 left the scale with the thread head (§0 D6). */
 .cc-icon { width: 16px; height: 16px; }
-.cc-badge-icon, .cc-chip-mark { width: 12px; height: 12px; }
-.cc-mark { width: 10px; height: 10px; }
-.cc-row-icon { width: 12px; height: 12px; }
-.cc-head-icon { width: 14px; height: 14px; }
+.cc-badge-icon { width: 22px; height: 22px; }
+.cc-chip-mark { width: 12px; height: 12px; }
+.cc-mark, .cc-edited { width: 10px; height: 10px; }
+.cc-row-icon, .cc-author { width: 12px; height: 12px; }
 .cc-empty-icon { width: 20px; height: 20px; }
 
 /* Only compositor properties are ever named in a transition, and will-change lives exactly as
@@ -243,32 +260,39 @@ ${LIGHT}
 
 /* §2.3 — the mode hue, declared on the surfaces that carry \`--_kind-h\` and NEVER on \`:host\`: the
    \`var()\`s inside a custom property resolve on the element that declares it, so a \`:host\`
-   declaration would bake index 0's offset into every mode. Colour is a hint here and nothing
-   more; every mode also has its own glyph, which is what keeps §1.3 true under \`forced-colors\`,
-   in a screenshot and for a colour-blind reader.
+   declaration would bake index 0's offset into every mode.
+
+   **Since §0 D5, hue is the only mode differentiator.** "Every mode also has its own glyph" is
+   repealed: the ask glyph is deleted, no surface draws a second glyph to say which mode it belongs
+   to, and the mode's word survives in \`title\` / \`aria-label\` on every surface carrying
+   \`data-kind\`. The cost is stated rather than hidden — under \`forced-colors\` all modes look
+   alike, which is acceptable precisely because a mode is a hint and never a state (§1.3).
 
    The offset is a **plain number**: inside relative colour syntax \`h\` resolves to a \`<number>\`,
    so \`calc(h + 38deg)\` is a type error — the declaration is invalid at computed-value time, the
-   fill resolves to \`transparent\`, and every badge on the page turns into a hollow ring. */
-.cc-badge, .cc-thread, .cc-composer, .cc-pearl, .cc-ring, .cc-cursor {
+   fill resolves to \`transparent\`, and every pin on the page turns into a hollow ring. */
+.cc-badge, .cc-thread, .cc-composer, .cc-pearl {
   --_kind: oklch(from var(--_accent) l c calc(h + var(--_kind-h, 0)));
 }
 @supports not (color: oklch(from red l c h)) {
-  .cc-badge, .cc-thread, .cc-composer, .cc-pearl, .cc-ring, .cc-cursor { --_kind: var(--_accent); }
+  .cc-badge, .cc-thread, .cc-composer, .cc-pearl { --_kind: var(--_accent); }
 }
 
-/* ------------------------------------------------------------------------------- badges */
+/* --------------------------------------------------------------------------------- pins */
 
+/* §8.1, normative anatomy: a 28 px box, \`border-radius: 999px\` on 3 corners and **2 px on
+   exactly one** — the teardrop is a circle with one sharp corner, and that corner sits ON the
+   anchor point. 3 px of padding; the payload is a single 22 px \`<use>\` filling the rest. Size is
+   constant on screen and independent of the anchor's size: a pin annotates a POINT, not a box. */
 .cc-badge {
   position: fixed;
   top: 0; left: 0;
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  gap: 3px;
+  width: var(--_badge-size);
   height: var(--_badge-size);
-  min-width: var(--_badge-size);
-  padding: 0 5px;
+  padding: 3px;
   border: 0;
   border-radius: var(--_r-pill);
   background: transparent;
@@ -280,10 +304,18 @@ ${LIGHT}
   letter-spacing: 0.003em;
   cursor: pointer;
   isolation: isolate;
-  transition: translate var(--_d2) var(--_spring-1), opacity var(--_d2) var(--_ease-std);
+  transition: opacity var(--_d2) var(--_ease-std);
 }
+/* The quadrant. \`transform\` rather than \`translate\` on purpose: \`translate\` is the independent
+   property \`flight\`'s FLIP writes inline (§6.4), and the two must never collide. */
+.cc-badge[data-corner='bottom-left'] { transform: translate(0, -100%); }
+.cc-badge[data-corner='top-left'] { transform: translate(0, 0); }
+.cc-badge[data-corner='top-right'] { transform: translate(-100%, 0); }
+.cc-badge[data-corner='bottom-right'] { transform: translate(-100%, -100%); }
+
 /* The resting mark: a 12 px dot, at .72, wearing the keyline sandwich so it stays visible on
-   white, on black, on a photograph and on a saturated hero. */
+   white, on black, on a photograph and on a saturated hero. Its **centre is the anchor point**,
+   so the rest state and the revealed state are hinged on the same coordinate. */
 .cc-badge::before {
   content: '';
   position: absolute;
@@ -296,7 +328,14 @@ ${LIGHT}
   opacity: .72;
   transition: opacity var(--_d2) var(--_ease-std), scale var(--_d2) var(--_spring-1);
 }
-/* The revealed pill, a separate layer so the box itself never animates a layout property. */
+.cc-badge[data-corner='bottom-left']::before { left: 0; top: 100%; }
+.cc-badge[data-corner='top-left']::before { left: 0; top: 0; }
+.cc-badge[data-corner='top-right']::before { left: 100%; top: 0; }
+.cc-badge[data-corner='bottom-right']::before { left: 100%; top: 100%; }
+
+/* The revealed pin, a separate layer so the box itself never animates a layout property.
+   §6.4 \`reveal\`: it SCALES about its sharp corner — 12/28 → 1 — so the anchor point is
+   pixel-stable through the whole transition and the body hangs into the free quadrant. */
 .cc-badge::after {
   content: '';
   position: absolute;
@@ -305,30 +344,39 @@ ${LIGHT}
   background: var(--_kind);
   box-shadow: var(--_keyline), var(--_e1);
   opacity: 0;
-  scale: .7;
+  scale: .43;
   transform-origin: var(--_o, 100% 0%);
   transition: opacity var(--_d2) var(--_ease-std), scale var(--_d2) var(--_spring-1);
 }
+.cc-badge[data-corner='bottom-left']::after { border-end-start-radius: 2px; --_o: 0% 100%; }
+.cc-badge[data-corner='top-left']::after { border-start-start-radius: 2px; --_o: 0% 0%; }
+.cc-badge[data-corner='top-right']::after { border-start-end-radius: 2px; --_o: 100% 0%; }
+.cc-badge[data-corner='bottom-right']::after { border-end-end-radius: 2px; --_o: 100% 100%; }
+
 .cc-badge > * { position: relative; z-index: 1; }
-.cc-badge-icon, .cc-badge-glyph, .cc-badge-count, .cc-badge-marks, .cc-badge .cc-chip-slot {
-  display: inline-flex;
+/* One mark, and nothing beside it (§0 D5). The count is not here — it is in \`aria-label\`, the
+   panel row and the batch pill, exactly where Vercel and Figma keep it. */
+.cc-badge-icon, .cc-badge-glyph {
+  display: none;
   align-items: center;
-  max-width: 0;
-  overflow: hidden;
+  justify-content: center;
   opacity: 0;
-  transition: max-width var(--_d2) var(--_spring-1), opacity var(--_d1) var(--_ease-std);
+  transition: opacity var(--_d1) var(--_ease-std);
 }
-.cc-badge-icon[data-on='true'] { display: block; }
-.cc-badge-count { font-variant-numeric: tabular-nums; }
+.cc-badge-icon[data-on='true'] { display: flex; }
+.cc-badge-glyph:not(:empty) { display: flex; }
+/* The pin's chip contributes no pixels at all: the ladder is on the ring (§8.6) and the text is
+   the \`aria-live\` payload, clipped exactly as \`.cc-chip-text\` already is. */
+.cc-badge .cc-chip-slot { position: absolute; width: 0; height: 0; overflow: hidden; }
 
-/* §8.1: transform-origin follows the positioner's resolved placement, so a badge grows out of
-   its anchor rather than out of itself, and never over the element it annotates. */
-.cc-badge[data-placement^='top'] { --_o: 100% 100%; }
-.cc-badge[data-placement^='bottom'] { --_o: 100% 0%; }
-.cc-badge[data-placement^='left'] { --_o: 100% 50%; }
-.cc-badge[data-placement^='right'] { --_o: 0% 50%; }
+/* A pin with no stored point keeps the legacy behaviour: it hangs off the anchor rect and its
+   transform-origin follows the positioner's resolved placement (§8.1). */
+.cc-badge:not([data-point])[data-placement^='top'] { --_o: 100% 100%; }
+.cc-badge:not([data-point])[data-placement^='bottom'] { --_o: 100% 0%; }
+.cc-badge:not([data-point])[data-placement^='left'] { --_o: 100% 50%; }
+.cc-badge:not([data-point])[data-placement^='right'] { --_o: 0% 50%; }
 
-/* The reveal, and every one of its five signals. Remove any one of them and the dormant badge
+/* The reveal, and every one of its five signals. Remove any one of them and the dormant pin
    is a bug rather than a design: proximity, hover, keyboard focus, live copilot state, touch,
    and the two seconds after the page changes underneath us. */
 .cc-badge:hover::after,
@@ -345,12 +393,16 @@ ${LIGHT}
 .cc-badge:focus-visible > *,
 .cc-badge[data-near='true'] > *,
 .cc-badge[data-chip] > *,
-[data-reveal-all='true'] .cc-badge > * { max-width: 2.4ch; opacity: 1; }
-.cc-badge:hover, .cc-badge:focus-visible, .cc-badge[data-near='true'] { translate: 0 -1px; }
+[data-reveal-all='true'] .cc-badge > * { opacity: 1; }
+/* The 1 px lift is for a pin hanging off a rect. A pin whose tip IS the anchor point does not
+   move on hover — the coordinate is the whole promise. */
+.cc-badge:not([data-point]):hover,
+.cc-badge:not([data-point]):focus-visible,
+.cc-badge:not([data-point])[data-near='true'] { translate: 0 -1px; }
 @media (hover: none) {
   .cc-badge::after { opacity: 1; scale: 1; }
   .cc-badge::before { opacity: 0; }
-  .cc-badge > * { max-width: 2.4ch; opacity: 1; }
+  .cc-badge > * { opacity: 1; }
 }
 
 /* State silhouettes. Each reads identically in a screenshot, which is the test that "colour
@@ -381,7 +433,7 @@ ${LIGHT}
    draw, and \`box-sizing: border-box\` keeps the mark 12/22 px regardless. */
 .cc-badge[data-docked='true']::after { opacity: 1; scale: 1; }
 .cc-badge[data-docked='true']::before { opacity: 0; scale: .5; }
-.cc-badge[data-docked='true'] > * { max-width: 2.4ch; opacity: 1; }
+.cc-badge[data-docked='true'] > * { opacity: 1; }
 .cc-badge[data-docked='true'] { color: var(--_muted); }
 .cc-badge[data-docked='true']::before,
 .cc-badge[data-docked='true']::after {
@@ -390,8 +442,21 @@ ${LIGHT}
   box-shadow: var(--_keyline), var(--_e1);
 }
 
+/* §3.4 / §0 D9: focus and selection are a two-tone **halo**, never a border. */
 .cc-badge:focus-visible { outline: none; }
-.cc-badge:focus-visible::after { box-shadow: var(--_keyline), var(--_focus), var(--_e1); }
+.cc-badge:focus-visible::after,
+.cc-badge[aria-expanded='true']::after { box-shadow: var(--_keyline), var(--_halo), var(--_e1); }
+
+/* §8.6 — the presence ladder, drawn on the pin's **ring** and never on its face: a chip may not
+   add a second mark to a pin that already carries exactly one, and the ring is free real estate
+   that no glyph occupies. */
+.cc-badge[data-rung='1']::after { box-shadow: var(--_keyline), 0 0 0 1.5px oklch(from var(--_muted) l c h / .5), var(--_e1); }
+.cc-badge[data-rung='2']::after {
+  box-shadow: var(--_keyline), 0 0 0 1.5px var(--_accent), var(--_e1);
+  animation: cc-breathe var(--_ambient) ease-in-out infinite;
+}
+.cc-badge[data-rung='4']::after { box-shadow: var(--_keyline), 0 0 0 1.5px var(--_warn), var(--_e1); }
+.cc-badge[data-rung='5']::after { box-shadow: var(--_keyline), 0 0 0 1.5px var(--_accent), var(--_e1); }
 
 /* §8.1's fan: two anchors a few px apart used to draw two pills on top of each other and neither
    was clickable. A 3-card fan, six degrees, fourteen px. */
@@ -466,84 +531,15 @@ ${LIGHT}
 }
 @keyframes cc-breathe { 0%, 100% { opacity: .35; } 50% { opacity: .7; } }
 
-/* ----------------------------------------------------------------------------- the picker */
+/* ---------------------------------------------------------------------- placement mode
 
-.cc-scrim {
-  position: fixed;
-  inset: 0;
-  background: var(--_wash);
-  backdrop-filter: saturate(.75) brightness(.985);
-  -webkit-backdrop-filter: saturate(.75) brightness(.985);
-  /* The hole IS the highlight: one evenodd path, the viewport minus the candidate. */
-  clip-path: polygon(evenodd,
-    0 0, 100% 0, 100% 100%, 0 100%, 0 0,
-    var(--_hx) var(--_hy),
-    var(--_hx) calc(var(--_hy) + var(--_hh)),
-    calc(var(--_hx) + var(--_hw)) calc(var(--_hy) + var(--_hh)),
-    calc(var(--_hx) + var(--_hw)) var(--_hy),
-    var(--_hx) var(--_hy));
-}
-.cc-layer[data-picking='true'] .cc-badge { opacity: .25; filter: saturate(.35); }
-.cc-ring {
-  position: fixed;
-  top: 0; left: 0;
-  border-radius: var(--_r-sm);
-  box-shadow: 0 0 0 1.5px var(--_kind), inset 0 0 0 1px oklch(100% 0 0/.6);
-  contain: layout size paint;
-  /* Snap: the outline slides between candidates. One instrument scanning, not twelve boxes
-     flickering. */
-  transition: translate var(--_d1) var(--_ease-std), width var(--_d1) var(--_ease-std),
-              height var(--_d1) var(--_ease-std), opacity var(--_d1) var(--_ease-std);
-}
-.cc-ring[data-bad='true'] { opacity: .3; }
-.cc-ring[data-bad='true'] .cc-tick { opacity: 0; }
-.cc-tick {
-  position: absolute;
-  width: 6px; height: 6px;
-  border: 1.5px solid var(--_kind);
-}
-.cc-tick[data-corner='tl'] { top: -3px; left: -3px; border-width: 1.5px 0 0 1.5px; }
-.cc-tick[data-corner='tr'] { top: -3px; right: -3px; border-width: 1.5px 1.5px 0 0; }
-.cc-tick[data-corner='bl'] { bottom: -3px; left: -3px; border-width: 0 0 1.5px 1.5px; }
-.cc-tick[data-corner='br'] { bottom: -3px; right: -3px; border-width: 0 1.5px 1.5px 0; }
-/* §7 row 19 rations the hint and gives it a rise; it never said where it lives, and riding the
-   candidate was the wrong answer twice over — it covered the line ABOVE the target (the one the
-   eye is using to decide), and a session opened from the keyboard with the pointer at rest left
-   it at 0,0, clipped under whatever the host page puts in its own top-left. One fixed slot for
-   the whole session: the eye learns it once, and it never covers a candidate. */
-.cc-pick-hint {
-  position: fixed;
-  left: 50%;
-  bottom: 24px;
-  padding: 4px 8px;
-  border-radius: var(--_r-sm);
-  box-shadow: var(--_e2);
-  color: var(--_text);
-  font-size: 11px;
-  font-weight: 500;
-  letter-spacing: 0.006em;
-  white-space: nowrap;
-  translate: -50% 0;
-  animation: cc-rise var(--_d2) var(--_spring-1);
-}
-@keyframes cc-rise { from { translate: -50% 4px; opacity: 0; } }
-.cc-cursor {
-  position: fixed;
-  top: 0; left: 0;
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  gap: 2px;
-}
-.cc-cursor .cc-icon {
-  width: 20px; height: 20px;
-  padding: 3px;
-  border-radius: var(--_r-pill);
-  background: var(--_kind);
-  color: var(--_on-accent);
-  box-shadow: var(--_e2);
-}
-.cc-cursor-esc { font-size: 10px; opacity: .4; }
+   **There is no CSS here, and that is the rule (§0 D7, §8.2).** The scrim, its punched
+   \`clip-path\`, the sliding ring, the four corner ticks, the dwell hint capsule, the
+   cursor-riding disc and the all-pins-dim-to-α-.25 rule are all deleted. During a pick the host
+   page renders byte-identically and our own pins keep full opacity. The entire mode signal is
+   the **cursor**, delivered through \`PresentationHost.cursor()\` as one constructed
+   \`CSSStyleSheet\` on \`document.adoptedStyleSheets\` — no node, no attribute, no
+   \`MutationObserver\` record (§11 rule 7). \`Labels.pickHint\` stays in \`role="status"\`. */
 
 /* ---------------------------------------------------------------- composer + draft pearl */
 
@@ -569,25 +565,23 @@ ${LIGHT}
   to { clip-path: circle(142% at var(--_ox, 50%) var(--_oy, 50%)); scale: 1; opacity: 1; }
 }
 .cc-composer:focus-within { box-shadow: var(--_focus), var(--_e3); }
-/* §7's mutual exclusion, drawn: "a reply docks the composer to the popover's bottom edge and
-   matches its width, so reply reads as one sheet growing downward". The controller docks it with
-   a zero offset; this is the other half — the same width, and a flush top edge, so there is no
-   seam where the two boxes meet. Positioned against the badge instead, it opened as a second
-   sheet BESIDE the popover, over its own close control, clipped at the viewport edge. */
-.cc-composer[data-reply] {
-  width: var(--_w-thread);
-  border-top-left-radius: 0;
-  border-top-right-radius: 0;
+/* §0 D4 / SPEC #47: **a reply is not a second surface.** Docked, the composer is a child of the
+   thread — no elevation of its own, no glass of its own, no rectangle of its own, no position
+   written by anyone. It is the expanded form of the row-29 reply field, in place. */
+.cc-composer[data-docked='true'] {
+  position: static;
+  width: 100%;
+  padding: 0;
+  border-radius: 0;
+  background: transparent;
+  backdrop-filter: none;
+  -webkit-backdrop-filter: none;
+  box-shadow: none;
+  animation: none;
+  contain: none;
 }
-/* …and when the popover is near the bottom of the viewport the positioner flips the reply above
-   it, so the flush edge flips too. \`data-placement\` is the controller's (§3.1.5) — the sheet only
-   has to know which edge is the seam. */
-.cc-composer[data-reply][data-placement^='top'] {
-  border-top-left-radius: var(--_r-xl);
-  border-top-right-radius: var(--_r-xl);
-  border-bottom-left-radius: 0;
-  border-bottom-right-radius: 0;
-}
+.cc-composer[data-docked='true']:focus-within { box-shadow: none; }
+.cc-composer[data-docked='true'] .cc-composer-input { min-height: 32px; font-size: 13px; }
 /* The sheet IS the field: no border of its own, and the ring belongs to the box. */
 .cc-composer-input {
   width: 100%;
@@ -679,6 +673,8 @@ ${LIGHT}
 
 /* ------------------------------------------------------------------------ thread popover */
 
+/* §0 D6: **zero header chrome**: no head, no title bar, no logo row, no drag handle. The first
+   comment's top edge is 10 px below the popover's and NOTHING is above it. Width 350 px. */
 .cc-thread {
   flex-direction: column;
   gap: 8px;
@@ -691,24 +687,25 @@ ${LIGHT}
   font-size: 13px;
   animation: cc-emerge var(--_d3) var(--_spring-1);
 }
-.cc-head { display: flex; align-items: center; gap: 6px; }
-.cc-head-icon { color: var(--_kind); }
-/* §8.4: resolved is a SILHOUETTE, not a tint. The head glyph moves inside the hollow disc the
-   badge draws for the same state, the check rides beside it as a 10 px mark, and the bodies mute
-   — so a screenshot of a resolved thread says "resolved" with no colour, no motion and no word.
-   Before this the only response in the whole sheet was one \`color\` swap on a 14 px glyph. */
-.cc-thread[data-resolved='true'] .cc-head-icon {
-  width: 20px; height: 20px;
-  padding: 3px;
-  border-radius: var(--_r-pill);
-  color: var(--_muted);
-  box-shadow: inset 0 0 0 1.5px var(--_muted);
+/* Close + the thread's single resolve, as one absolutely positioned overlay cluster in the
+   top-right corner, over the 56 px gutter reserved on the first comment's inline-end so no text
+   ever runs under them. α .55 → 1 on hover/focus, and **always drawn** while the thread is open:
+   an affordance on a surface the user already opened is never hidden (§0 P0). */
+.cc-corner {
+  position: absolute;
+  top: 6px;
+  inset-inline-end: 6px;
+  z-index: 2;
+  display: flex;
+  align-items: center;
+  gap: 2px;
 }
+.cc-comments > .cc-comment:first-child .cc-comment-head { padding-inline-end: 56px; }
+/* §8.4: resolved is a SILHOUETTE, not a tint — the pin draws the hollow mark, the bodies mute
+   and the corner mark becomes \`cc-i-uturn\`, so a screenshot says resolved with no colour. */
 .cc-thread[data-resolved='true'] .cc-body,
 .cc-thread[data-resolved='true'] .cc-quote { color: var(--_muted); }
-.cc-thread[data-status='resolved'] .cc-head-icon { color: var(--_muted); }
 .cc-badge-marks { display: inline-flex; align-items: center; gap: 3px; color: var(--_muted); }
-.cc-head .cc-chip-slot { margin-left: auto; }
 
 .cc-ghost {
   position: relative;
@@ -727,14 +724,16 @@ ${LIGHT}
               color var(--_d1) var(--_ease-std);
 }
 .cc-ghost::after { content: ''; position: absolute; inset: -9px; }
-.cc-thread:hover .cc-ghost,
-.cc-thread:focus-within .cc-ghost,
-.cc-comment:hover .cc-ghost,
 .cc-row:hover .cc-ghost,
 .cc-row:focus-within .cc-ghost,
 .cc-panel:focus-within .cc-ghost { opacity: 1; }
-.cc-head .cc-ghost { opacity: .4; }
-.cc-thread:hover .cc-head .cc-ghost, .cc-thread:focus-within .cc-head .cc-ghost { opacity: 1; }
+/* §7 rows 11–12: the corner cluster is ALWAYS drawn while the thread is open. It is not gated
+   on hover, on focus, on proximity or on a media query — hover only raises it to full. */
+.cc-corner .cc-ghost { opacity: .55; }
+.cc-thread:hover .cc-corner .cc-ghost,
+.cc-thread:focus-within .cc-corner .cc-ghost,
+.cc-corner .cc-ghost:hover,
+.cc-corner .cc-ghost:focus-visible { opacity: 1; }
 .cc-ghost:hover { background: var(--_accent-06); color: var(--_text); }
 .cc-ghost[data-variant='danger']:hover { color: var(--_danger); background: transparent; }
 .cc-ghost:focus-visible { outline: none; opacity: 1; box-shadow: var(--_focus); }
@@ -801,25 +800,90 @@ ${LIGHT}
   animation: cc-decay 1200ms var(--_ease-exit) forwards;
 }
 @keyframes cc-decay { to { border-left-color: transparent; } }
-.cc-comment-head { display: flex; align-items: center; gap: 6px; color: var(--_muted); font-size: 11px; }
-.cc-author { width: 12px; height: 12px; color: var(--_muted); }
-.cc-author[data-author='copilot'] { color: var(--_accent); }
-/* A timestamp is a 3 px dot until the row is hovered, then a value the platform translates. */
-.cc-time { font-variant-numeric: tabular-nums; max-width: 0; overflow: hidden; white-space: nowrap; transition: max-width var(--_d2) var(--_ease-std); }
-.cc-comment:hover .cc-time, .cc-comment:focus-within .cc-time { max-width: 12ch; }
-.cc-comment-head::before {
-  content: '';
-  width: 3px; height: 3px;
-  border-radius: var(--_r-pill);
-  background: currentColor;
-  opacity: .5;
-  order: 1;
+/* §0 D2 — the comment header row is PERMANENT and is the first thing in the row:
+   \`[author mark] [relative time] [edited mark] … [actions]\`. Never \`opacity: 0\`, never
+   \`display: none\`, no hover gate, no proximity gate, no responsive drop, no 3 px dot. Hover only
+   ADDS a native \`title\` with the absolute datetime. */
+.cc-comment-head {
+  position: relative;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  /* The height the actions cluster will need once it goes \`position: relative\` on hover (§0 D3:
+     the position swap is what stops the row reflowing). Swapping \`position\` alone is not enough
+     — an out-of-flow 22 px cluster coming back into a 15 px line box still grows it by 7 px, and
+     the body under it visibly jumps. Reserving the taller of the two here makes hover free. */
+  min-height: 22px;
+  color: var(--_muted);
+  font-size: 11px;
+  line-height: 15px;
+  letter-spacing: 0.006em;
 }
+.cc-author { color: var(--_accent); }
+/* \`.cc-time\` is now permanent, so tabular figures are load-bearing: a re-tick between two
+   relative labels of different widths must not reflow the row (§4). */
+.cc-time { font-variant-numeric: tabular-nums; white-space: nowrap; }
+.cc-edited { color: var(--_muted); opacity: .7; }
+
+/* §0 D3 — one right-aligned actions cluster per comment row. Mounted at all times so keyboard
+   and AT reach it; \`position: absolute → relative\` swaps WITH the opacity, which is what stops
+   the row from reflowing on hover. Transition: opacity only. */
+.cc-comment-actions {
+  position: absolute;
+  inset-inline-end: 0;
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  opacity: 0;
+  transition: opacity var(--_d1) var(--_ease-std);
+}
+.cc-comment:hover .cc-comment-actions,
+.cc-comment:focus-within .cc-comment-actions,
+.cc-comment-actions:has([data-confirm='true']) {
+  position: relative;
+  margin-inline-start: auto;
+  opacity: 1;
+}
+/* The cluster owns the reveal (§0 D3), so its buttons must not ALSO carry \`.cc-ghost\`'s own
+   \`opacity: 0\` — nothing in the sheet lifts that for a comment row (\`.cc-row\` is the panel,
+   \`.cc-corner\` is the thread), and 0 × 1 left the pencil invisible even on hover, which is not
+   "discreet", it is absent. */
+.cc-comment-actions .cc-ghost { width: 22px; height: 22px; opacity: 1; }
+
 .cc-body { white-space: pre-wrap; overflow-wrap: anywhere; font-size: 13px; line-height: 19px; }
 .cc-edit { display: flex; flex-direction: column; gap: 4px; }
 .cc-edit .cc-composer-input { min-height: 44px; }
-.cc-thread-actions { display: flex; align-items: center; gap: 4px; justify-content: flex-end; }
 .cc-row-actions { display: flex; align-items: center; gap: 4px; }
+
+/* §7 row 29 / §0 D4 — the permanently rendered, collapsed reply field at the thread's bottom
+   edge, above a \`--_line-sep\` hairline. Focus expands it IN PLACE into the full composer; the
+   popover grows downward as one sheet. Never a side panel, never a second floating surface. */
+.cc-thread-foot {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding-top: 8px;
+  box-shadow: inset 0 .5px 0 var(--_line-sep);
+}
+.cc-reply {
+  display: flex;
+  align-items: center;
+  width: 100%;
+  min-height: 32px;
+  padding: 0 8px;
+  border: 0;
+  border-radius: var(--_r-sm);
+  background: color-mix(in oklab, var(--_surface-2) 55%, transparent);
+  color: var(--_muted);
+  font: inherit;
+  font-size: 13px;
+  text-align: left;
+  cursor: text;
+}
+.cc-reply:hover { color: var(--_text); }
+.cc-reply:focus-visible { outline: none; box-shadow: var(--_focus); }
+.cc-reply-label { overflow: hidden; white-space: nowrap; }
+.cc-reply-slot:empty { display: none; }
 
 /* -------------------------------------------------------------------------------- panel */
 
@@ -1077,11 +1141,11 @@ ${LIGHT}
   .cc-composer, .cc-thread, .cc-panel { animation: cc-fade 100ms linear; }
   .cc-comment { animation: none; }
   .cc-badge[data-bloom='true']::after { animation: none; }
-  .cc-pearl, .cc-pick-hint { animation: none; }
+  .cc-pearl { animation: none; }
   .cc-badge::before, .cc-badge::after, .cc-seed::before, .cc-seed::after { transition-property: opacity; }
   .cc-badge, .cc-seed { transition: none; }
-  .cc-ring { transition: none; }
-  .cc-chip[data-rung='2'] .cc-chip-mark { animation: none; opacity: .5; }
+  .cc-chip[data-rung='2'] .cc-chip-mark,
+  .cc-badge[data-rung='2']::after { animation: none; opacity: 1; }
   .cc-composer[data-busy='true']::after { animation: none; background: var(--_accent); }
   .cc-roll-out, .cc-roll-in { animation: none; }
 }
@@ -1090,13 +1154,12 @@ ${LIGHT}
 .cc-layer[data-motion='reduce'] .cc-panel { animation: cc-fade 100ms linear; }
 .cc-layer[data-motion='reduce'] .cc-comment,
 .cc-layer[data-motion='reduce'] .cc-pearl,
-.cc-layer[data-motion='reduce'] .cc-pick-hint,
 .cc-layer[data-motion='reduce'] .cc-roll-out,
 .cc-layer[data-motion='reduce'] .cc-roll-in,
+.cc-layer[data-motion='reduce'] .cc-badge[data-rung='2']::after,
 .cc-layer[data-motion='reduce'] .cc-badge[data-bloom='true']::after { animation: none; }
 .cc-layer[data-motion='reduce'] .cc-badge,
-.cc-layer[data-motion='reduce'] .cc-seed,
-.cc-layer[data-motion='reduce'] .cc-ring { transition: none; }
+.cc-layer[data-motion='reduce'] .cc-seed { transition: none; }
 .cc-layer[data-motion='reduce'] .cc-chip[data-rung='2'] .cc-chip-mark { animation: none; opacity: .5; }
 @keyframes cc-fade { from { opacity: 0; } }
 

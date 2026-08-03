@@ -31,6 +31,8 @@ import type {
   PanelSectionVM,
   PanelVM,
   PickerVM,
+  PinCorner,
+  Point,
   Rect,
   ThreadVM,
   UIViewModel,
@@ -39,6 +41,13 @@ import type { Decoration, ResolvedOptions } from '../types.ts'
 
 /** §3: "approximately re-anchored" marker when the winning confidence is below 0.85. */
 export const APPROXIMATE_BELOW = 0.85
+
+/**
+ * SPEC §2.5 / decision log #48: a target is low-confidence below 0.50, so accepting the click
+ * would redirect the anchor to a landmark. Mirrored here — and only here — because `PickerVM`
+ * publishes the raw score as well, precisely so a presentation may disagree about the threshold.
+ */
+export const LOW_CONFIDENCE = 0.5
 
 /** The quote and the panel row's `title` both show the capture's first 160 characters. */
 const QUOTE_LIMIT = 160
@@ -85,6 +94,27 @@ export interface ControllerState extends UISlots {
 
 export function isApproximate(view: ThreadView): boolean {
   return view.anchoring.status === 'anchored' && view.anchoring.confidence < APPROXIMATE_BELOW
+}
+
+/**
+ * DESIGN §8.1: the pin is a 28 px teardrop whose one sharp corner sits **on** the click point,
+ * and the body hangs into whichever quadrant has room. Deciding which corner that is belongs to
+ * the controller (decision log #45): it is the same "which quadrant has room" question `flip` /
+ * `shift` already answer, with viewport measurements a presentation must never take — a
+ * presentation that measures the viewport re-implements `shift()` badly, once per pin, on
+ * someone else's page.
+ */
+export const PIN_SIZE = 28
+const PIN_PADDING = 8
+
+export function pinCornerFor(point: Point, win: Window): PinCorner {
+  const width = win.innerWidth || 0
+  // Default `bottom-left`: the body goes up-and-right of the point, which is what both
+  // reference products do. Each axis flips only when that quadrant has no room.
+  const right = width > 0 && point.x + PIN_SIZE + PIN_PADDING > width
+  const up = point.y - PIN_SIZE - PIN_PADDING < 0
+  if (up) return right ? 'top-right' : 'top-left'
+  return right ? 'bottom-right' : 'bottom-left'
 }
 
 /** §3: `pending` draws nothing, resolved is hidden unless asked for, orphan mode decides docks. */
@@ -171,6 +201,7 @@ interface Cache {
   badges: Map<string, BadgeVM>
   chips: Map<string, ChipVM>
   rects: Map<string, Rect>
+  points: Map<string, Point>
   comments: Map<string, CommentVM>
   rows: Map<string, PanelRowVM>
   sections: Map<PanelSection, PanelSectionVM>
@@ -194,6 +225,7 @@ export function createModelBuilder(): ModelBuilder {
     badges: new Map(),
     chips: new Map(),
     rects: new Map(),
+    points: new Map(),
     comments: new Map(),
     rows: new Map(),
     sections: new Map(),
@@ -261,6 +293,22 @@ export function createModelBuilder(): ModelBuilder {
       }
       const nextRects = new Map<string, Rect>()
 
+      /**
+       * `Anchoring.point` is document-space (it has to be: it outlives the viewport it was
+       * captured in). The model is viewport-space throughout, so this is the one projection,
+       * and it happens per pass for the same reason the docked rect does — a scroll re-projects
+       * instead of drifting.
+       */
+      const pointOf = (key: string, view: ThreadView): Point | null => {
+        const stored = view.anchoring.point
+        if (!stored) return null
+        return stable(cache.points.get(key), {
+          x: stored.x - (state.win.scrollX || 0),
+          y: stored.y - (state.win.scrollY || 0),
+        })
+      }
+      const nextPoints = new Map<string, Point>()
+
       /* ------------------------------------------------------------------------- badges */
 
       const visible = orderBadges(state.views.filter((view) => badgeVisible(options, view)))
@@ -272,6 +320,8 @@ export function createModelBuilder(): ModelBuilder {
         const approximate = isApproximate(view)
         const rect = rectOf(view.id, view)
         if (rect) nextRects.set(view.id, rect)
+        const point = pointOf(view.id, view)
+        if (point) nextPoints.set(view.id, point)
         // A docked badge has no element, so nothing can ever report it back on screen: the
         // off-screen skip is about elements scrolling away, and applying it to a dock is how a
         // thread the user cannot see loses the one mark that says it still exists.
@@ -295,6 +345,10 @@ export function createModelBuilder(): ModelBuilder {
           chip: keepChip(view.id, chipOf(view.id, view.id)),
           rect,
           placement: state.placementOf(`badge:${view.id}`),
+          point,
+          // `null` is meaningful, not a default: it says "this thread has no point", which is
+          // exactly when the legacy rect-anchored badge behaviour must be kept (#45).
+          pinCorner: point ? pinCornerFor(point, state.win) : null,
         }
         const kept = stable(cache.badges.get(view.id), badge)
         nextBadges.set(view.id, kept)
@@ -391,7 +445,17 @@ export function createModelBuilder(): ModelBuilder {
             rect = null
           }
         }
-        picker = stable(cache.picker, { kind: placement.kind, rect, hint: labels.pickHint })
+        const live = placement.point
+        picker = stable(cache.picker, {
+          kind: placement.kind,
+          rect,
+          point: live ? stable(cache.picker?.point, { x: live.clientX, y: live.clientY }) : null,
+          confidence: placement.confidence,
+          // Decision log #48: "will this be redirected" is a different question from "how good
+          // is this", and it is the one the cursor variant actually answers.
+          landmark: placement.confidence < LOW_CONFIDENCE,
+          hint: labels.pickHint,
+        })
       }
 
       /* -------------------------------------------------------------------------- panel */
@@ -493,6 +557,7 @@ export function createModelBuilder(): ModelBuilder {
       cache.badges = nextBadges
       cache.chips = nextChips
       cache.rects = nextRects
+      cache.points = nextPoints
       cache.comments = nextComments
       cache.rows = nextRows
       cache.sections = nextSections

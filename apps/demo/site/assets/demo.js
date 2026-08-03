@@ -15,7 +15,9 @@ import { attachEchoResponder } from './echo.js'
  */
 export const DEMO_MODES = [
   { kind: 'comment', trigger: { key: 'c', interaction: 'pick' } },
-  { kind: 'ask', trigger: { key: 'a', interaction: 'pick' }, badge: { icon: '?', label: 'Ask' } },
+  // No `badge.icon`: DESIGN §0 D5 deletes the "?" outright. Ask differs from comment by hue
+  // alone (§2.3), and the mode's word survives in `title` / `aria-label`.
+  { kind: 'ask', trigger: { key: 'a', interaction: 'pick' }, badge: { label: 'Ask' } },
 ]
 
 /**

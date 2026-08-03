@@ -93,9 +93,11 @@ describe('glassStyles — what a real browser adds behind our back', () => {
   })
 
   test('§3.3 holds: the only `border` declarations are the ones that draw something', () => {
-    // Hairlines are `box-shadow` spreads, never borders (§3.3). The exceptions are drawn marks:
-    // the resets above, the picker's corner ticks, the chip ring, the quote rail and the dashed
-    // orphan silhouette — each of which IS the shape, not a hairline around a surface.
+    // Hairlines are `box-shadow` spreads, never borders (§3.3), and since §0 D1 **no glass
+    // surface takes one at all** — its whole edge is `--_e3`. The survivors are drawn marks:
+    // the resets above, the chip ring, the quote rail and the dashed orphan silhouette, each of
+    // which IS the shape rather than a hairline around a surface. The picker's corner ticks left
+    // the list with the picker itself (§0 D7: placement mode draws nothing).
     const declarations = [...glassStyles.matchAll(/(?:^|[;{\s])border:\s*([^;]+);/g)].map((match) =>
       match[1].trim(),
     )
@@ -104,9 +106,8 @@ describe('glassStyles — what a real browser adds behind our back', () => {
       // The dashed orphan silhouette (§7 row 3): the one hairline in this design a `box-shadow`
       // cannot draw, and it is a *state mark*, not an outline around a surface.
       '1.5px dashed var(--_muted)',
-      // The chip's 5 px ring, and the picker's corner ticks — both are the shape itself.
+      // The chip's 5 px ring — the shape itself.
       '1.5px solid currentColor',
-      '1.5px solid var(--_kind)',
       // …and the `forced-colors` fallback, which is where a border is the only tool there is.
       '1px solid CanvasText',
     ])

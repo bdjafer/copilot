@@ -31,6 +31,7 @@ export { CommentError, type CommentErrorCode } from './errors.ts'
 export { THREAD_VERSION } from './types.ts'
 export type {
   AnchorDescriptor,
+  AnchorPoint,
   AnchorStatus,
   AppendCommentInput,
   AppendResult,
@@ -44,6 +45,7 @@ export type {
   CreateThreadInput,
   CustomSelector,
   DeleteCommentResult,
+  DocumentPoint,
   DocumentRect,
   DomainOptions,
   ElementCapture,

@@ -7,6 +7,7 @@
  */
 
 export { captureTarget } from './target.ts'
+export { assessTarget } from './assess.ts'
 // `sanitizeHtml` stays internal: §2.5 exposes that seam as `CaptureOptions.sanitize`
 // ("Replaces the built-in sanitizer"), and §2 lists no `sanitizeHtml` export.
 export { captureElement } from './capture.ts'
@@ -19,19 +20,24 @@ export type {
   AnchorAttempt,
   AnchorExplanation,
   AnchorMatch,
+  AssessOptions,
   CaptureOptions,
   DescribeContext,
   ResolveContext,
   ResolveOptions,
   SelectorStrategy,
+  TargetAssessment,
+  TargetRejection,
 } from './types.ts'
 
 /* The DOM-free half of the anchoring vocabulary lives in `src/types.ts` (§1.1) and is
    re-exported here so `comment-core/anchor` is a complete entry point on its own. */
 export type {
   AnchorDescriptor,
+  AnchorPoint,
   BuiltinSelector,
   CustomSelector,
+  DocumentPoint,
   DocumentRect,
   ElementCapture,
   ElementFingerprint,

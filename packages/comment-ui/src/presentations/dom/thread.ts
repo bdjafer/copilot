@@ -30,6 +30,18 @@ export interface ThreadPopover {
   destroy(): void
 }
 
+/** The platform's own rendering of an instant. A value, so it needs no `Labels` key. */
+function localTime(doc: Document, iso: string): string {
+  try {
+    const language = doc.defaultView?.navigator.language ?? 'en'
+    return new Intl.DateTimeFormat(language, { dateStyle: 'short', timeStyle: 'short' }).format(
+      new Date(iso),
+    )
+  } catch {
+    return iso
+  }
+}
+
 export function createThreadPopover(host: PresentationHost, intents: Intents): ThreadPopover {
   const { doc } = host
   const title = el(doc, 'span', { class: 'cc-head-title' })
@@ -104,7 +116,12 @@ export function createThreadPopover(host: PresentationHost, intents: Intents): T
     setAttr(author, 'data-author', comment.author)
     setText(author, comment.author)
     // No prose: the timestamp is a machine value, so it needs no `Labels` key to be i18n-clean.
+    // **Its text is drawn unconditionally** (SPEC §3.1.2 drawing obligation 1): a `<time>` with a
+    // `datetime` attribute and no content is announced as nothing and rendered as nothing, which
+    // is a bug in the frozen markup rather than a design choice — this is the a11y fix, and it
+    // adds no class name and no node.
     setAttr(time, 'datetime', comment.createdAt)
+    setText(time, localTime(doc, comment.editedAt ?? comment.createdAt))
     setAttr(time, 'title', comment.editedAt ?? comment.createdAt)
     setAttr(node, 'data-edited', comment.editedAt ? 'true' : null)
     setAttr(node, 'data-comment', comment.id)

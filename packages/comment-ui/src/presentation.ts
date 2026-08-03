@@ -51,6 +51,19 @@ export interface Rect {
   readonly height: number
 }
 
+/** Viewport-space point. Same role as `Rect`: for non-DOM presentations and for FLIP. */
+export interface Point {
+  readonly x: number
+  readonly y: number
+}
+
+/**
+ * Which corner of a pin is its sharp one, i.e. which corner sits on the anchor point.
+ * Decided by the controller in the same flip/shift pass that positions the pin, so a
+ * presentation never measures the viewport (decision log #45, `docs/DESIGN.md` §8.1).
+ */
+export type PinCorner = 'top-left' | 'top-right' | 'bottom-left' | 'bottom-right'
+
 export interface ChipVM {
   readonly text: string
   readonly tone: ChipTone
@@ -84,6 +97,16 @@ export interface BadgeVM {
   readonly rect: Rect | null
   /** The resolved placement of the last positioning pass, so a morph can grow out of its anchor. */
   readonly placement: string | null
+  /**
+   * The thread's stored click point in viewport coordinates, or `null` for a thread captured
+   * without one (pre-#42 records, text-mode and keyboard placement). Same role as `rect`.
+   */
+  readonly point: Point | null
+  /**
+   * Which corner of the pin sits on `point`; `null` exactly when `point` is `null`, in which
+   * case the pin keeps the legacy behaviour of hanging off the anchor rect at `badge.offset`.
+   */
+  readonly pinCorner: PinCorner | null
 }
 
 export interface CommentVM {
@@ -130,7 +153,21 @@ export interface ComposerVM {
 
 export interface PickerVM {
   readonly kind: string
+  /**
+   * Candidate rect. **No shipped presentation draws it any more** (`docs/DESIGN.md` §0 D7:
+   * placement mode draws zero pixels); kept because a non-DOM or debugging presentation may
+   * legitimately want it, and removing a field from a published model buys nothing.
+   */
   readonly rect: Rect | null
+  /** The live cursor point — what the cursor image's hotspot is aimed at. */
+  readonly point: Point | null
+  /**
+   * `assessTarget`'s score for the candidate, 0..1, and whether accepting the click would
+   * redirect the anchor to a landmark. The presentation spends both on **which cursor image to
+   * hand back through `host.cursor()`**, and on nothing else (decision log #48).
+   */
+  readonly confidence: number
+  readonly landmark: boolean
   readonly hint: string
 }
 
@@ -240,6 +277,21 @@ export interface PresentationHost {
   anchor(key: string, node: HTMLElement | null): void
   /** Write into the controller's visually-hidden `role="status"` region. */
   announce(message: string): void
+  /**
+   * Ask the controller to apply a `cursor` value to the **host document**, or `null` to clear it
+   * (decision log #46, `docs/DESIGN.md` §0 D7, §8.2). The value is a complete CSS `cursor`
+   * declaration value, e.g.
+   * `image-set(url("data:image/svg+xml,…") 1x, url("…") 2x) 2 22, crosshair`.
+   *
+   * This is the **only** way a presentation can affect anything outside the shadow root, and it
+   * exists because the decree makes the cursor the entire placement-mode affordance while §3's
+   * "the host page's DOM is never mutated" rule still stands. The controller — never the
+   * presentation — owns the mechanism: one constructed `CSSStyleSheet` pushed onto
+   * `document.adoptedStyleSheets`, popped on the next `cursor(null)`, on `Esc`, on
+   * `page:change`, on `unmount()` and in a `finally`. No node, no attribute, no
+   * `MutationObserver` record. A presentation that never calls it changes nothing.
+   */
+  cursor(value: string | null): void
 }
 
 export interface PresentationInstance {

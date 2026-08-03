@@ -81,6 +81,12 @@ export interface DocumentRect {
   readonly height: number
 }
 
+/** Document-space point, same rationale as `DocumentRect`. DOM-free type, on purpose. */
+export interface DocumentPoint {
+  readonly x: number
+  readonly y: number
+}
+
 /* -------------------------------------------------------------------------------------- §2.4 */
 
 export interface AnchorDescriptor {
@@ -88,6 +94,41 @@ export interface AnchorDescriptor {
   /** Ordered cheap → fuzzy. Produced by captureTarget(); never hand-built. */
   selectors: Selector[]
   fingerprint: ElementFingerprint
+  /**
+   * Where inside the anchor the user actually clicked (decision log #42, DESIGN §0 D8).
+   * Additive and optional: a record written before this field existed simply has none, and every
+   * surface falls back to the anchor rect exactly as it did before. Written once, by
+   * `captureTarget`, when a `point` was supplied; never updated.
+   */
+  point?: AnchorPoint
+}
+
+/**
+ * A click point, stored four ways so it survives what actually happens to pages.
+ * All values are CSS pixels at capture time.
+ */
+export interface AnchorPoint {
+  /** Offset from the anchor element's border-box top-left. Used when the box is the same size. */
+  readonly dx: number
+  readonly dy: number
+  /** The same offset as a fraction of the border box (0..1, unclamped). Used when it resized. */
+  readonly fx: number
+  readonly fy: number
+  /** Document-space point. The last resort, and the only value an orphan still has. */
+  readonly docX: number
+  readonly docY: number
+  /**
+   * Viewport at capture time. This is what makes a coordinate legible when the same page is
+   * reopened at another width — the same reason Vercel stores screen size and DPR per comment.
+   */
+  readonly viewport: { readonly width: number; readonly height: number; readonly dpr: number }
+  /**
+   * `assessTarget`'s score for the element that was under the cursor, and whether the anchor is
+   * that element (`false`) or a landmark it was redirected to (`true`). Diagnostics for
+   * `engine.explain()`; never re-derived at read time, because the page has changed since.
+   */
+  readonly confidence: number
+  readonly landmark: boolean
 }
 
 export type BuiltinSelector =

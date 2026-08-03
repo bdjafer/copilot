@@ -58,6 +58,7 @@ function pendingView(): ThreadView {
       confidence: 0,
       via: null,
       rect: null,
+      point: null,
     },
     isOrphaned: false,
     isResolved: false,
@@ -377,5 +378,51 @@ describe('badge teardown', () => {
     await s.engine.delete(id)
     await s.settle()
     expect(s.vm().badges).toHaveLength(0)
+  })
+})
+
+/**
+ * §0 D8 / decision log #42, #45 — the pin's coordinate half.
+ *
+ * The rule these cases exist to pin down is the one that made the decree necessary: **a click in
+ * a page's empty right margin must produce a thread at the cursor**, not a thread bolted to
+ * whatever giant box `elementFromPoint` happened to answer — and the confidence heuristic changes
+ * only what the point is stored *relative to*, never where a pixel lands.
+ */
+describe('the stored click point', () => {
+  test('a thread captured with a point publishes it, in viewport space, with a corner', async () => {
+    const s = await boot()
+    const id = await s.seed('#a', 'x', { point: { clientX: 120, clientY: 240 } })
+    // Default `bottom-left`: the body hangs up-and-right of the point, which is what both
+    // reference products do, and there is room for it here.
+    expect(badgeOf(s.vm(), id)).toMatchObject({
+      point: { x: 120, y: 240 },
+      pinCorner: 'bottom-left',
+    })
+  })
+
+  test('the corner is the controller’s call, made from viewport room the presentation cannot see', async () => {
+    const s = await boot()
+    const width = s.doc.defaultView?.innerWidth ?? 1024
+    const near = await s.seed('#a', 'x', { point: { clientX: width - 2, clientY: 6 } })
+    // No room above and none to the right: the body flips into the only free quadrant.
+    expect(badgeOf(s.vm(), near)?.pinCorner).toBe('top-right')
+  })
+
+  test('a record written before the field existed keeps the legacy rect behaviour', async () => {
+    const s = await boot()
+    const id = await s.seed('#a')
+    // `null` is meaningful, not a default: it says "this thread has no point", which is exactly
+    // when the rect-anchored pin must be kept.
+    expect(badgeOf(s.vm(), id)).toMatchObject({ point: null, pinCorner: null })
+    expect(badgeOf(s.vm(), id)?.rect).not.toBeNull()
+  })
+
+  test('the model stays serializable and frozen with the new fields present', async () => {
+    const s = await boot()
+    await s.seed('#a', 'x', { point: { clientX: 40, clientY: 40 } })
+    const vm = s.vm()
+    expect(() => structuredClone(vm)).not.toThrow()
+    expect(Object.isFrozen(vm.badges[0])).toBe(true)
   })
 })

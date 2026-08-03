@@ -46,8 +46,16 @@ export interface BaseScene {
   store: MemoryStore
   root: ShadowRoot
   doc: Document
-  /** Seed a thread anchored on `selector`. Returns the thread id. */
-  seed(selector: string, body?: string, over?: { kind?: string }): Promise<string>
+  /**
+   * Seed a thread anchored on `selector`. Returns the thread id. `point` is the click that
+   * placed it (SPEC §2.4 `AnchorDescriptor.point`); without it the record is a pre-#42 one and
+   * every surface falls back to the anchor rect exactly as it did.
+   */
+  seed(
+    selector: string,
+    body?: string,
+    over?: { kind?: string; point?: { clientX: number; clientY: number } },
+  ): Promise<string>
   /** Flush the anchoring batch and the controller's coalesced microtask. */
   settle(): Promise<void>
   dispose(): Promise<void>
@@ -99,7 +107,10 @@ async function base(
     async seed(selector, body = 'first comment', over) {
       const target = page.document.querySelector(selector)
       if (!target) throw new Error(`no element for ${selector}`)
-      const { anchor, capture } = captureTarget(target, { document: page.document })
+      const { anchor, capture } = captureTarget(target, {
+        document: page.document,
+        ...(over?.point ? { point: over.point } : {}),
+      })
       const result = await engine.createThread({
         pageKey: engine.pageKey,
         kind: over?.kind ?? 'comment',
@@ -210,6 +221,11 @@ export function probePresentation(options?: {
   css?: string
   throwOn?: 'create' | 'update'
   anchor?: boolean
+  /**
+   * Hand the controller a placement cursor for as long as `vm.picker` is non-null (§3.1.4
+   * `host.cursor`). Draws nothing — the point of §0 D7 is that there is nothing to draw.
+   */
+  cursor?: string
 }): Probe {
   const probe: Probe = {
     updates: [],
@@ -235,6 +251,7 @@ export function probePresentation(options?: {
         return {
           update(vm) {
             probe.updates.push(vm)
+            if (options?.cursor !== undefined) host.cursor(vm.picker ? options.cursor : null)
             if (options?.throwOn === 'update') throw new Error('probe: update failed')
             if (!options?.anchor) return
             const wanted = new Set(vm.badges.map((badge) => `badge:${badge.threadId}`))

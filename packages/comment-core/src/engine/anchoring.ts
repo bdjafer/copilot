@@ -15,6 +15,7 @@ import type { AnchorStatus, Thread } from '../types.ts'
 import type { Anchoring, AnchoringOptions } from './types.ts'
 
 import { documentRect, sameRect } from '../anchor/dom.ts'
+import { livePoint, samePoint } from '../anchor/point.ts'
 import { explainAnchor } from '../anchor/resolve.ts'
 import { asStrategyList, mergeStrategies } from '../anchor/strategies/index.ts'
 
@@ -28,6 +29,7 @@ export const PENDING: Anchoring = Object.freeze({
   confidence: 0,
   via: null,
   rect: null,
+  point: null,
 })
 
 export interface AnchorTransition {
@@ -185,7 +187,8 @@ export function createAnchoringController(deps: AnchoringDeps): AnchoringControl
       previous.range === candidate.range &&
       previous.confidence === candidate.confidence &&
       previous.via === candidate.via &&
-      sameRect(previous.rect, candidate.rect)
+      sameRect(previous.rect, candidate.rect) &&
+      samePoint(previous.point, candidate.point)
     ) {
       return previous
     }
@@ -241,7 +244,12 @@ export function createAnchoringController(deps: AnchoringDeps): AnchoringControl
       const cached = entry.ref?.deref()
       if (!passOptions.force && cached && cached.isConnected && !isTouched(cached)) {
         const rect = documentRect(cached)
-        entry.anchoring = nextAnchoring(previous, { ...previous, rect })
+        // The rect moved ⇒ so did the point. Both are reads: a coordinate is never written back.
+        entry.anchoring = nextAnchoring(previous, {
+          ...previous,
+          rect,
+          point: livePoint(thread.anchor.point, rect, true),
+        })
         continue
       }
 
@@ -263,13 +271,15 @@ export function createAnchoringController(deps: AnchoringDeps): AnchoringControl
       let candidate: Anchoring
       if (match) {
         entry.ref = new WeakRef(match.element)
+        const rect = documentRect(match.element)
         candidate = {
           status: 'anchored',
           element: match.element,
           range: match.range,
           confidence: match.confidence,
           via: match.via,
-          rect: documentRect(match.element),
+          rect,
+          point: livePoint(thread.anchor.point, rect, true),
         }
       } else {
         entry.ref = null
@@ -292,6 +302,9 @@ export function createAnchoringController(deps: AnchoringDeps): AnchoringControl
           // it is what makes PLAN §3.3's "docked at last-known position" true for a cold
           // orphan too (bench F1) instead of drawing no badge at all.
           rect: previous.rect ?? (status === 'orphaned' ? (thread.capture?.rect ?? null) : null),
+          // …and an orphaned pin still knows the coordinate the user actually clicked, not
+          // merely the box that used to contain it: `docX/docY` needs no element at all.
+          point: livePoint(thread.anchor.point, null, false),
         }
       }
 

@@ -10,11 +10,13 @@
  */
 
 import type { AnchorDescriptor, ElementCapture, ElementFingerprint, Selector } from '../types.ts'
-import type { AnyStrategy, CaptureOptions, DescribeContext } from './types.ts'
+import type { AnyStrategy, CaptureOptions, DescribeContext, TargetAssessment } from './types.ts'
 
+import { assessTarget } from './assess.ts'
 import { captureElement } from './capture.ts'
 import { closestOf, elementOf, isRange, ownerDocumentOf } from './dom.ts'
 import { fingerprintElement } from './fingerprint.ts'
+import { buildAnchorPoint } from './point.ts'
 import { byWeight, mergeStrategies } from './strategies/index.ts'
 
 /** What a target with no live element still yields, so a Thread is always well-formed. */
@@ -34,8 +36,16 @@ export function captureTarget(
   options?: CaptureOptions,
 ): { anchor: AnchorDescriptor; capture: ElementCapture } {
   const doc = options?.document ?? ownerDocumentOf(target)
-  const element = elementOf(target)
-  const mode: AnchorDescriptor['mode'] = isRange(target) ? 'text' : 'element'
+
+  // §4.6 step 0 (decision log #43): assess *before* anything else. A confident target changes
+  // nothing and the rest of the pipeline sees the element it always saw; a low-confidence one
+  // hands the whole capture over to the landmark `assessTarget` chose, because a thread bolted to
+  // a 100vh layout wrapper is the failure this exists to prevent.
+  const assessment = assessOf(target, options, doc)
+  const described: Element | Range = assessment ? assessment.anchor : target
+
+  const element = elementOf(described)
+  const mode: AnchorDescriptor['mode'] = isRange(described) ? 'text' : 'element'
 
   const selectors: Selector[] = []
   if (doc) {
@@ -44,7 +54,7 @@ export function captureTarget(
     for (const strategy of strategies.sort(byWeight)) {
       let payload: object | null = null
       try {
-        payload = strategy.describe(target, ctx) as object | null
+        payload = strategy.describe(described, ctx) as object | null
       } catch {
         payload = null // an abstention, never a fault
       }
@@ -61,8 +71,45 @@ export function captureTarget(
     }
   }
 
-  return {
-    anchor: { mode, selectors, fingerprint },
-    capture: captureElement(target, options),
+  const anchor: AnchorDescriptor = { mode, selectors, fingerprint }
+  // §2.4: additive and written once. A path with no click — keyboard, a selection, a host calling
+  // `captureTarget` directly — has no coordinate, and must never invent one. A text anchor is a
+  // *quote*, and §4.5 states outright that selection placement has no point.
+  const click = mode === 'element' ? options?.point : undefined
+  if (click && element) {
+    anchor.point = buildAnchorPoint(
+      element,
+      click,
+      {
+        confidence: assessment?.confidence ?? 1,
+        landmark: assessment?.landmark ?? false,
+      },
+      doc ?? undefined,
+    )
+  }
+
+  return { anchor, capture: captureElement(described, options) }
+}
+
+/**
+ * Step 0's guard. Assessment runs only for an element target with a click point: a `Range` is a
+ * quote, and redirecting a quote to a landmark would silently change what the thread is about.
+ */
+function assessOf(
+  target: Element | Range,
+  options: CaptureOptions | undefined,
+  doc: Document | null,
+): TargetAssessment | null {
+  if (!options?.point || isRange(target)) return null
+  const element = elementOf(target)
+  if (!element) return null
+  try {
+    return assessTarget(element, {
+      point: options.point,
+      ...(doc ? { document: doc } : {}),
+      ...options.assess,
+    })
+  } catch {
+    return null // §2.5: never throws, and a heuristic that fails must not cost the capture
   }
 }

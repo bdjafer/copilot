@@ -14,6 +14,7 @@ import type {
   Comment,
   CommentDomain,
   CommentStore,
+  DocumentPoint,
   DocumentRect,
   ElementCapture,
   ErrorPhase,
@@ -42,6 +43,13 @@ export interface Anchoring {
   readonly via: MatchVia | null
   /** Last known document-space rect. Retained while orphaned so the badge can dock. */
   readonly rect: DocumentRect | null
+  /**
+   * The stored click point, rehydrated against the live element (decision log #42).
+   * `null` when the descriptor has no `point`. Derivation, per pass, never a write — see
+   * `anchor/point.ts`. This is the coordinate the pin's tip, the composer and the popover are
+   * all placed on (`docs/DESIGN.md` §0 D8, §8.1–§8.3).
+   */
+  readonly point: DocumentPoint | null
 }
 
 /**
@@ -106,7 +114,13 @@ export interface AnchoringOptions extends Omit<ResolveOptions, 'root' | 'documen
 /* -------------------------------------------------------------------------------- §2.12 */
 
 export type PlacementTarget =
-  | { element: Element }
+  /**
+   * `point` is the viewport coordinate the user clicked (decision log #42/#43). Supplied by the
+   * engine's own pick handler from the `click` event, and by a host calling `start()` directly.
+   * When present it drives `assessTarget` + `AnchorDescriptor.point`; when absent, nothing
+   * changes anywhere.
+   */
+  | { element: Element; point?: { readonly clientX: number; readonly clientY: number } }
   | { selection: Selection | Range }
   /** Reply composer. Kind is inherited from the thread. */
   | { threadId: string }
@@ -119,17 +133,30 @@ export type PlacementState =
       phase: 'picking'
       kind: string
       interaction: 'pick' | 'hover'
-      /** Element under the cursor right now; the UI draws the highlight from this. */
+      /** Element under the cursor right now. */
       candidate: Element | null
+      /** The cursor, in viewport coordinates. `null` before the first move. */
+      point: { readonly clientX: number; readonly clientY: number } | null
+      /**
+       * `assessTarget(candidate).confidence`, recomputed with `candidate` on the same throttled
+       * frame. The UI spends it on the cursor and on nothing else — placement mode draws no
+       * overlay (`docs/DESIGN.md` §0 D7).
+       */
+      confidence: number
     }
   | {
       phase: 'composing'
       kind: string
       mode: 'element' | 'text'
+      /** What the thread anchors to — already redirected to a landmark if the pick was weak. */
       element: Element
+      /** What was under the cursor, when it differs from `element`. Diagnostics only. */
+      picked: Element | null
       range: Range | null
       draft: string
       capture: ElementCapture
+      /** The click point, in viewport coordinates. `null` for keyboard/selection placement. */
+      point: { readonly clientX: number; readonly clientY: number } | null
       /** Non-null ⇒ reply composer for that thread. */
       replyTo: string | null
     }

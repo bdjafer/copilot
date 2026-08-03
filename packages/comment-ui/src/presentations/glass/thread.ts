@@ -1,23 +1,30 @@
 /**
- * The thread popover — DESIGN §7 rows 10–14 and §8.4.
+ * The thread popover — DESIGN §0 D1/D2/D3/D4/D6, §7 rows 10–15 and 29, §8.4.
  *
- * The head is a kind glyph, the state silhouette, the chip and a close control. **The title text
- * is deleted**: the mode *is* the glyph, and it is the same glyph, at the same size and colour,
- * that the badge was carrying a moment ago — which is what makes the morph read as one object
- * growing rather than two boxes swapping (§6.6).
+ * **No head, no title bar, no logo row, no drag handle, no chrome of any kind (§0 D6).** The first
+ * comment's top edge is 10 px below the popover's and *nothing* is above it. Close and the
+ * thread's single resolve float as one absolutely positioned corner cluster over a 56 px gutter
+ * reserved on the first comment's inline-end, so no text ever runs under them — α .55 → 1 on
+ * hover/focus, but **always drawn** while the thread is open, because an affordance on a surface
+ * the user has already opened is never hidden (§0 P0).
  *
- * Comments stagger in oldest-first, in reading order, 22 ms apart and capped at six. A newly
- * arrived copilot comment gets an accent rail that decays over 1.2 s, so a reply that lands while
- * you are reading announces itself without moving anything. Timestamps are a 3 px dot until the
- * row is hovered, then `Intl.RelativeTimeFormat` — built from **values**, so it needs no `Labels`
- * key and is translated by the platform.
+ * **Metadata is permanent (§0 D2).** Author and relative time are the first thing in every comment
+ * row, unconditionally: never `opacity: 0`, never `display: none`, no hover gate, no proximity
+ * gate, no 3 px dot. Hover *adds* a native `title` with the absolute datetime — additive only.
+ * The pencil is the thing that hides instead (§0 D3): one right-aligned actions cluster per row,
+ * `opacity: 0` until the row is hovered or focused, always **mounted** so keyboard and AT reach
+ * it, and swapping `position: absolute → relative` with the opacity is what stops the row from
+ * reflowing.
  *
- * Two rules here exist because this runs on someone else's page: `overscroll-behavior: contain`
- * on the comment list, or a scrolled-out thread scrolls *their* article; and the scroll affordance
- * is a mask, not a scrollbar, because a mask cannot be styled away by an inherited rule.
+ * **Reply is inline, at the bottom (§0 D4).** A permanently rendered, collapsed one-line field
+ * sits at the thread's bottom edge whenever `actions.reply`; focusing it expands the composer *in
+ * place*, as a child of this surface — never a side panel, never a second floating box, never a
+ * popover on a popover. The presentation registers `host.anchor('composer', null)` while it is
+ * docked, so the controller positions nothing for it (SPEC #47).
  *
- * Orphan-while-open never jumps. The head silhouette crossfades to the dashed pin, the quote rail
- * reveals, and the action row swaps resolve for delete — the box does not move.
+ * Two rules here exist because this runs on someone else's page: `overscroll-behavior: contain` on
+ * the comment list, or a scrolled-out thread scrolls *their* article; and the scroll affordance is
+ * a mask, not a scrollbar, because a mask cannot be styled away by an inherited rule.
  */
 
 import type { CommentVM, Intents, Labels, PresentationHost, ThreadVM } from '../../presentation.ts'
@@ -33,8 +40,8 @@ import {
   showFloating,
 } from '../../dom.ts'
 import { createArm } from './arm.ts'
-import { createChip, createChipSlot, renderMarks, type ChipSlot } from './chip.ts'
-import { icon, kindIcon, setIcon } from './icons.ts'
+import { createChip, createChipSlot, type ChipSlot } from './chip.ts'
+import { icon, setIcon } from './icons.ts'
 import { applyHue } from './kind.ts'
 import { transferOrigin, type Rectish } from './motion.ts'
 
@@ -44,7 +51,11 @@ const STAGGER_CAP = 6
 export interface ThreadPopover {
   readonly element: HTMLElement
   readonly close: HTMLElement
+  /** Where a reply composer docks (§0 D4). The composer is a child of this surface. */
+  readonly replySlot: HTMLElement
   render(thread: ThreadVM | null, labels: Labels, origin: Rectish | null, hueOf: HueOf): void
+  /** Hide the collapsed rest field while the expanded composer occupies its place. */
+  setReplying(replying: boolean): void
   destroy(): void
 }
 
@@ -79,27 +90,24 @@ function relative(doc: Document, iso: string): string {
   return ''
 }
 
+/** §7 row 14: hover *adds* the absolute datetime, and the viewport the thread was captured at. */
+function absolute(doc: Document, iso: string): string {
+  try {
+    const language = doc.defaultView?.navigator.language ?? 'en'
+    return new Intl.DateTimeFormat(language, { dateStyle: 'medium', timeStyle: 'short' }).format(
+      new Date(iso),
+    )
+  } catch {
+    return iso
+  }
+}
+
 export function createThreadPopover(host: PresentationHost, intents: Intents): ThreadPopover {
   const { doc } = host
 
-  const headGlyph = icon(doc, 'cc-i-comment', 'cc-head-icon')
-  const marks = el(doc, 'span', { class: 'cc-badge-marks', 'aria-hidden': 'true' })
-  const chipSlot = createChipSlot(doc, true)
-  const chip: ChipSlot = createChip(doc, chipSlot)
-  const close = el(
-    doc,
-    'button',
-    { type: 'button', class: 'cc-ghost', 'data-variant': 'icon', 'data-action': 'close' },
-    [icon(doc, 'cc-i-close', 'cc-icon')],
-  )
-  const head = el(doc, 'div', { class: 'cc-head' }, [headGlyph, marks, chipSlot, close])
-  const quote = el(doc, 'p', { class: 'cc-quote', hidden: true })
-  const list = el(doc, 'ul', { class: 'cc-comments' })
-
-  const reply = el(doc, 'button', { type: 'button', class: 'cc-ghost', 'data-action': 'reply' }, [
-    icon(doc, 'cc-i-reply', 'cc-icon'),
-  ])
-  // `data-action` flips between resolve and reopen, so the stable hook is `data-role`.
+  /* §0 D6: the corner cluster is the ONLY chrome, it floats over the content, and it is drawn
+     for as long as the thread is open. `data-role="status"` is the stable hook, because
+     `data-action` flips between resolve and reopen. */
   const resolveGlyph = icon(doc, 'cc-i-check', 'cc-icon')
   const resolve = el(
     doc,
@@ -107,13 +115,30 @@ export function createThreadPopover(host: PresentationHost, intents: Intents): T
     { type: 'button', class: 'cc-ghost', 'data-role': 'status', 'data-action': 'resolve' },
     [resolveGlyph],
   )
-  const remove = el(
+  const close = el(
     doc,
     'button',
-    { type: 'button', class: 'cc-ghost', 'data-variant': 'danger', 'data-action': 'delete' },
-    [icon(doc, 'cc-i-trash', 'cc-icon')],
+    { type: 'button', class: 'cc-ghost', 'data-variant': 'icon', 'data-action': 'close' },
+    [icon(doc, 'cc-i-close', 'cc-icon')],
   )
-  const actions = el(doc, 'div', { class: 'cc-thread-actions' }, [reply, resolve, remove])
+  const corner = el(doc, 'div', { class: 'cc-corner' }, [resolve, close])
+
+  const list = el(doc, 'ul', { class: 'cc-comments' })
+  // §10 keeps the orphan quote — it is the only place the deleted content still exists — but §0
+  // D6 forbids anything above the first comment, so the audit trail sits below the thread.
+  const quote = el(doc, 'p', { class: 'cc-quote', hidden: true })
+  const chipSlot = createChipSlot(doc, true)
+  const chip: ChipSlot = createChip(doc, chipSlot)
+
+  /* §7 row 29: the permanently rendered, collapsed reply field, and the slot the expanded
+     composer docks into. `Labels.placeholder` is its visible rest label (§10 keeps it);
+     `Labels.reply` is its accessible name, so the verb never has to be drawn. */
+  const replyLabel = el(doc, 'span', { class: 'cc-reply-label', 'aria-hidden': 'true' })
+  const reply = el(doc, 'button', { type: 'button', class: 'cc-reply', 'data-action': 'reply' }, [
+    replyLabel,
+  ])
+  const replySlot = el(doc, 'div', { class: 'cc-reply-slot' })
+  const foot = el(doc, 'div', { class: 'cc-thread-foot' }, [chipSlot, reply, replySlot])
 
   const element = el(
     doc,
@@ -124,7 +149,7 @@ export function createThreadPopover(host: PresentationHost, intents: Intents): T
       role: 'dialog',
       'data-open': 'false',
     },
-    [head, quote, list, actions],
+    [corner, list, quote, foot],
   )
   host.layer.append(element)
   host.anchor('thread', element)
@@ -132,6 +157,7 @@ export function createThreadPopover(host: PresentationHost, intents: Intents): T
   let openId: string | null = null
   let current: ThreadVM | null = null
   let labels: Labels | null = null
+  let replying = false
   /** Comment ids already drawn for the open thread, so a late arrival can be told apart. */
   let known = new Set<string>()
 
@@ -146,28 +172,38 @@ export function createThreadPopover(host: PresentationHost, intents: Intents): T
     if (current.actions.reopen) intents.reopenThread(openId)
     else intents.resolveThread(openId)
   })
-  // §6.4 `arm` / A4: the first click arms, the second deletes. Everything else disarms.
-  const arm = createArm(remove)
-  remove.addEventListener('click', () => {
-    if (!openId) return
-    if (arm.click()) intents.deleteThread(openId)
-  })
-  element.addEventListener('click', (event: Event) => {
-    if (!event.composedPath().includes(remove)) arm.disarm()
-  })
   element.addEventListener('keydown', (event: KeyboardEvent) => {
     if (event.key !== 'Escape') return
-    arm.disarm()
+    disarmAll()
     if (intents.escape()) event.preventDefault()
   })
 
   /**
+   * §6.4 `arm` / A4: the first click arms, the second deletes. Delete lives in the **first
+   * comment's** row cluster now (§0 D6 took it out of the corner), so the arm follows the node
+   * that row reuses across renders rather than a single control this file owns.
+   */
+  const arms = new Map<HTMLElement, ReturnType<typeof createArm>>()
+  function armFor(node: HTMLElement): ReturnType<typeof createArm> {
+    let existing = arms.get(node)
+    if (!existing) {
+      existing = createArm(node)
+      arms.set(node, existing)
+    }
+    return existing
+  }
+  function disarmAll(): void {
+    for (const entry of arms.values()) entry.disarm()
+  }
+  element.addEventListener('click', (event: Event) => {
+    const path = event.composedPath()
+    for (const [node, entry] of arms) if (!path.includes(node)) entry.disarm()
+  })
+
+  /**
    * The mask *is* the scroll affordance (§8.4), so it has to know where the list is — and it has
-   * to ask again once the list has a size. Bound to `scroll` alone, it was evaluated while the
-   * popover was still `display: none`, where `clientHeight` is 0 and *every* list looks
-   * overflowing: the mask then faded out the tail of the newest comment with nothing to scroll
-   * to. `clientHeight > 0` is the guard, and the observer is what re-asks after layout, after an
-   * append, and after the textarea inside an inline edit grows.
+   * to ask again once the list has a size. `clientHeight > 0` is the guard, and the observer is
+   * what re-asks after layout, after an append, and after the textarea inside an inline edit grows.
    */
   function syncScroll(): void {
     const height = list.clientHeight
@@ -176,47 +212,56 @@ export function createThreadPopover(host: PresentationHost, intents: Intents): T
     setAttr(list, 'data-scroll-bottom', bottom ? 'true' : null)
   }
   list.addEventListener('scroll', syncScroll, { passive: true })
-  // …and once more when the entrance finishes. `cc-stagger` translates each comment 4 px on its
-  // way in, and a translated child **counts toward its scroll container's overflow** — so a list
-  // that fits exactly reports 4 px of scrollable height for the length of the animation, turns
-  // the mask on, and then never resizes again to turn it off. `animationend` bubbles, so one
-  // listener on the list covers every comment in it.
+  // …and once more when the entrance finishes: `cc-stagger` translates each comment 4 px on its
+  // way in, and a translated child counts toward its scroll container's overflow.
   list.addEventListener('animationend', syncScroll)
 
   const view = doc.defaultView
   const Observer = (view as { ResizeObserver?: typeof ResizeObserver } | null)?.ResizeObserver
-  /**
-   * **Held in a variable that `destroy()` reads, and that is load-bearing twice over.** An
-   * observer nothing references is collectable, and a browser will collect it: the callback fires
-   * once and then silently stops, which looks exactly like a mask that is broken again.
-   * Disconnecting it is also the ordinary teardown obligation for a per-mount observer.
-   */
+  /** Held in a variable `destroy()` reads: an observer nothing references is collectable. */
   const resize = typeof Observer === 'function' ? new Observer(syncScroll) : null
   resize?.observe(list)
 
   function renderComment(node: HTMLElement, comment: CommentVM, index: number): void {
     const author = node.querySelector<HTMLElement>('.cc-author')
+    const authorWord = node.querySelector<HTMLElement>('.cc-author-word')
     const time = node.querySelector<HTMLElement>('.cc-time')
+    const edited = node.querySelector<HTMLElement>('.cc-edited')
     const body = node.querySelector<HTMLElement>('.cc-body')
     const edit = node.querySelector<HTMLButtonElement>('[data-action="edit"]')
-    if (!author || !time || !body || !edit || !labels) return
+    const remove = node.querySelector<HTMLButtonElement>('[data-action="delete"]')
+    if (!author || !authorWord || !time || !edited || !body || !edit || !remove || !labels) return
 
     setAttr(node, 'data-comment', comment.id)
     setAttr(node, 'data-author', comment.author)
     setAttr(node, 'data-edited', comment.editedAt ? 'true' : null)
     setAttr(node, 'style', `--_i:${String(Math.min(index, STAGGER_CAP))}`)
-    setIcon(author, comment.author === 'copilot' ? 'cc-i-sparkle' : 'cc-i-comment')
-    setAttr(author, 'data-author', comment.author)
-    setAttr(author, 'aria-label', comment.author)
+
+    // §0 D2: the author mark is a 12 px difference marker — `cc-i-sparkle` on a copilot row and
+    // **nothing** on a user row, because `Author` is a two-value union with no name and no avatar
+    // and the majority case is "a person wrote this". Both keep the word in the a11y tree.
+    setAttr(author, 'hidden', comment.author !== 'copilot')
+    setText(authorWord, comment.author)
+
     // No prose: the timestamp is a machine value, so it needs no `Labels` key to be i18n-clean.
+    // It is drawn on every row, always — hover only ADDS the absolute datetime.
     setAttr(time, 'datetime', comment.createdAt)
-    setAttr(time, 'title', comment.editedAt ?? comment.createdAt)
+    setAttr(time, 'title', absolute(doc, comment.editedAt ?? comment.createdAt))
     setText(time, relative(doc, comment.editedAt ?? comment.createdAt))
+    setAttr(edited, 'hidden', comment.editedAt === null)
+
     setAttr(edit, 'aria-label', labels.edit)
     setAttr(edit, 'title', labels.edit)
+    setAttr(remove, 'aria-label', labels.delete)
+    setAttr(remove, 'title', labels.delete)
+    // §8.4: delete stays where it already is — the **first** comment's row cluster, once per
+    // thread, exactly as resolve appears once per thread in the corner.
+    setAttr(remove, 'hidden', index !== 0 || !(current?.actions.delete ?? false))
 
     setAttr(body, 'hidden', comment.editing)
-    setAttr(edit, 'hidden', comment.editing)
+    // §0 D3 names the cluster's contents as the pencil for **own comments**. A copilot reply is
+    // not the user's to rewrite, and it is the one row whose text the host regenerates.
+    setAttr(edit, 'hidden', comment.editing || comment.author !== 'user')
     if (!comment.editing) {
       setText(body, comment.body)
       node.querySelector('.cc-edit')?.remove()
@@ -260,27 +305,44 @@ export function createThreadPopover(host: PresentationHost, intents: Intents): T
         el(doc, 'div', { class: 'cc-row-actions' }, [cancel, save]),
       ]),
     )
-    // A node this layer created this pass, so focusing it needs no `vm.focus` round trip — the
-    // four `FocusTarget`s are the ones policy has an opinion about.
+    // A node this layer created this pass, so focusing it needs no `vm.focus` round trip.
     safeFocus(input)
   }
 
   function createComment(): HTMLElement {
-    const author = icon(doc, 'cc-i-comment', 'cc-author')
+    const author = icon(doc, 'cc-i-sparkle', 'cc-author')
+    author.setAttribute('data-author', 'copilot')
+    // §10: the author *word* leaves the screen and stays in the accessibility tree.
+    const authorWord = el(doc, 'span', { class: 'cc-author-word cc-vh' })
     const time = el(doc, 'time', { class: 'cc-time' })
+    const edited = icon(doc, 'cc-i-pencil', 'cc-edited')
+    edited.setAttribute('aria-hidden', 'true')
     const edit = el(
       doc,
       'button',
       { type: 'button', class: 'cc-ghost', 'data-variant': 'icon', 'data-action': 'edit' },
       [icon(doc, 'cc-i-pencil', 'cc-icon')],
     )
+    const remove = el(
+      doc,
+      'button',
+      { type: 'button', class: 'cc-ghost', 'data-variant': 'danger', 'data-action': 'delete' },
+      [icon(doc, 'cc-i-trash', 'cc-icon')],
+    )
+    // §0 D3: one cluster per row, mounted at all times, `opacity: 0` until the row is hovered or
+    // focused. Deliberately not the reference products' `⋯` menu — `⋯` exists there to host a
+    // *text* list, and §10 forbids drawn verbs.
+    const actions = el(doc, 'span', { class: 'cc-comment-actions' }, [edit, remove])
     const node = el(doc, 'li', { class: 'cc-comment' }, [
-      el(doc, 'div', { class: 'cc-comment-head' }, [author, time, edit]),
+      el(doc, 'div', { class: 'cc-comment-head' }, [author, authorWord, time, edited, actions]),
       el(doc, 'div', { class: 'cc-body' }),
     ])
     edit.addEventListener('click', () => {
       const commentId = node.getAttribute('data-comment')
       if (openId && commentId) intents.beginEdit(openId, commentId)
+    })
+    remove.addEventListener('click', () => {
+      if (openId && armFor(remove).click()) intents.deleteThread(openId)
     })
     return node
   }
@@ -288,6 +350,13 @@ export function createThreadPopover(host: PresentationHost, intents: Intents): T
   return {
     element,
     close,
+    replySlot,
+
+    setReplying(next) {
+      replying = next
+      setAttr(element, 'data-replying', next ? 'true' : null)
+      setAttr(reply, 'hidden', next || !(current?.actions.reply ?? false))
+    },
 
     render(thread, next, origin, hueOf) {
       labels = next
@@ -295,15 +364,14 @@ export function createThreadPopover(host: PresentationHost, intents: Intents): T
       setAttr(close, 'title', next.dismiss)
       setAttr(reply, 'aria-label', next.reply)
       setAttr(reply, 'title', next.reply)
-      setAttr(remove, 'aria-label', next.delete)
-      setAttr(remove, 'title', next.delete)
+      setText(replyLabel, next.placeholder)
 
       if (!thread) {
         if (openId === null) return
         openId = null
         current = null
         known = new Set()
-        arm.disarm()
+        disarmAll()
         chip.render(null)
         hideFloating(element)
         return
@@ -313,7 +381,7 @@ export function createThreadPopover(host: PresentationHost, intents: Intents): T
       if (opening) {
         openId = thread.threadId
         known = new Set()
-        arm.disarm()
+        disarmAll()
         showFloating(element)
         transferOrigin(element, origin)
       }
@@ -322,15 +390,13 @@ export function createThreadPopover(host: PresentationHost, intents: Intents): T
       setAttr(element, 'aria-label', thread.ariaLabel)
       setAttr(element, 'data-thread', thread.threadId)
       setAttr(element, 'data-status', thread.status)
-      // §8.4: resolved is a *silhouette*, not a tint. The head draws the hollow disc + check the
-      // badge draws, and the sheet mutes — so a screenshot of a resolved thread says so.
+      // §8.4: a resolved thread is not a colour change — the pin draws the hollow silhouette, the
+      // bodies mute, and the corner ✓ becomes `cc-i-uturn`. A screenshot still says "resolved".
       setAttr(element, 'data-resolved', thread.resolved ? 'true' : null)
       setAttr(element, 'data-anchor', thread.anchor)
       setAttr(element, 'data-kind', thread.kind)
       applyHue(element, hueOf, thread.kind)
       setAttr(element, 'title', thread.title)
-      setIcon(headGlyph, kindIcon(thread.kind))
-      renderMarks(doc, marks, thread)
       chip.render(thread.chip)
 
       setAttr(quote, 'hidden', thread.quote === null)
@@ -343,6 +409,10 @@ export function createThreadPopover(host: PresentationHost, intents: Intents): T
         }
         known.add(comment.id)
       }
+      // §8.4: a thread opens at its latest message (the 280px list would otherwise hide the
+      // newest rows under the bottom fade). A late arrival only follows if the reader was
+      // already at the bottom — never yank someone reading history.
+      const wasAtBottom = list.scrollHeight - list.clientHeight - list.scrollTop <= 24
 
       reconcile(
         list,
@@ -359,23 +429,30 @@ export function createThreadPopover(host: PresentationHost, intents: Intents): T
           }, 1200)
         },
       )
+      if (opening || (arrived.size > 0 && wasAtBottom)) list.scrollTop = list.scrollHeight
       syncScroll()
       // …and again on the next frame, when the sheet the popover just became actually has one.
-      if (opening) view?.requestAnimationFrame(syncScroll)
+      if (opening) {
+        view?.requestAnimationFrame(() => {
+          list.scrollTop = list.scrollHeight
+          syncScroll()
+        })
+      }
 
+      // §7 row 12: **one** resolve per thread, in the corner, always drawn while it is open.
       const reopening = thread.actions.reopen
       setAttr(resolve, 'data-action', reopening ? 'reopen' : 'resolve')
       setAttr(resolve, 'aria-label', reopening ? next.reopen : next.resolve)
       setAttr(resolve, 'title', reopening ? next.reopen : next.resolve)
       setIcon(resolveGlyph, reopening ? 'cc-i-uturn' : 'cc-i-check')
-      setAttr(reply, 'hidden', !thread.actions.reply)
       setAttr(resolve, 'hidden', !(thread.actions.resolve || thread.actions.reopen))
-      setAttr(remove, 'hidden', !thread.actions.delete)
+      setAttr(reply, 'hidden', replying || !thread.actions.reply)
     },
 
     destroy() {
       chip.destroy()
-      arm.destroy()
+      for (const entry of arms.values()) entry.destroy()
+      arms.clear()
       resize?.disconnect()
       list.removeEventListener('scroll', syncScroll)
       list.removeEventListener('animationend', syncScroll)

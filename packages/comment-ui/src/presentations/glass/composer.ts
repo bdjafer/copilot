@@ -35,6 +35,13 @@ import { transferOrigin, type Rectish } from './motion.ts'
 export interface Composer {
   readonly element: HTMLElement
   readonly input: HTMLTextAreaElement
+  /**
+   * §0 D4 / SPEC #47: **a reply is not a second surface.** Docking moves this element into the
+   * thread's own reply slot and registers `host.anchor('composer', null)`, so the controller
+   * positions nothing for it, runs no `autoUpdate`, and there is nothing to flip or dismiss
+   * separately. `null` returns it to the layer as the floating placement composer.
+   */
+  dock(target: HTMLElement | null): void
   render(composer: ComposerVM | null, labels: Labels, origin: Rectish | null, hueOf: HueOf): void
   destroy(): void
 }
@@ -75,6 +82,8 @@ export function createComposer(host: PresentationHost, intents: Intents): Compos
   let busy = false
   let pearled = false
   let draft = ''
+  /** Non-null while this is the thread's inline reply field rather than a floating sheet. */
+  let docked: HTMLElement | null = null
 
   const submit = (): void => {
     // The draft is the controller's. Write the last keystroke through before asking for the send,
@@ -85,6 +94,9 @@ export function createComposer(host: PresentationHost, intents: Intents): Compos
 
   function collapse(next: boolean): void {
     if (next === pearled) return
+    // The pearl is the floating composer's click-away state. A docked reply is a child of the
+    // thread, so there is nothing to collapse *to* and nothing to re-anchor.
+    if (next && docked) return
     pearled = next
     setAttr(pearl, 'hidden', !next)
     setAttr(element, 'data-pearled', next ? 'true' : null)
@@ -160,7 +172,10 @@ export function createComposer(host: PresentationHost, intents: Intents): Compos
    * sees through our own shadow boundary.
    */
   function onPointerDown(event: Event): void {
-    if (!open || pearled) return
+    // A docked reply lives inside the thread and is dismissed by the thread's own chain (§7's
+    // Esc ladder gained a rung for it). Pearling a field that is already part of a visible
+    // surface would be a second box for something that is not floating in the first place.
+    if (!open || pearled || docked) return
     const path = event.composedPath()
     if (path.includes(element)) return
     // An empty composer has nothing to preserve, so click-away is a plain cancel.
@@ -172,6 +187,30 @@ export function createComposer(host: PresentationHost, intents: Intents): Compos
   return {
     element,
     input,
+
+    dock(target) {
+      if (docked === target) return
+      if (pearled) collapse(false)
+      // The `popover` attribute has to come OFF while docked, and that is not tidiness: a
+      // `popover` element inside another popover is promoted into the top layer by
+      // `showPopover()`, which would tear the reply field out of the thread's flow and turn it
+      // into exactly the second floating surface §0 D4 forbids.
+      const wasOpen = element.getAttribute('data-open') === 'true'
+      if (wasOpen) hideFloating(element)
+      docked = target
+      setAttr(element, 'data-docked', target ? 'true' : null)
+      setAttr(element, 'popover', target ? null : 'manual')
+      if (target) {
+        // SPEC #47: `host.anchor(key, null)` is the existing, documented way to say "do not
+        // position this", so the seam absorbs the change with no new surface at all.
+        host.anchor('composer', null)
+        target.append(element)
+      } else {
+        host.layer.append(element)
+        host.anchor('composer', element)
+      }
+      if (wasOpen) showFloating(element)
+    },
 
     render(composer, labels, origin, hueOf) {
       setAttr(send, 'aria-label', labels.send)

@@ -805,7 +805,10 @@ export function createCommentEngine<S extends CommentStore = CommentStore>(
     modes: () => modes,
     emit,
     emitError: (error, phase, threadId) => emitError(error, phase, threadId),
-    capture: (target) => captureTarget(target, captureOptions()),
+    // §4.6 step 0: the click point rides along, so `captureTarget` can assess the target and
+    // store `AnchorDescriptor.point` relative to whatever element it decides the thread is about.
+    capture: (target, point) =>
+      captureTarget(target, point ? { ...captureOptions(), point } : captureOptions()),
     kindOfThread: (threadId) => records.get(threadId)?.thread.kind ?? null,
     submitNew: (input) =>
       createThread({

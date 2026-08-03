@@ -9,7 +9,7 @@
 
 import { afterEach, describe, expect, test } from 'vitest'
 
-import { $, scene, tick } from '../support.ts'
+import { $, probePresentation, scene, tick } from '../support.ts'
 
 const PAGE =
   '<article id="a" data-testid="a">alpha text</article><div id="b" data-testid="b">beta</div>'
@@ -131,5 +131,122 @@ describe('placement highlight', () => {
     await tick()
     expect(s.vm().picker).toBeNull()
     expect(s.doc.body.innerHTML).toBe(before)
+  })
+
+  test('the picker publishes the live point and the target confidence, and no overlay', async () => {
+    const s = await boot()
+    s.engine.startPlacement('comment')
+    await tick()
+    // `<body>` is a fatal rejection (SPEC §2.5), so this is the low-confidence branch exactly.
+    s.doc.body.dispatchEvent(
+      new (s.doc.defaultView as Window & typeof globalThis).MouseEvent('mousemove', {
+        bubbles: true,
+        composed: true,
+        clientX: 640,
+        clientY: 300,
+      }),
+    )
+    await tick()
+    expect(s.vm().picker).toMatchObject({
+      kind: 'comment',
+      confidence: 0,
+      landmark: true,
+      point: { x: 640, y: 300 },
+    })
+  })
+})
+
+/**
+ * The placement cursor (§3.1.4 `host.cursor`, decision log #46, DESIGN §0 D7 / §11 rule 7).
+ *
+ * This is a controller case rather than a conformance one because the thing under test is a
+ * *lifetime*, not a rendering: the failure it exists to prevent is a comment cursor left on
+ * somebody else's page after the pick is over.
+ */
+describe('the placement cursor, and the one thing that reaches the host document', () => {
+  const CURSOR = 'url("data:image/svg+xml,%3Csvg%3E%3C/svg%3E") 2 22, crosshair'
+  const sheets = (doc: Document): unknown[] =>
+    (doc as unknown as { adoptedStyleSheets: unknown[] }).adoptedStyleSheets
+
+  test('one constructed sheet, and it is popped on Esc', async () => {
+    const s = await boot({
+      ui: { presentation: probePresentation({ cursor: CURSOR }).presentation },
+    })
+    expect(sheets(s.doc)).toHaveLength(0)
+
+    // A `MutationObserver` on the host document must record NOTHING for the whole pick: that is
+    // what "the host page's DOM is never mutated" means, literally (§11 rule 7).
+    const records: MutationRecord[] = []
+    const observer = new (s.doc.defaultView as unknown as typeof globalThis).MutationObserver(
+      (list) => records.push(...list),
+    )
+    observer.observe(s.doc.documentElement, {
+      childList: true,
+      subtree: true,
+      attributes: true,
+      characterData: true,
+    })
+
+    s.engine.startPlacement('comment')
+    await tick()
+    expect(sheets(s.doc)).toHaveLength(1)
+
+    s.engine.placement.cancel('escape')
+    await tick()
+    expect(sheets(s.doc)).toHaveLength(0)
+
+    observer.takeRecords()
+    expect(records.filter((record) => record.target !== s.root.host)).toHaveLength(0)
+    observer.disconnect()
+  })
+
+  test('it is popped on page:change, and on unmount', async () => {
+    const s = await boot({
+      ui: { presentation: probePresentation({ cursor: CURSOR }).presentation },
+    })
+    s.engine.startPlacement('comment')
+    await tick()
+    expect(sheets(s.doc)).toHaveLength(1)
+    await s.page.navigate('https://example.com/next')
+    await s.settle()
+    expect(sheets(s.doc)).toHaveLength(0)
+
+    s.engine.startPlacement('comment')
+    await tick()
+    expect(sheets(s.doc)).toHaveLength(1)
+    s.ui.unmount()
+    expect(sheets(s.doc)).toHaveLength(0)
+  })
+
+  test('a presentation that throws mid-pick does not keep the page hostage', async () => {
+    // The presentation can no longer be trusted to hand back `cursor(null)`, so the controller —
+    // which owns the lifetime precisely for this reason — pops the sheet itself.
+    let fail = false
+    const probe = probePresentation({ cursor: CURSOR })
+    const create = probe.presentation.create.bind(probe.presentation)
+    const wrapped = {
+      ...probe.presentation,
+      create(host: Parameters<typeof create>[0], intents: Parameters<typeof create>[1]) {
+        const instance = create(host, intents)
+        return {
+          update(vm: Parameters<typeof instance.update>[0]) {
+            instance.update(vm)
+            if (fail) throw new Error('probe: update failed')
+          },
+          destroy: () => {
+            instance.destroy()
+          },
+        }
+      },
+    }
+    const s = await boot({ ui: { presentation: wrapped, onError: () => {} } })
+    s.engine.startPlacement('comment')
+    await tick()
+    expect(sheets(s.doc)).toHaveLength(1)
+
+    fail = true
+    s.ui.decorate('nobody', { chip: { text: 'x' } })
+    await tick()
+    expect(sheets(s.doc)).toHaveLength(0)
   })
 })

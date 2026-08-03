@@ -19,18 +19,33 @@ import type {
   TriggerSpec,
 } from './types.ts'
 
+import { assessTarget } from '../anchor/assess.ts'
 import { isElement, isRange, isSelection } from '../anchor/dom.ts'
 import { CommentError } from '../errors.ts'
 import { readonlyStore, writable } from '../readable.ts'
 
 const IDLE: PlacementState = Object.freeze({ phase: 'idle' })
 
+/** A viewport coordinate, as the pick handlers and `PlacementTarget` spell it. */
+export interface ClickPoint {
+  readonly clientX: number
+  readonly clientY: number
+}
+
 export interface PlacementDeps {
   document: () => Document | null
   modes: () => readonly Mode[]
   emit: <E extends CommentEventName>(event: E, payload: CommentEventMap[E]) => void
   emitError: (error: CommentError, phase: 'placement' | 'trigger', threadId?: string) => void
-  capture: (target: Element | Range) => { anchor: AnchorDescriptor; capture: ElementCapture }
+  /**
+   * `point` is the click that ended the pick (§4.5, decision log #42). It reaches `captureTarget`
+   * unchanged, which runs `assessTarget` and stores `AnchorDescriptor.point` relative to whatever
+   * element it chose.
+   */
+  capture: (
+    target: Element | Range,
+    point?: ClickPoint,
+  ) => { anchor: AnchorDescriptor; capture: ElementCapture }
   /** The mode kind a reply inherits from its thread, or null when the thread is unknown. */
   kindOfThread: (threadId: string) => string | null
   submitNew: (input: {
@@ -104,6 +119,8 @@ export function createPlacementController(deps: PlacementDeps): PlacementInterna
   let pendingAnchor: AnchorDescriptor | null = null
   let inflight: Promise<WriteResult> | null = null
   let hovered: Element | null = null
+  /** §4.5: the hover interaction places on the tracker's last known coordinates. */
+  let hoveredPoint: ClickPoint | null = null
   let frame: number | null = null
   /**
    * One placement flow = one `placement:start` … one `placement:end`. §4.2.9's `placed` /
@@ -139,14 +156,15 @@ export function createPlacementController(deps: PlacementDeps): PlacementInterna
     target: Element | Range,
     replyTo: string | null,
     interaction: 'pick' | 'hover' | 'direct' | null,
+    point: ClickPoint | null = null,
   ): boolean {
-    const captured = deps.capture(target)
+    const captured = deps.capture(target, point ?? undefined)
     pendingAnchor = captured.anchor
-    const element = isRange(target)
-      ? (elementOfRange(target) ?? null)
-      : isElement(target)
-        ? target
-        : null
+    const picked = isRange(target) ? null : isElement(target) ? target : null
+    // §4.6 step 0 already redirected the descriptor; the state has to agree with it, so the
+    // composer, the popover and the pin all name the element the thread is actually about.
+    const anchored = point && picked ? assess(picked, point).anchor : null
+    const element = isRange(target) ? (elementOfRange(target) ?? null) : (anchored ?? picked)
     if (!element) return reject(kind, 'no_target')
 
     if (interaction !== null) deps.emit('placement:start', { kind, interaction })
@@ -155,18 +173,44 @@ export function createPlacementController(deps: PlacementDeps): PlacementInterna
       kind,
       mode: captured.anchor.mode,
       element,
+      picked: picked === element ? null : picked,
       range: isRange(target) ? target : null,
       draft: '',
       capture: captured.capture,
+      point,
       replyTo,
     })
     return true
+  }
+
+  /** §2.5 is pure and never throws, but a heuristic fault must not cost a placement either. */
+  function assess(
+    element: Element,
+    point: ClickPoint | null,
+  ): { anchor: Element; confidence: number } {
+    try {
+      const doc = deps.document()
+      const result = assessTarget(element, {
+        ...(doc ? { document: doc } : {}),
+        ...(point ? { point } : {}),
+      })
+      return { anchor: result.anchor, confidence: result.confidence }
+    } catch {
+      return { anchor: element, confidence: 1 }
+    }
   }
 
   function elementOfRange(range: Range): Element | null {
     let node: Node | null = range.commonAncestorContainer
     while (node && node.nodeType !== 1) node = node.parentNode
     return isElement(node) ? node : null
+  }
+
+  function pointOfTarget(target: PlacementTarget): ClickPoint | null {
+    if ('element' in target && target.point) {
+      return { clientX: target.point.clientX, clientY: target.point.clientY }
+    }
+    return null
   }
 
   function resolveTarget(target: PlacementTarget): Element | Range | null {
@@ -213,7 +257,7 @@ export function createPlacementController(deps: PlacementDeps): PlacementInterna
     if (target) {
       const resolved = resolveTarget(target)
       if (!resolved) return reject(wanted, 'no_target')
-      return compose(wanted, resolved, replyTo, 'direct')
+      return compose(wanted, resolved, replyTo, 'direct', pointOfTarget(target))
     }
 
     // §4.5 "Selection wins": a non-collapsed selection skips `picking` entirely, for both
@@ -224,11 +268,18 @@ export function createPlacementController(deps: PlacementDeps): PlacementInterna
     const interaction = interactionOf(mode)
     if (interaction === 'hover') {
       if (!hovered?.isConnected) return reject(wanted, 'no_target')
-      return compose(wanted, hovered, null, 'hover')
+      return compose(wanted, hovered, null, 'hover', hoveredPoint)
     }
 
     deps.emit('placement:start', { kind: wanted, interaction: 'pick' })
-    state.set({ phase: 'picking', kind: wanted, interaction: 'pick', candidate: hovered })
+    state.set({
+      phase: 'picking',
+      kind: wanted,
+      interaction: 'pick',
+      candidate: hovered,
+      point: hoveredPoint,
+      confidence: hovered ? assess(hovered, hoveredPoint).confidence : 1,
+    })
     return true
   }
 
@@ -243,9 +294,11 @@ export function createPlacementController(deps: PlacementDeps): PlacementInterna
       kind,
       mode: 'element',
       element: (deps.document()?.documentElement ?? null) as Element,
+      picked: null,
       range: null,
       draft: '',
       capture: emptyCapture(),
+      point: null,
       replyTo: threadId,
     })
     return true
@@ -363,7 +416,10 @@ export function createPlacementController(deps: PlacementDeps): PlacementInterna
   function onMouseOver(event: MouseEvent): void {
     deps.tick()
     const target = realTarget(event)
-    if (isElement(target)) hovered = target
+    if (isElement(target)) {
+      hovered = target
+      hoveredPoint = { clientX: event.clientX, clientY: event.clientY }
+    }
   }
 
   function onMouseMove(event: MouseEvent): void {
@@ -371,16 +427,22 @@ export function createPlacementController(deps: PlacementDeps): PlacementInterna
     if (current.phase !== 'picking') return
     const target = realTarget(event)
     if (!isElement(target)) return
-    // Throttled to one animation frame (§4.5).
+    const point: ClickPoint = { clientX: event.clientX, clientY: event.clientY }
+    // §4.5: `candidate`, `point` and `confidence` move together on one animation frame —
+    // `assessTarget` runs on that frame and on no other.
+    const apply = (): void => {
+      const live = state.get()
+      if (live.phase !== 'picking') return
+      state.set({ ...live, candidate: target, point, confidence: assess(target, point).confidence })
+    }
     const win = deps.document()?.defaultView
     if (frame !== null || typeof win?.requestAnimationFrame !== 'function') {
-      if (frame === null) state.set({ ...current, candidate: target })
+      if (frame === null) apply()
       return
     }
     frame = win.requestAnimationFrame(() => {
       frame = null
-      const live = state.get()
-      if (live.phase === 'picking') state.set({ ...live, candidate: target })
+      apply()
     })
   }
 
@@ -393,9 +455,13 @@ export function createPlacementController(deps: PlacementDeps): PlacementInterna
     event.stopPropagation()
     const kind = current.kind
     state.set(IDLE) // leave `picking` first so `compose` is not seen as a re-entry
+    // §4.5: **the placing click's coordinates are the anchor's point.** This is what makes a
+    // click in a page's empty right margin produce a thread at the cursor rather than a thread
+    // bolted to `<body>` (`docs/DESIGN.md` §0 D8).
+    const point: ClickPoint = { clientX: event.clientX, clientY: event.clientY }
     // `null`: this flow's `placement:start` was emitted when it entered `picking` (§4.2.9 is
     // one start → composer → one end, and `interaction: 'pick'` is already on that event).
-    if (!compose(kind, target, null, null)) {
+    if (!compose(kind, target, null, null, point)) {
       // The pick is over either way, so the flow gets its single terminal event.
       deps.emit('placement:end', { kind, reason: 'cancelled', threadId: null })
     }

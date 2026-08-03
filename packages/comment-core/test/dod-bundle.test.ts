@@ -27,6 +27,9 @@ const artifact = resolve(packageRoot, 'dist/comment-core.iife.js')
 const PUBLIC_VALUES = [
   'CommentError',
   'THREAD_VERSION',
+  // §2.5, decision log #43: the target-confidence heuristic is public — a host that drives
+  // placement itself must be able to ask the same question `captureTarget` asks.
+  'assessTarget',
   'captureElement',
   'captureTarget',
   'createCommentEngine',

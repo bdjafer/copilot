@@ -39,10 +39,14 @@ for (const [name, factory] of PRESENTATIONS) {
 
 describe('the kit itself', () => {
   test('exposes the full case list without mounting anything', () => {
-    // §3.1.9 budgeted 27; the shipped kit is 31, because four rules that the estimate folded
-    // together fail for genuinely different reasons and are worth naming separately.
+    // §3.1.9 budgeted 27, then 30 after the decree amendment; the shipped kit is 34, because
+    // four rules that the estimate folded together fail for genuinely different reasons and are
+    // worth naming separately. The three §0 additions are §3.1.2's drawing obligations —
+    // metadata always drawn (D2), one mark per pin (D5), a reply affordance inside the thread
+    // (D4) — and each is a statement about what the user can *see*, which no assertion on `vm`
+    // can make.
     const cases = presentationConformance(domPresentation)
-    expect(cases).toHaveLength(31)
+    expect(cases).toHaveLength(34)
     expect(new Set(cases.map((entry) => entry.name)).size).toBe(cases.length)
     for (const entry of cases) expect(typeof entry.run).toBe('function')
     expect(document.querySelectorAll('[data-comment-ui]')).toHaveLength(0)

@@ -17,6 +17,14 @@
 > `resolveAnchor(anchor) → { element, confidence } | null` (§3.1); no `chrome.*` / `wxt/*`
 > import anywhere (§2); `comment-core` never imports `copilot` (§2).
 >
+> **Amended 2026-08-03 by the user decree** (`docs/DESIGN.md` §0). The decree is a design
+> instrument and the design layer absorbs almost all of it; the seven questions that actually move
+> the controller ↔ presentation seam are decision rows **#42–#48** and are applied in §2.3, §2.4,
+> §2.5, §2.12, §3, §3.1.2, §3.1.4, §3.1.5, §4.5 and §4.6. Every one of them is **additive and
+> optional**: `AnchorDescriptor.point`, `assessTarget`, the new `PlacementState` fields, three VM
+> fields and one `PresentationHost` method. No locked record shape, no locked signature and no
+> locked event name changes, and a record written before this amendment behaves exactly as it did.
+>
 > **Two locked signatures are deliberately widened. Both are called out here rather than
 > renegotiated by omission:**
 > 1. `listThreads(): ThreadView[]` — `ThreadView extends Thread`, so this is a structural
@@ -43,7 +51,7 @@
 |---|---|---|---|
 | `comment-core` | domain, engine, store adapters, page key, events, errors, types | engine only | yes |
 | `comment-core/headless` | domain, store adapters, `observeStore`, page key, errors, DOM-free types | no | **no** |
-| `comment-core/anchor` | capture / resolve / score / fingerprint / strategies | yes (injectable `Document`) | yes |
+| `comment-core/anchor` | capture / **assess** / resolve / score / fingerprint / strategies | yes (injectable `Document`) | yes |
 | `comment-core/testing` | conformance suites (`storeConformance`, `domainConformance`) | no | no |
 | `comment-core/testing` → `createTestPage` | happy-dom fixture | yes | yes |
 
@@ -188,6 +196,12 @@ export interface DocumentRect {
   readonly height: number
 }
 
+/** Document-space point, same rationale as `DocumentRect`. DOM-free, on purpose. */
+export interface DocumentPoint {
+  readonly x: number
+  readonly y: number
+}
+
 export interface Anchoring {
   readonly status: AnchorStatus
   /** The live element, or null while pending/orphaned. */
@@ -200,6 +214,18 @@ export interface Anchoring {
   readonly via: MatchVia | null
   /** Last known document-space rect. Retained while orphaned so the badge can dock. */
   readonly rect: DocumentRect | null
+  /**
+   * The stored click point, rehydrated against the live element (decision log #42).
+   * `null` when the descriptor has no `point`. Derivation, per pass, never a write:
+   *
+   *  - anchored, box within 1 px of `point.viewport`-era size ⇒ `rect.left + dx`, `rect.top + dy`
+   *  - anchored, box resized ⇒ `rect.left + fx * rect.width`, `rect.top + fy * rect.height`
+   *  - orphaned ⇒ `docX / docY`, the value that needs no element at all
+   *
+   * This is the coordinate the pin's tip, the composer and the popover are all placed on
+   * (`docs/DESIGN.md` §0 D8, §8.1–§8.3).
+   */
+  readonly point: DocumentPoint | null
 }
 
 /**
@@ -242,6 +268,42 @@ export interface AnchorDescriptor {
   /** Ordered cheap → fuzzy. Produced by captureTarget(); never hand-built. */
   selectors: Selector[]
   fingerprint: ElementFingerprint
+  /**
+   * Where inside the anchor the user actually clicked (decision log #42, DESIGN §0 D8).
+   * Additive and optional: a record written before this field existed simply has none, and every
+   * surface falls back to the anchor rect exactly as it did before. Written once, by
+   * `captureTarget`, when a `point` was supplied; never updated.
+   */
+  point?: AnchorPoint
+}
+
+/**
+ * A click point, stored four ways so it survives what actually happens to pages.
+ * All values are CSS pixels at capture time.
+ */
+export interface AnchorPoint {
+  /** Offset from the anchor element's border-box top-left. Used when the box is the same size. */
+  readonly dx: number
+  readonly dy: number
+  /** The same offset as a fraction of the border box (0..1, unclamped). Used when it resized. */
+  readonly fx: number
+  readonly fy: number
+  /** Document-space point. The last resort, and the only value an orphan still has. */
+  readonly docX: number
+  readonly docY: number
+  /**
+   * Viewport at capture time. This is what makes a coordinate legible when the same page is
+   * reopened at another width — the same reason Vercel stores screen size and DPR per comment —
+   * and it is what the timestamp tooltip surfaces (DESIGN §0, §8.4).
+   */
+  readonly viewport: { readonly width: number; readonly height: number; readonly dpr: number }
+  /**
+   * `assessTarget`'s score for the element that was under the cursor, and whether the anchor is
+   * that element (`false`) or a landmark it was redirected to (`true`). Diagnostics for
+   * `engine.explain()`; never re-derived at read time, because the page has changed since.
+   */
+  readonly confidence: number
+  readonly landmark: boolean
 }
 
 export type BuiltinSelector =
@@ -310,6 +372,16 @@ export function captureTarget(
 export interface CaptureOptions {
   /** Defaults to target's ownerDocument. */
   document?: Document
+  /**
+   * The viewport point the user clicked (decision log #42/#43). When present, `captureTarget`
+   * runs `assessTarget` on the target first: a **low-confidence** target is not anchored to —
+   * the descriptor is built for the landmark `assessTarget` chose instead — and the point is
+   * stored on `AnchorDescriptor.point`, relative to whichever element was chosen.
+   * Absent ⇒ no assessment, no `point`, and byte-identical behaviour to before the field existed.
+   */
+  point?: { readonly clientX: number; readonly clientY: number }
+  /** Overrides for the confidence heuristic. See `assessTarget`. */
+  assess?: AssessOptions
   /** Extra strategies, merged with defaultStrategies and sorted by weight. */
   strategies?: readonly SelectorStrategy[]
   /** outerHTML byte cap after sanitization. Default 8192. */
@@ -321,6 +393,75 @@ export interface CaptureOptions {
   /** Last chance to strip PII before persistence. Runs after sanitize. */
   redact?: (capture: ElementCapture) => ElementCapture
   now?: () => Date
+}
+
+/**
+ * **Target confidence** (decision log #43, DESIGN §0 D8). Figma's rule — "a pin attaches to the
+ * top-level frame it was dropped in, never to a nested layer" — ported to a DOM nobody controls.
+ * `document.elementFromPoint` is happy to hand back `<body>`, a 100vh layout wrapper, or an empty
+ * spacer `<div>`; anchoring a thread to any of those is what makes a click on a page's right
+ * margin behave like nonsense. Pure, synchronous, DOM-reading, never throws.
+ *
+ * Rejections and their weights — `confidence = clamp(1 - Σ weights, 0, 1)`, and a target is
+ * **low-confidence below 0.50**:
+ *
+ * | Rejection | Weight | Test |
+ * |---|---|---|
+ * | `root`               | **fatal** (⇒ 0) | `html`, `body`, or `=== document.scrollingElement` |
+ * | `viewport-fraction`  | 0.45 | border box ≥ **55 %** of `innerWidth × innerHeight` |
+ * | `no-own-content`     | 0.35 | no own non-whitespace text node **and** no replaced/media child (`img svg video canvas picture iframe input button`) |
+ * | `no-identity`        | 0.30 | no `id`, no `data-*`, not a semantic tag, and no corroborated stable class (the `fingerprintElement` test) |
+ * | `passthrough-wrapper`| 0.25 | exactly one element child whose border box covers ≥ 95 % of its own |
+ *
+ * The weights are chosen so that **big alone is fine** — a full-viewport `<section id="hero">`
+ * with a headline scores 0.55 and is anchored to, which is correct and is exactly Figma's
+ * top-level-frame case — while big **and** anonymous (0.25) or big **and** empty (0.20) is not.
+ *
+ * On rejection the anchor moves, in this order, and the search is bounded so it can never
+ * dominate a click:
+ *  1. `element.closest(landmarks)` — the first ancestor-or-self scoring ≥ 0.50, ≤ **8** hops.
+ *  2. the **nearest confident descendant** to the point: element children to depth ≤ **3**,
+ *     ≤ **200** examined, scoring ≥ 0.50, whose border box is within **240 px** of the point,
+ *     ranked by Euclidean distance from the point to the box. This is the branch that rescues a
+ *     click in a page's empty right margin: it anchors to the article column beside the cursor.
+ *  3. `document.scrollingElement`, with the point kept as `docX/docY`. Never a failure, ever.
+ *
+ * Landmark set: `main, article, section, aside, header, footer, nav, form, figure, table, li,
+ * h1..h6, [role], [id], [data-testid], [data-test], [data-cy]`.
+ */
+export function assessTarget(element: Element, options?: AssessOptions): TargetAssessment
+
+export type TargetRejection =
+  | 'root'
+  | 'viewport-fraction'
+  | 'no-own-content'
+  | 'no-identity'
+  | 'passthrough-wrapper'
+
+export interface TargetAssessment {
+  /** What was examined — `document.elementFromPoint`'s answer. */
+  readonly element: Element
+  /** 0..1. */
+  readonly confidence: number
+  readonly rejections: readonly TargetRejection[]
+  /** What to anchor to: `element` when confident, else the landmark chosen above. */
+  readonly anchor: Element
+  /** `anchor !== element`. */
+  readonly landmark: boolean
+}
+
+export interface AssessOptions {
+  document?: Document
+  /** The point, for the nearest-descendant branch. Without it, only step 1 and step 3 run. */
+  point?: { readonly clientX: number; readonly clientY: number }
+  /** Accept score. Default 0.50. */
+  threshold?: number
+  /** Fraction of viewport area that triggers `viewport-fraction`. Default 0.55. */
+  maxViewportFraction?: number
+  /** Descendant-search radius in px. Default 240. */
+  searchRadius?: number
+  /** CSS selector for step 1. Defaults to the landmark set above. */
+  landmarks?: string
 }
 
 /**
@@ -904,7 +1045,9 @@ export interface TriggerSpec {
   key: string
   modifiers?: { alt?: boolean; ctrl?: boolean; meta?: boolean; shift?: boolean }
   /**
-   * 'pick'  — enter placement mode: highlight under cursor, click to place, Esc cancels.
+   * 'pick'  — enter placement mode: track the element under the cursor, click to place, Esc
+   *           cancels. The page is not highlighted, outlined or dimmed; the cursor is the whole
+   *           affordance (decision log #46, `docs/DESIGN.md` §0 D7).
    * 'hover' — place immediately on the last-hovered element.
    * Default 'pick'.
    */
@@ -1003,7 +1146,13 @@ content script and `createDomain(store).appendComment(...)` in the service worke
 
 ```ts
 export type PlacementTarget =
-  | { element: Element }
+  /**
+   * `point` is the viewport coordinate the user clicked (decision log #42/#43). Supplied by the
+   * engine's own pick handler from the `click` event, and by a host calling `start()` directly.
+   * When present it drives `assessTarget` + `AnchorDescriptor.point`; when absent, nothing
+   * changes anywhere.
+   */
+  | { element: Element; point?: { readonly clientX: number; readonly clientY: number } }
   | { selection: Selection | Range }
   /** Reply composer. Kind is inherited from the thread. */
   | { threadId: string }
@@ -1016,17 +1165,30 @@ export type PlacementState =
       phase: 'picking'
       kind: string
       interaction: 'pick' | 'hover'
-      /** Element under the cursor right now; the UI draws the highlight from this. */
+      /** Element under the cursor right now. */
       candidate: Element | null
+      /** The cursor, in viewport coordinates. `null` before the first move. */
+      point: { readonly clientX: number; readonly clientY: number } | null
+      /**
+       * `assessTarget(candidate).confidence`, recomputed with `candidate` on the same throttled
+       * frame. The UI spends it on the cursor and on nothing else — placement mode draws no
+       * overlay (`docs/DESIGN.md` §0 D7).
+       */
+      confidence: number
     }
   | {
       phase: 'composing'
       kind: string
       mode: 'element' | 'text'
+      /** What the thread anchors to — already redirected to a landmark if the pick was weak. */
       element: Element
+      /** What was under the cursor, when it differs from `element`. Diagnostics only. */
+      picked: Element | null
       range: Range | null
       draft: string
       capture: ElementCapture
+      /** The click point, in viewport coordinates. `null` for keyboard/selection placement. */
+      point: { readonly clientX: number; readonly clientY: number } | null
       /** Non-null ⇒ reply composer for that thread. */
       replyTo: string | null
     }
@@ -1431,10 +1593,14 @@ owns all of it.)*
 Behavior it owns, none of it configurable (there is no second sane setting):
 one open shadow root on `document.documentElement`; a `pointer-events: none` layer with
 `auto` on interactive bits; the host page's DOM is never mutated; `@floating-ui/dom` +
-`autoUpdate` (`flip`, `shift`, `animationFrame`) for badges and popover; `IntersectionObserver`
-to skip off-screen badges; the composer uses the `popover` attribute (top layer, no z-index
-wars); explicit `font-size` on `:host`; placement-mode highlight overlay drawn from
-`engine.placement`'s `candidate`; resolved badges hidden from the page but listed in the panel;
+`autoUpdate` (`flip`, `shift`, `animationFrame`) for badges and popover — against the thread's
+**click point** when it has one, via a floating-ui virtual reference, else against the anchor
+element (decision log #44); `IntersectionObserver` to skip off-screen badges; the composer uses
+the `popover` attribute (top layer, no z-index wars); explicit `font-size` on `:host`;
+**placement mode draws no overlay at all** — no highlight, no scrim, no ring: the only mode
+signal is the cursor, applied by the controller through one constructed stylesheet on
+`document.adoptedStyleSheets` and popped on exit (decision log #46, `docs/DESIGN.md` §0 D7, §8.2);
+resolved badges hidden from the page but listed in the panel;
 orphaned threads shown as a dimmed badge docked at `anchoring.rect` (a `DocumentRect`,
 re-projected to viewport coordinates on every scroll/resize by the same `autoUpdate` loop, so
 the dock cannot drift after a scroll) plus the panel's "unanchored" section; an "approximately
@@ -1511,6 +1677,16 @@ export type ChipTone = 'neutral' | 'info' | 'busy' | 'warn' | 'danger'
 export interface Rect { readonly x: number; readonly y: number
                         readonly width: number; readonly height: number }
 
+/** Viewport-space point. Same role as `Rect`: for non-DOM presentations and for FLIP. */
+export interface Point { readonly x: number; readonly y: number }
+
+/**
+ * Which corner of a pin is its sharp one, i.e. which corner sits on the anchor point.
+ * Decided by the controller in the same flip/shift pass that positions the pin, so a
+ * presentation never measures the viewport (decision log #45, `docs/DESIGN.md` §8.1).
+ */
+export type PinCorner = 'top-left' | 'top-right' | 'bottom-left' | 'bottom-right'
+
 export interface ChipVM { readonly text: string; readonly tone: ChipTone; readonly spinner: boolean }
 
 export interface BadgeVM {
@@ -1538,6 +1714,16 @@ export interface BadgeVM {
   readonly rect: Rect | null
   /** floating-ui's resolved placement, so a morph can grow out of its anchor. */
   readonly placement: string | null
+  /**
+   * The thread's stored click point in viewport coordinates, or `null` for a thread captured
+   * without one (pre-#42 records, text-mode and keyboard placement). Same role as `rect`.
+   */
+  readonly point: Point | null
+  /**
+   * Which corner of the pin sits on `point`; `null` exactly when `point` is `null`, in which
+   * case the pin keeps the legacy behaviour of hanging off the anchor rect at `badge.offset`.
+   */
+  readonly pinCorner: PinCorner | null
 }
 
 export interface CommentVM {
@@ -1578,7 +1764,25 @@ export interface ComposerVM {
   readonly placeholder: string
 }
 
-export interface PickerVM { readonly kind: string; readonly rect: Rect | null; readonly hint: string }
+export interface PickerVM {
+  readonly kind: string
+  /**
+   * Candidate rect. **No shipped presentation draws it any more** (`docs/DESIGN.md` §0 D7:
+   * placement mode draws zero pixels); kept because a non-DOM or debugging presentation may
+   * legitimately want it, and removing a field from a published model buys nothing.
+   */
+  readonly rect: Rect | null
+  /** The live cursor point — what the cursor image's hotspot is aimed at. */
+  readonly point: Point | null
+  /**
+   * `assessTarget`'s score for the candidate, 0..1, and whether accepting the click would
+   * redirect the anchor to a landmark. The presentation spends both on **which cursor image to
+   * hand back through `host.cursor()`**, and on nothing else (decision log #48).
+   */
+  readonly confidence: number
+  readonly landmark: boolean
+  readonly hint: string
+}
 
 export interface PanelRowVM {
   readonly threadId: string; readonly kind: string; readonly label: string
@@ -1648,6 +1852,20 @@ export interface UIViewModel {
   §3 are computed by the controller. A presentation that re-derives any of them is wrong by
   construction, because it cannot: it has no `Mode`, no `ThreadView` and no `engine`.
 
+**Three drawing obligations the model now carries (normative, `docs/DESIGN.md` §0).** These are
+contract, not taste: a presentation may style them however it likes and may not omit them, and
+`presentationConformance()` asserts each against both shipped presentations.
+
+1. **An open thread's metadata is always rendered.** For every `CommentVM` in `vm.thread.comments`,
+   the author axis and `createdAt` (or `editedAt` when non-null) are in the accessibility tree
+   **and** drawn, unconditionally — not behind `:hover`, `:focus`, a media query or a proximity
+   signal (§0 D2). Hover may add to them; it may never be what reveals them.
+2. **A pin draws at most one mark.** `BadgeVM.icon`, the kind glyph, the state mark and
+   `BadgeVM.count` are alternatives, never a composite (§0 D5). `count` remains on the model
+   because `ariaLabel`, the panel row and host chrome all still need it.
+3. **`ThreadVM.actions.reply` means a reply affordance is rendered inside the thread surface**,
+   not that one can be summoned (§0 D4). There is no second surface and nothing to position.
+
 #### 3.1.3 Intents
 
 ```ts
@@ -1706,6 +1924,21 @@ export interface PresentationHost {
   anchor(key: string, node: HTMLElement | null): void
   /** Write into the controller's visually-hidden `role="status"` region. */
   announce(message: string): void
+  /**
+   * Ask the controller to apply a `cursor` value to the **host document**, or `null` to clear it
+   * (decision log #46, `docs/DESIGN.md` §0 D7, §8.2). The value is a complete CSS `cursor`
+   * declaration value, e.g.
+   * `image-set(url("data:image/svg+xml,…") 1x, url("…") 2x) 2 22, crosshair`.
+   *
+   * This is the **only** way a presentation can affect anything outside the shadow root, and it
+   * exists because the decree makes the cursor the entire placement-mode affordance while §3's
+   * "the host page's DOM is never mutated" rule still stands. The controller — never the
+   * presentation — owns the mechanism: one constructed `CSSStyleSheet` pushed onto
+   * `document.adoptedStyleSheets`, popped on the next `cursor(null)`, on `Esc`, on
+   * `page:change`, on `unmount()` and in a `finally`. No node, no attribute, no
+   * `MutationObserver` record. A presentation that never calls it changes nothing.
+   */
+  cursor(value: string | null): void
 }
 
 export interface PresentationInstance {
@@ -1752,11 +1985,27 @@ Therefore, normatively:
   through `host.anchor()`, and must not attach its own `autoUpdate`.
 * `transform`, `translate`, `scale`, `rotate`, `opacity`, `filter`, `clip-path` and `mask` on
   those nodes are **entirely the presentation's**, with zero conflict.
-* The picker overlay is **not** an anchored node — it is positioned by the presentation from
-  `PickerVM.rect`, because the controller already has the candidate rect and floating-ui adds
-  nothing to a rect that is recomputed every frame anyway.
+* **The reference is the click point when the thread has one** (decision log #44). For a thread
+  whose `anchoring.point` is non-null, and for the placement composer, the controller positions
+  against a floating-ui **virtual reference** — a 0×0 rect at the live point — with
+  `placement: 'right-start'`, `offset(6)`, `flip()`, `shift({ padding: 8 })`. Without a point it
+  positions against the anchor element exactly as before. **The confidence heuristic never
+  changes this**: it decides what the point is stored *relative to*, never where a pixel lands.
+* **The pin's tip is the origin the controller writes.** `style.left` / `style.top` place the
+  pin's box so its sharp corner lands on the point; which corner that is is published as
+  `BadgeVM.pinCorner`, and applying the matching `translate()` and corner radius is the
+  presentation's (decision log #45).
+* **A reply composer is not positioned at all.** While `ComposerVM.replyTo` is non-null the
+  presentation renders it inside the thread surface and registers `host.anchor('composer', null)`;
+  the controller then has nothing to position for it and runs no `autoUpdate` (decision log #47,
+  `docs/DESIGN.md` §0 D4).
+* There is **no picker overlay** to position: placement mode draws nothing (`docs/DESIGN.md` §0
+  D7). `PickerVM.rect` survives on the model for non-DOM and debugging presentations; the shipped
+  ones ignore it and spend `PickerVM.confidence` on `host.cursor()` instead.
 * `data-picking` is written by the controller, never by a presentation: it is a pointer-events
-  safety invariant (§3, the `composedPath()[0]` hazard), not a style choice.
+  safety invariant (§3, the `composedPath()[0]` hazard), not a style choice. The placement cursor
+  is the controller's for the same reason — it is the one thing that reaches the host document
+  (§3.1.4 `host.cursor`).
 
 #### 3.1.6 Focus
 
@@ -1837,6 +2086,14 @@ by what each test was actually about.**
 Net: **72 controller cases, 27 conformance cases × 2 presentations = 54 executions, 4 label
 tests, 13 build/DoD cases** — 143 executions from 103 case definitions, against 135 today. The
 suite gets *more* coverage from *fewer* definitions, because the 27 conformance cases run twice.
+
+**The decree amendment (#42–#48) adds four definitions and no rewrites:** three conformance cases
+for §3.1.2's drawing obligations (metadata always drawn, one mark per pin, reply inside the
+thread) and one controller case for the `adoptedStyleSheets` cursor lifetime — **73 controller,
+30 conformance × 2 = 60 executions**. They land as conformance rather than controller cases for
+the reason rule 1 gives: each is a statement about what the user can *see*, which no assertion on
+`vm` can make. None of them asserts a class name; "is this node visible without interacting"
+is answered with computed style and `hidden` / `aria-hidden`, both of which are contract.
 
 Two migration rules are normative, because they are what keeps the migration honest:
 
@@ -1983,11 +2240,21 @@ comments on read. Both GC passes are silent (no events).
   `picking` is skipped entirely and a text-mode thread is composed on the selection's first
   range. This applies to `interaction: 'pick'` and `'hover'` alike.
 * `interaction: 'pick'` → `placement:start` with `interaction: 'pick'`, phase `picking`,
-  `candidate` updated on `mousemove` (throttled to one animation frame). Click places; `Esc`
+  `candidate`, `point` and `confidence` updated together on `mousemove` (throttled to one
+  animation frame — `assessTarget` runs on that same frame and on no other). Click places; `Esc`
   cancels; a second press of the same trigger key cancels.
+* **The placing click's coordinates are the anchor's point (normative, decision log #42).** The
+  engine reads `clientX` / `clientY` off the `click` event that ends a pick and passes them to
+  `captureTarget`, which runs `assessTarget` and stores `AnchorDescriptor.point` relative to the
+  element it chose. This is what makes a click in a page's empty right margin produce a thread at
+  the cursor instead of a thread bolted to `<body>` (`docs/DESIGN.md` §0 D8).
 * `interaction: 'hover'` → places immediately on the last element seen by the engine's
-  `mouseover` tracker. No hovered element ⇒ returns false and emits `placement:rejected`
+  `mouseover` tracker, using that tracker's last known coordinates as the point. No hovered
+  element ⇒ returns false and emits `placement:rejected`
   (`reason: 'no_target'`) — a user-flow rejection, not an `error` (§2.12).
+* **Keyboard and selection placement have no point**, by construction: there is no click, so
+  `AnchorDescriptor.point` is absent, `BadgeVM.point` / `pinCorner` are `null`, and every surface
+  falls back to the anchor rect. A path that has no coordinate must never invent one.
 * `trigger: false` → no listener is attached for that mode; only `startPlacement(kind)` works.
   The `chrome.commands` backup shortcut (PLAN §3.3) is exactly this: the SW relays a message
   and the content script calls `engine.startPlacement(kind)`. There is no `TriggerAdapter`
@@ -1998,6 +2265,14 @@ comments on read. Both GC passes are silent (no events).
 
 ### 4.6 Anchoring pipeline
 
+0. **Target assessment, when a click point exists (decision log #43).** `captureTarget` runs
+   `assessTarget` on the picked element *before* anything else. Confident (≥ 0.50) ⇒ nothing
+   changes and the rest of the pipeline sees the element it always saw. Low-confidence ⇒ **the
+   descriptor is built for the landmark instead**, and the point is stored relative to that
+   landmark. The whole heuristic is capture-side on purpose: it decides *what a thread is about*,
+   which is a one-time judgement made while the page is still exactly as the user saw it. Resolve
+   time cannot make it — by then the element may be gone — and the UI must not, because two
+   presentations would then disagree about where a thread lives.
 1. `captureTarget` runs every strategy's `describe` (weight order), keeping non-null results as
    `AnchorDescriptor.selectors`, plus `fingerprintElement` and `captureElement`.
    **`anchoring.strategies` is one list used for both halves (normative):** the same strategy
@@ -2032,6 +2307,11 @@ comments on read. Both GC passes are silent (no events).
    element was already absent — docks at `capture.rect` instead. Both are reads: orphanhood is
    still never a write (§4.1 row 14). Only a record captured before `ElementCapture.rect`
    existed can end up with `rect: null`, and comment-ui draws no badge for it.
+   **`Anchoring.point` follows the same discipline (decision log #42):** it is derived every pass
+   from `anchor.point` plus the live rect (`dx/dy` when the box kept its size, `fx/fy` when it
+   resized), and falls back to `docX/docY` the moment there is no element — which is why an
+   orphaned pin still knows the coordinate the user actually clicked, not merely the box that
+   used to contain it. Nothing about a point is ever written back.
 6. **SPA navigation (normative): poll, do not patch.** `history.pushState` / `replaceState` are
    **not** patched. In an MV3 content script the isolated world has its own `history` binding,
    so a patch installed there never intercepts the page's own calls — `page:change` would
@@ -2077,11 +2357,13 @@ comments on read. Both GC passes are silent (no events).
 | `anchor/strategies/text-position.ts` | 70 | Offset chain. |
 | `anchor/strategies/index.ts` | 30 | `defaultStrategies`, `defineSelectorStrategy`. |
 | `anchor/resolve.ts` | 200 | Strategy race, verification, scan fallback, budget, trace. |
-| `anchor/target.ts` | 90 | `captureTarget`. |
+| `anchor/assess.ts` | 110 | `assessTarget`: the five rejections, the weighted score, the three landmark branches, all bounded (#43). Pure and DOM-reading; no persistence, no strategies. |
+| `anchor/point.ts` | 60 | `AnchorPoint` capture (`dx/dy`, `fx/fy`, `docX/docY`, viewport) and its per-pass rehydration into `Anchoring.point` (#42). |
+| `anchor/target.ts` | 100 | `captureTarget` — now step 0 (`assess`) then capture, wiring `point` onto the descriptor. |
 | `anchor/vendor/hypothesis/**` | ~600 | Vendored BSD-2 `annotator/anchoring`. Never edited by hand. |
 | `engine/index.ts` | 320 | `createCommentEngine`, view assembly, freezing, `inspect`, `explain`, `focus`. |
 | `engine/anchoring.ts` | 230 | MutationObserver, batching, WeakRef cache, idle rescan, transition events. |
-| `engine/placement.ts` | 220 | Modes, key handling, hover tracking, pick overlay state, composer state machine. |
+| `engine/placement.ts` | 235 | Modes, key handling, hover tracking, pick state (candidate + point + confidence, one throttled frame), composer state machine. |
 | `engine/navigation.ts` | 75 | `location.href` poll + `popstate`/`hashchange` + injected source, page-key change. |
 | `engine/remote.ts` | 90 | `store.subscribe` → reload → diff → origin-token dedupe → emit `source: 'remote'`. |
 | `testing/index.ts` | 30 | Barrel. |
@@ -2103,7 +2385,8 @@ comments on read. Both GC passes are silent (no events).
 | `controller/intents.ts` | 120 | The `Intents` implementation. Every engine promise's rejection routed to `onError`; every method a no-op against stale state. |
 | `controller/focus.ts` | 70 | Focus policy, the `vm.focus` seq, the Esc chain, the delete focus dance. |
 | `shadow.ts` | 90 | Open shadow root, isolateEvents, `:host` vars, layer + `role="status"` setup, sheet ordering. |
-| `position.ts` | 130 | `@floating-ui/dom` + `autoUpdate` + `IntersectionObserver` + `host.anchor()` registry + `data-placement` + `data-picking`. |
+| `position.ts` | 160 | `@floating-ui/dom` + `autoUpdate` + `IntersectionObserver` + `host.anchor()` registry + `data-placement` + `data-picking`, **plus the click-point virtual reference and `pinCorner`** (#44, #45). |
+| `cursor.ts` | 45 | The `host.cursor()` implementation: one constructed `CSSStyleSheet`, pushed onto `document.adoptedStyleSheets` and popped on every exit path (#46). The only module in the package that touches the host document. |
 | `dom.ts` | 60 | Tiny `el()` helper, no framework. Shared by both presentations. |
 | `labels.ts` | 50 | Default `Labels`. |
 | `presentations/dom/*.ts` | 700 | `domPresentation` — today's `badge`/`picker`/`composer`/`thread`/`panel`/`chip` markup, verbatim. **Frozen.** |
@@ -2111,7 +2394,7 @@ comments on read. Both GC passes are silent (no events).
 | `presentations/glass/*.ts` | 520 | `glassPresentation` per `docs/DESIGN.md`: surfaces, icon sprite, intent tracker, motion helpers. |
 | `presentations/glass/styles.ts` | 380 | `glassStyles`. |
 | `testing/index.ts` | 20 | `comment-ui/testing` barrel. |
-| `testing/presentation-conformance.ts` | 240 | The 27 contract-level cases of §3.1.9. |
+| `testing/presentation-conformance.ts` | 270 | The 30 contract-level cases of §3.1.9 (27 + the three drawing obligations of §3.1.2). |
 
 **Total: ~3,300 LOC**, of which ~930 is the frozen default presentation and ~900 the glass one.
 The controller — the part that can be wrong in a way a user notices — is ~650.
@@ -2414,6 +2697,23 @@ describe('chrome.storage store', () => {
 | 40 | `three.js` | **Banned in `comment-ui`, `comment-ui/glass` and the extension content script. Sanctioned in exactly one place: `apps/demo/site/material.html`**, ≤ 45 KB gz lazy chunk behind five gates, with an always-correct CSS fallback (`docs/DESIGN.md` §9) | a lazy WebGL "thinking orb" in the content script; a hand-rolled ~3.2 KB GLSL orb; a decorative canvas on the options page | 148 KB gz for the smallest useful renderer, against a 40 KB gz ceiling for everything injected into a third party's page, is a 3.7× miss for ambience. The one effect a GPU genuinely buys — edge refraction, which `backdrop-filter` provably cannot produce — is ~700 bytes of inline SVG filter, off by default. The hand-rolled GLSL orb was rejected too: it is new surface in the content script for a signal a 6-line CSS ring already carries, and browsers evict the oldest of ~16 WebGL contexts, which would silently kill thread 1's canvas when thread 17 appears. A DoD grep enforces it. |
 | 41 | How a presentation learns a mode's **index** | **One additive field on the model: `UIViewModel.kinds`** — `engine.modes`' kinds in declaration order, nothing else about a `Mode` | a `hue: number` on each of `BadgeVM` / `ThreadVM` / `ComposerVM` / `PickerVM` / `PanelRowVM`; hashing the kind string in the presentation; exposing `Mode` across the seam | `docs/DESIGN.md` §2.3 derives each mode's hue offset from its **index in `engine.modes`**, deliberately never from a hash — a hash makes the colours of two modes depend on their names, which is unstable and untestable. The index is the one fact a presentation cannot re-derive (#31 keeps `Mode` on the engine's side). Five `hue` fields would put a *design* constant (`[0, +38, −34, +72, −68]`) into the model, where a second presentation could not disagree with it; one ordered `string[]` puts the ordering in the model and leaves the table in the design layer. Additive, still `structuredClone`-able, still frozen and referentially stable. Found by a first-touch UX pass: `ask` and `comment` were the same blue everywhere, and §2.3's mechanism had never been implemented. |
 
+**Rows 42–48 are the seam consequences of the user decree of 2026-08-03** (`docs/DESIGN.md` §0),
+which was issued after testing the shipped product and which outranks the design document, the
+tester consensus and every prior ruling where they conflict. The decree is a *design* instrument;
+only the seven questions below actually move the controller ↔ presentation boundary, and each is
+recorded here rather than in the design layer for the usual reason — a second presentation must be
+able to disagree with the pixels and must not be able to disagree with the contract.
+
+| # | Contested point | Chosen | Rejected | Why |
+|---|---|---|---|---|
+| 42 | Where a click point lives, so a composer can open **on** it | **`AnchorDescriptor.point?: AnchorPoint`** — additive, optional, written once by `captureTarget`, carrying `dx/dy` **and** `fx/fy` **and** `docX/docY` plus the capture viewport; rehydrated per pass as the derived, never-persisted `Anchoring.point`; surfaced as `BadgeVM.point` | `ElementCapture.point` (next to `capture.rect`); a `Thread.metadata` bag "for canvas coordinates"; storing only `dx/dy`; storing only a document point; recomputing the point at read time from the rect's centre | A point is part of *what the anchor is*, not part of the snapshot taken to survive the anchor's death — the descriptor is the thing every resolve already reads, and `resolveAnchor` returning an element that the UI then has to re-associate with a coordinate from a second object is exactly how the two drift. A metadata bag was rejected outright: untyped state on `Thread` is a second persistence surface with no schema and no migration story, and every consumer would invent its own key. Three representations rather than one because they fail in different directions and each is a one-line read: `dx/dy` is exact while a box keeps its size, `fx/fy` is the only thing that survives a responsive re-layout, and `docX/docY` is the only thing that survives the element vanishing — which is precisely the orphan case #29 exists for. The viewport goes with it for the reason Vercel ships `screenWidth`/`devicePixelRatio` on every comment: a bare coordinate captured at 390 px is not interpretable at 1440 px, and a stored one is. Optional and additive, so every pre-existing record behaves exactly as it did. |
+| 43 | Whether the element under the cursor is worth anchoring to, and who decides | **`assessTarget()` in `comment-core/anchor`, run by `captureTarget` at step 0** (§4.6): weighted rejections, low-confidence below **0.50**, and on rejection a bounded walk to a landmark — `closest()` ≤ 8 hops, else the nearest confident descendant within 240 px of the point, else `document.scrollingElement` | doing it in the UI controller; doing it at resolve time as a `threshold` bump; raising `ResolveOptions.threshold`; anchoring to the giant element anyway and letting the badge sit in a corner; a fixed "never anchor to `body`" special case | This is Figma's oldest and best anchoring rule — "a pin attaches to the top-level frame it was dropped in, never to a nested layer" — and the DOM version of it has to be *coarser* than `elementFromPoint`, not finer. It belongs to capture because it is a judgement about **what a thread is about**, made once, while the page is still exactly what the user was looking at; at resolve time the evidence is gone, and in the UI two presentations could reach different answers about where the same thread lives. The weights are set so **big alone is not disqualifying** — a full-bleed `<section id="hero">` with a headline scores 0.55 and is anchored to, which is the top-level-frame case working as intended — while big-and-anonymous (0.25) and big-and-empty (0.20) are. A blanket `body` rule was rejected as too narrow: the reported failure (a click in the right margin doing nonsense) is far more often a 100 vh layout wrapper than `body` itself. Every branch is bounded (8 hops / depth 3 / 200 elements / 240 px) so a click can never cost more than a resolve does. |
+| 44 | What a point-anchored surface is positioned against | **A floating-ui virtual reference at the live point, owned by the controller**: 0×0 rect, `right-start`, `offset(6)`, `flip()`, `shift({ padding: 8 })` — for the pin, the popover and the placement composer alike | positioning from `BadgeVM.point` in the presentation; anchoring to the element's rect and nudging by the offset; a separate `pointRect` on the model | #34 is not renegotiated by the decree, it is confirmed by it: positioning is logic, and "open exactly where I clicked, and flip near the edge" is the *hardest* positioning case in the product, not an appearance choice. A virtual reference is the smallest change that gets it — floating-ui's whole middleware stack (flip, shift, viewport clamping, `autoUpdate`) keeps working unmodified against a 0×0 rect, and the presentation keeps its zero-conflict grant of `transform`/`opacity`/`clip-path` on the same node. Letting the presentation position from a VM point would fork the one part of this package that took a benchmark suite to get right, and would do it in the surface a third party is most likely to reimplement. Recorded explicitly because it is the load-bearing half of §0 D8: the confidence heuristic changes what a point is stored *relative to* and never where a pixel lands, and that separation only holds if one layer owns both. |
+| 45 | How the pin's teardrop geometry crosses the seam | **`BadgeVM.pinCorner: PinCorner \| null`**, decided by the controller in the flip/shift pass that already runs; the presentation applies the matching corner radius and `translate()` | deriving it in the presentation from `placement`; deriving it from `point` vs viewport size; four separate booleans; hard-coding `bottom-left` | The corner and the resolved placement are the *same decision* — "which quadrant has room" — and it is already made, once, with the viewport measurements the controller has and the presentation must not take (a presentation that measures the viewport re-implements `shift()` badly, and does it per pin, on someone else's page). Parsing `placement` back into a corner was rejected as an unwritten coupling to a floating-ui string format; hard-coding one corner was rejected because a pin dropped near the right edge would then cover the very content it annotates, which is the thing the teardrop exists to prevent. `null` is meaningful, not a default: it says "this thread has no point", which is exactly when the legacy rect-anchored badge behaviour must be kept. |
+| 46 | How placement mode changes the cursor without mutating the host page | **`PresentationHost.cursor(value \| null)`** — the presentation supplies the value, the **controller** applies it by pushing one constructed `CSSStyleSheet` onto `document.adoptedStyleSheets` and popping it in a `finally` / on `Esc` / on `page:change` / on `unmount()` | a cursor-following element inside our own layer (today's behaviour); injecting a `<style>` node into `document.head`; writing `documentElement.style.cursor`; adding a class to `<body>`; letting the presentation touch `host.doc` itself | §0 D7 makes the cursor the entire mode signal, and a `pointer-events: none` layer cannot set a cursor — so the choice was "reach the host document somehow" or "keep drawing an overlay", and the decree closes the second option. Among the ways to reach it, `adoptedStyleSheets` is the only one that satisfies §3's rule *literally*: it inserts no node, writes no attribute, and **generates no `MutationObserver` record**, so a host page's own observers — the React and Next apps this ships onto — cannot even see it, let alone react to it. A `<style>` node is observable, survives a crash and shows up in the page's own DOM diffing; an inline style write on `<html>` is worse (it collides with the page's own writes and cannot be reverted precisely). The capability is deliberately given to the *controller*, not the presentation: the presentation supplies a string, so "no presentation touches the host document" remains a rule the type system enforces, and the lifetime — the part that actually risks leaving a comment cursor on someone's page forever — lives in the layer that already owns every other teardown. |
+| 47 | Where the reply composer lives | **Inside the thread surface, positioned by nobody.** `ComposerVM.replyTo` non-null ⇒ the presentation renders it as a child of the thread and registers `host.anchor('composer', null)` | a second floating surface beside the thread; a `ComposerVM.docked: boolean`; a new `PresentationHost` key `composer-docked`; keeping the side-anchored composer and merely moving it | §0 D4 is a hard "never a side panel", and the classic pattern — Vercel, Figma and Docs all put the reply field at the bottom of the card — is *cheaper* than what it replaces, not more expensive: nothing to position, nothing to flip, nothing to dismiss separately, one less `autoUpdate` loop while a thread is open. No model field was added because `replyTo` already answers the question completely; a `docked` boolean would be a second source of truth for the same fact and the two would eventually disagree. `host.anchor(key, null)` is the existing, documented way to say "do not position this", so the seam absorbs the change with no new surface at all. |
+| 48 | How the low-confidence verdict reaches the pixels, now that nothing is drawn on the page | **`PickerVM.confidence: number` + `PickerVM.landmark: boolean`** (with `PickerVM.point`), spent by the presentation on **which cursor image** to hand back through `host.cursor()` | keeping `PickerVM.rect` as the only signal and dimming a ring (the old §7 row 20); a `badTarget: boolean`; announcing it in `role="status"`; no signal at all | The old design said this wordlessly by dimming the picker ring — and D7 deletes the ring, so without a replacement the product would silently anchor a click to a landmark with no indication whatsoever, which is worse than the frame that was removed. A number rather than a boolean because the threshold is a *tuning* constant (`AssessOptions.threshold`) and a model that pre-thresholds it forbids a presentation from ever disagreeing; `landmark` because "will this be redirected" is a different question from "how good is this", and it is the one the cursor variant actually answers. Announcing it was rejected: it fires on every `mousemove` frame and would flood `aria-live`. `PickerVM.rect` is kept but is now documented as unused by the shipped presentations — removing a published field buys nothing and a canvas or debugging presentation may legitimately want it. |
+
 
 ---
 
@@ -2454,6 +2754,27 @@ describe('chrome.storage store', () => {
 * `styles.test.ts`'s eleven-property contract (consumed with a fallback, never declared,
   rem-free, `all: initial`, explicit `:host` font-size) passes against `commentUIStyles` **and**
   `glassStyles`, and each is byte-identical to the `.css` file its build emits.
+
+Added by the decree amendment (decision log #42–#48, `docs/DESIGN.md` §0):
+
+* `assessTarget` has a table-driven test per rejection reason, plus the three landmark branches
+  and the "big but identified and full of text scores 0.55 and is accepted" case.
+* A capture with a `point` inside a `<body>`-sized wrapper anchors to a landmark, stores
+  `landmark: true`, and its `Anchoring.point` still resolves to the original click coordinates
+  after the wrapper is resized (`fx/fy` branch) and after the element is removed (`docX/docY`).
+* A capture **without** a `point` produces a descriptor with no `point`, a `BadgeVM` with
+  `point: null` and `pinCorner: null`, and byte-identical positioning to the pre-amendment build.
+* `structuredClone(controller.vm.get())` still succeeds with the new fields present.
+* `presentationConformance()` asserts the three drawing obligations of §3.1.2 against both
+  presentations: every rendered comment exposes its author axis and timestamp with **no** pointer
+  or focus interaction (D2); no pin renders more than one mark (D5); `actions.reply` implies a
+  reply affordance inside the thread element (D4). No case asserts a class name (§3.1.9).
+* A controller test drives a full placement and asserts that `document.adoptedStyleSheets` gains
+  exactly one sheet, that it is removed on `Esc`, on `page:change`, on `unmount()` and on a throw
+  from the presentation, and that `document.body` gains **no** node, attribute or mutation record
+  during placement (`MutationObserver` on the host document records nothing).
+* `grep -rEn "cc-i-ask|document\.head|<style|documentElement\.style" packages/comment-ui/src/presentations/glass`
+  returns nothing: the ask glyph is deleted and no presentation reaches the host document.
 
 ---
 

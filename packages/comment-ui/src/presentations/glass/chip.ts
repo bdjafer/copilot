@@ -62,15 +62,29 @@ export interface ChipSlot {
   destroy(): void
 }
 
+export interface ChipOptions {
+  /**
+   * §0 D5 / §8.6: **the ladder is drawn on the pin's ring, never on its face.** A pin already
+   * carries exactly one mark, so its chip contributes no glyph at all — only the rung (which the
+   * pin wears as an attribute) and the text (which `aria-live` reads). Every other chip — the
+   * thread's, the panel row's — keeps its 12 px mark. Default `true`.
+   */
+  mark?: boolean
+  /** Called whenever the rung changes, including the deferred 0 → 2 bump. */
+  onRung?: (rung: Rung | null) => void
+}
+
 /**
  * A slot that owns its own 450 ms timer. The controller cannot re-render for us — nothing in the
  * model changed when a run crosses the quiet window — so the rung is bumped from here and only
  * ever forward.
  */
-export function createChip(doc: Document, slot: HTMLElement): ChipSlot {
+export function createChip(doc: Document, slot: HTMLElement, options: ChipOptions = {}): ChipSlot {
   let busySince = 0
   let timer = 0
   const view = doc.defaultView
+  const withMark = options.mark !== false
+  const onRung = options.onRung
 
   function clearTimer(): void {
     if (timer && view) view.clearTimeout(timer)
@@ -83,6 +97,7 @@ export function createChip(doc: Document, slot: HTMLElement): ChipSlot {
         clearTimer()
         busySince = 0
         if (slot.firstChild) slot.replaceChildren()
+        onRung?.(null)
         return
       }
 
@@ -98,9 +113,9 @@ export function createChip(doc: Document, slot: HTMLElement): ChipSlot {
       let mark: Element | null = node?.querySelector('.cc-chip-mark') ?? null
       let text: HTMLElement | null = node?.querySelector<HTMLElement>('.cc-chip-text') ?? null
       if (!node) {
-        mark = icon(doc, 'cc-i-arc', 'cc-chip-mark')
+        mark = withMark ? icon(doc, 'cc-i-arc', 'cc-chip-mark') : null
         text = el(doc, 'span', { class: 'cc-chip-text' })
-        node = el(doc, 'span', { class: 'cc-chip' }, [mark, text])
+        node = el(doc, 'span', { class: 'cc-chip' }, mark ? [mark, text] : [text])
         slot.replaceChildren(node)
       }
 
@@ -111,6 +126,7 @@ export function createChip(doc: Document, slot: HTMLElement): ChipSlot {
       setAttr(node, 'title', chip.text)
       if (mark) setIcon(mark, RUNG_GLYPH[rung])
       if (text) setText(text, chip.text)
+      onRung?.(rung)
 
       // Cross the quiet window without a model change: schedule the one attribute write that
       // takes rung 0 to rung 2, and never schedule a second.
@@ -118,7 +134,10 @@ export function createChip(doc: Document, slot: HTMLElement): ChipSlot {
         timer = view.setTimeout(() => {
           timer = 0
           const live = slot.querySelector<HTMLElement>('.cc-chip')
-          if (live?.getAttribute('data-rung') === '0') live.setAttribute('data-rung', '2')
+          if (live?.getAttribute('data-rung') === '0') {
+            live.setAttribute('data-rung', '2')
+            onRung?.('2')
+          }
         }, BUSY_QUIET_MS)
       }
     },

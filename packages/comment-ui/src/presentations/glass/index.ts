@@ -29,14 +29,15 @@
 
 import type {
   Intents,
+  Point,
   Presentation,
   PresentationHost,
   PresentationInstance,
-  Rect,
   UIViewModel,
 } from '../../presentation.ts'
 import type { ProximityTarget } from './intent.ts'
 import type { HueOf } from './kind.ts'
+import type { Rectish } from './motion.ts'
 import type { Panel } from './panel.ts'
 
 import { safeFocus, setAttr } from '../../dom.ts'
@@ -56,8 +57,13 @@ export interface GlassOptions {
   reduceMotion?: boolean
   /** Force the widget's polarity. Default `auto`: follow the *page*, not the desktop (§2.5). */
   polarity?: 'auto' | 'light' | 'dark'
-  /** `none` skips the sprite, for a host that already ships the 19 `cc-i-*` symbol ids. */
+  /** `none` skips the sprite, for a host that already ships the 18 `cc-i-*` symbol ids. */
   icons?: 'sprite' | 'none'
+}
+
+/** §6.6: a click point is a zero-size rect, so origin transfer needs no second code path. */
+function pointOrigin(point: Point): Rectish {
+  return { x: point.x, y: point.y, width: 0, height: 0 }
 }
 
 function createInstance(
@@ -78,12 +84,12 @@ function createInstance(
   const badges = createBadgeLayer(host, intents)
   const composer = createComposer(host, intents)
   const thread = createThreadPopover(host, intents)
-  const picker = createPicker(host.doc, host.win, host.layer)
+  const picker = createPicker(host)
   const tracker = createIntentTracker(host.win, host.layer)
   let panel: Panel | null = null
   let lastFocus = -1
-  /** The rect the picker last highlighted — the composer's morph origin after the click. */
-  let pickRect: Rect | null = null
+  /** The last cursor point of a pick — the composer's morph origin after the click (§8.3). */
+  let pickPoint: Point | null = null
   /** §2.3's hue table, rebuilt only when the engine's mode list itself changes identity. */
   let kinds: readonly string[] = []
   let hueOf: HueOf = createHueOf(kinds)
@@ -113,15 +119,46 @@ function createInstance(
       }
       badges.render(vm.badges, hueOf, reduced)
 
-      // §6.6: the popover grows out of the badge that summoned it, and the composer out of the
-      // rect the click landed on. Both origins are read from a live node at open time, once.
-      const threadOrigin = vm.thread ? badges.rectFor(vm.thread.threadId) : null
+      // §6.6 **point persistence**: the pin's sharp corner, the composer's `emerge` origin and
+      // the popover's top edge are all the *same screen point*, so the box grows out of the pin
+      // and stays hinged to it. Glyph persistence went with the head (§0 D6); a coordinate is
+      // the stronger thing to conserve, because it is the one the user actually chose.
+      const pin = vm.thread
+        ? vm.badges.find((badge) => badge.threadId === vm.thread?.threadId)
+        : null
+      const threadOrigin = pin?.point
+        ? pointOrigin(pin.point)
+        : vm.thread
+          ? badges.rectFor(vm.thread.threadId)
+          : null
       thread.render(vm.thread, vm.labels, threadOrigin, hueOf)
 
-      if (vm.picker?.rect) pickRect = vm.picker.rect
-      const replyRect = vm.composer?.replyTo ? badges.rectFor(vm.composer.replyTo) : null
-      composer.render(vm.composer, vm.labels, replyRect ?? pickRect, hueOf)
-      if (!vm.composer) pickRect = null
+      // §0 D4: while a reply is open it is a **child of the thread**, so it is docked into the
+      // popover's own slot and the controller positions nothing for it (SPEC #47).
+      const replyingHere =
+        vm.composer?.replyTo !== undefined &&
+        vm.composer.replyTo !== null &&
+        vm.composer.replyTo === vm.thread?.threadId
+      composer.dock(replyingHere ? thread.replySlot : null)
+      thread.setReplying(replyingHere)
+      // §8.3: the placement composer grows out of **the exact click point**, in every branch —
+      // the coordinate survives the pick because `vm.picker` is gone by the time the composer
+      // opens, exactly as the candidate rect used to.
+      if (vm.picker?.point) pickPoint = vm.picker.point
+      const replyPin = vm.composer?.replyTo
+        ? (vm.badges.find((badge) => badge.threadId === vm.composer?.replyTo) ?? null)
+        : null
+      const composerOrigin = replyingHere
+        ? null
+        : pickPoint
+          ? pointOrigin(pickPoint)
+          : replyPin?.point
+            ? pointOrigin(replyPin.point)
+            : vm.composer?.replyTo
+              ? badges.rectFor(vm.composer.replyTo)
+              : null
+      composer.render(vm.composer, vm.labels, composerOrigin, hueOf)
+      if (!vm.composer) pickPoint = null
 
       picker.render(vm.picker, hueOf)
       if (vm.panel) {

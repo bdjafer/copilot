@@ -692,6 +692,7 @@ describe('§2 the public barrel exposes exactly the public surface', () => {
     expect(names.filter((name) => name !== 'default').sort()).toEqual([
       'CommentError',
       'THREAD_VERSION',
+      'assessTarget',
       'captureElement',
       'captureTarget',
       'createCommentEngine',

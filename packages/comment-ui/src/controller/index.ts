@@ -46,8 +46,15 @@ import type { ControllerState, UISlots } from './model.ts'
 
 import { deepActiveElement, safeFocus, setAttr, setText } from '../dom.ts'
 import { resolveLabels } from '../labels.ts'
-import { centerReference, createPositioner, dockedReference, watchVisibility } from '../position.ts'
+import {
+  centerReference,
+  createPositioner,
+  dockedReference,
+  pointReference,
+  watchVisibility,
+} from '../position.ts'
 import { createLayer } from '../shadow.ts'
+import { createCursorSheet } from './cursor.ts'
 import { createFocusPolicy } from './focus.ts'
 import { createIntents } from './intents.ts'
 import { createModelBuilder, sectionOf } from './model.ts'
@@ -59,6 +66,8 @@ interface ComposerRef {
   token: unknown
   reference: ReferenceElement
   docked?: boolean
+  /** The reference is the click point (§0 D8), so it takes §8.3's `right-start` geometry. */
+  point?: boolean
 }
 
 export function resolveOptions(
@@ -116,6 +125,10 @@ export function createController(
   }
 
   const positioner = createPositioner({ onError })
+  // Decision log #46: the one thing that reaches the host document, and the controller owns both
+  // halves of its lifetime. `layer.doc` is the host document — the shadow root's own
+  // `adoptedStyleSheets` could never style a page the widget does not contain.
+  const cursor = createCursorSheet(layer.doc, layer.win)
   const model = createModelBuilder()
   const decorations = new Map<string, Decoration>()
   const offscreen = new Set<string>()
@@ -139,6 +152,7 @@ export function createController(
   let picking = false
   let composerRef: ComposerRef | null = null
   let placementJustCancelled = false
+  let cancelReset: ReturnType<typeof setTimeout> | undefined
   /** The section the *active* thread was last in, so a transition can follow it (§8.5). */
   let activeSection: { threadId: string; section: PanelSection | null } | null = null
 
@@ -233,6 +247,9 @@ export function createController(
     announce(message) {
       setText(layer.status, message)
     },
+    cursor(value) {
+      cursor.set(value)
+    },
   }
 
   let instance: PresentationInstance | null = null
@@ -258,6 +275,10 @@ export function createController(
       // The region is cleared when placement ends, so re-entering re-announces: `setText` is
       // idempotent, and without the clear the second entry would change no DOM at all.
       slots.announce = nowPicking ? resolved.labels.pickHint : ''
+      // …and the placement cursor is the controller's for the same reason `data-picking` is
+      // (§3.1.5): leaving a comment cursor on someone's page is the one failure mode of §0 D7,
+      // so the pop happens here, on the transition, whatever the presentation does or forgets.
+      if (!nowPicking) cursor.set(null)
     }
 
     const composing = placement.phase === 'composing' || placement.phase === 'submitting'
@@ -299,7 +320,26 @@ export function createController(
     activeSection = view ? { threadId: view.id, section } : null
   }
 
+  /**
+   * §3.1.5 / decision log #44: **the reference is the click point when the thread has one.**
+   * Document-space in, viewport-space out, re-read every frame — so the coordinate the user
+   * chose survives a scroll instead of drifting, exactly as the orphan dock does.
+   */
+  function pointRefFor(threadId: string): ReferenceElement {
+    return pointReference(() => {
+      const stored = engine.getThreadView(threadId)?.anchoring.point
+      if (!stored) return null
+      return { x: stored.x - (layer.win.scrollX || 0), y: stored.y - (layer.win.scrollY || 0) }
+    })
+  }
+
   function referenceForThread(view: ThreadView): { token: unknown; reference: ReferenceElement } {
+    // DESIGN §8.3: the popover opens **on the click point**, 6 px to its right, top-aligned —
+    // and the pin is drawn on that same point, so this is the origin both surfaces share (§6.6
+    // "point persistence").
+    if (view.anchoring.point) {
+      return { token: `point:${view.id}`, reference: pointRefFor(view.id) }
+    }
     const badge = positioner.node(`badge:${view.id}`)
     if (badge) return { token: badge, reference: badge }
     if (view.anchoring.element) {
@@ -316,10 +356,11 @@ export function createController(
     if (state.phase === 'submitting') return composerRef
     if (state.phase !== 'composing') return null
     if (state.replyTo !== null) {
+      // §0 D4 / decision log #47: **a reply is not a positioned surface at all.** A presentation
+      // that renders it inside the thread registers `host.anchor('composer', null)`, and then
+      // there is nothing here to position and no `autoUpdate` loop to run. A presentation that
+      // still floats its reply composer keeps the docked behaviour below.
       const view = engine.getThreadView(state.replyTo)
-      // §7's mutual exclusion: "a reply docks the composer to the popover's bottom edge and
-      // matches its width, so reply reads as one sheet growing downward". Against the *badge*
-      // it opened as a second box beside the popover, over its own close control.
       const popover = lastOpenThread === state.replyTo ? positioner.node('thread') : null
       if (popover) return { token: popover, reference: popover, docked: true }
       const badge = positioner.node(`badge:${state.replyTo}`)
@@ -331,6 +372,18 @@ export function createController(
         return { token: state.replyTo, reference: dockedReference(view.anchoring.rect, layer.win) }
       }
       return { token: state.replyTo, reference: centerReference(layer.win) }
+    }
+    // §0 D8 / decision log #44: the placement composer opens **at the exact click point**, in
+    // every branch. The confidence heuristic changes what the point is stored relative to, never
+    // where a pixel lands — and that separation only holds because one layer owns both.
+    const click = state.point
+    if (click) {
+      const point = { x: click.clientX, y: click.clientY }
+      return {
+        token: `point:${String(point.x)}:${String(point.y)}`,
+        reference: pointReference(() => point),
+        point: true,
+      }
     }
     const range = state.range as { getBoundingClientRect?: () => DOMRect } | null
     if (range && typeof range.getBoundingClientRect === 'function') {
@@ -362,6 +415,21 @@ export function createController(
   function syncPositions(visible: readonly ThreadView[]): void {
     const refs = new Map<string, SurfaceRef>()
     for (const view of visible) {
+      // DESIGN §8.1: **the pin's tip is the origin the controller writes.** The box's top-left
+      // lands on the point; which corner is sharp, and therefore which quadrant the body hangs
+      // into, is `BadgeVM.pinCorner` and the presentation's `translate` (#45). `exact` keeps
+      // `flip`/`shift` out of it — either would move the tip off the coordinate the user chose.
+      if (view.anchoring.point) {
+        refs.set(`badge:${view.id}`, {
+          token: `point:${view.id}`,
+          reference: pointRefFor(view.id),
+          placement: 'right-start',
+          offset: [0, 0],
+          active: !offscreen.has(view.id) || slots.activeId === view.id,
+          exact: true,
+        })
+        continue
+      }
       const element = view.anchoring.element
       if (element) {
         refs.set(`badge:${view.id}`, {
@@ -391,7 +459,15 @@ export function createController(
       const view = engine.getThreadView(lastOpenThread)
       if (view) {
         const ref = referenceForThread(view)
-        refs.set('thread', { ...ref, placement: 'bottom-end', offset: [0, 8], active: true })
+        // §8.3 geometry, shared by the popover and the placement composer: 6 px to the right of
+        // the point, top edges aligned, flipping to the left/above only at a viewport edge.
+        const onPoint = view.anchoring.point !== null
+        refs.set('thread', {
+          ...ref,
+          placement: onPoint ? 'right-start' : 'bottom-end',
+          offset: onPoint ? [0, 6] : [0, 8],
+          active: true,
+        })
       }
     }
 
@@ -401,10 +477,10 @@ export function createController(
       refs.set('composer', {
         token: composer.token,
         reference: composer.reference,
-        placement: 'bottom-start',
-        // Flush against the popover's bottom edge, so the reply reads as the same sheet growing
-        // downward rather than as a second box that happens to be nearby.
-        offset: composer.docked ? [0, 0] : [0, 8],
+        placement: composer.point ? 'right-start' : 'bottom-start',
+        // Flush against the popover's bottom edge, so a floating reply reads as the same sheet
+        // growing downward rather than as a second box that happens to be nearby.
+        offset: composer.point ? [0, 6] : composer.docked ? [0, 0] : [0, 8],
         active: true,
       })
     }
@@ -485,6 +561,9 @@ export function createController(
         try {
           instance.update(next)
         } catch (error) {
+          // A presentation that faulted mid-pick can no longer be trusted to hand back
+          // `cursor(null)`, and the host page must not keep our cursor (§0 D7, DoD).
+          cursor.set(null)
           onError(error)
           return
         }
@@ -493,6 +572,7 @@ export function createController(
       syncWatchers(visible)
       syncPositions(visible)
     } catch (error) {
+      cursor.set(null)
       onError(error)
     } finally {
       rendering = false
@@ -538,15 +618,21 @@ export function createController(
     engine.on('placement:end', ({ reason }) => {
       if (reason !== 'cancelled') return
       placementJustCancelled = true
-      // A microtask cannot run in the middle of a synchronous event dispatch, so clearing the
-      // flag here is exact.
-      queueMicrotask(() => {
+      // Cleared on a TASK, not a microtask. A microtask checkpoint *does* run between two
+      // listener callbacks of one **native** dispatch (the stack empties after each one), so a
+      // `queueMicrotask` reset was already false by the time the docked reply's own handler ran
+      // — and one `Esc` then cancelled the reply *and* closed the thread, which §7's chain and
+      // §0 D4 both forbid. A synthetic `dispatchEvent()` keeps the stack, which is why only a
+      // real browser showed it. A timer cannot fire inside the dispatch at all.
+      clearTimeout(cancelReset)
+      cancelReset = setTimeout(() => {
         placementJustCancelled = false
-      })
+      }, 0)
     }),
     engine.on('page:change', () => {
       // §3 decoration lifecycle: the whole map is cleared on navigation, so a stale chip
       // cannot survive it.
+      cursor.set(null)
       decorations.clear()
       slots.activeId = null
       schedule()
@@ -590,6 +676,7 @@ export function createController(
     unmount() {
       if (destroyed) return
       destroyed = true
+      clearTimeout(cancelReset)
       const focused = deepActiveElement(layer.doc)
       for (const unsubscribe of subscriptions) unsubscribe()
       subscriptions.length = 0
@@ -605,6 +692,7 @@ export function createController(
         instance = null
       }
       positioner.destroy()
+      cursor.destroy()
       for (const entry of watchers.values()) entry.watcher?.destroy()
       watchers.clear()
       offscreen.clear()

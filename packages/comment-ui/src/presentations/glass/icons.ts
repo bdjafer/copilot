@@ -22,11 +22,9 @@ export const ICONS: Readonly<Record<string, readonly string[]>> = {
   'cc-i-comment': [
     'M13.25 7.75a5.25 5.25 0 0 1-7.35 4.87L2.75 13.5l.9-2.85A5.25 5.25 0 1 1 13.25 7.75Z',
   ],
-  'cc-i-ask': [
-    'M13.25 7.75a5.25 5.25 0 0 1-7.35 4.87L2.75 13.5l.9-2.85A5.25 5.25 0 1 1 13.25 7.75Z',
-    'M6.9 6.4a1.15 1.15 0 1 1 1.6 1.06c-.45.2-.6.55-.6.99',
-    'M8 10.75h.01',
-  ],
+  // The ask glyph is deleted (DESIGN §0 D5). It was `cc-i-comment` plus a "?" bowl and dot, and
+  // the "?" is the glyph the decree names. Mode is carried by hue alone (§2.3) — one pin, one
+  // mark, for every mode — so the sprite is 18 symbols and `kindIcon` is a constant.
   'cc-i-check': ['M3.25 8.25 6.5 11.5 12.75 4.75'],
   // A **circular** arrow, not a second hooked one. `cc-i-reply` and this glyph were both
   // left-curving arrows differing by a few px of tail, sitting next to each other in the same
@@ -143,7 +141,12 @@ export function setIcon(node: Element, id: string): void {
   use.setAttribute('href', `#${id}`)
 }
 
-/** The kind glyph for a badge/thread/row: the host's own string wins, else the mode's own mark. */
-export function kindIcon(kind: string): string {
-  return kind === 'ask' ? 'cc-i-ask' : 'cc-i-comment'
+/**
+ * The kind glyph for a pin/thread/row. **One mark for every mode** (DESIGN §0 D5): the host's own
+ * `Mode.badge.icon` wins where it exists, and everything else draws `cc-i-comment`. Which mode a
+ * thread belongs to is carried by `--_kind-h` and by `title` / `aria-label`, never by a second
+ * glyph. The parameter is kept so no call site churns while the rest of §0 lands.
+ */
+export function kindIcon(_kind: string): string {
+  return 'cc-i-comment'
 }

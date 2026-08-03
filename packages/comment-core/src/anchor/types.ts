@@ -27,9 +27,54 @@ export interface AnchorMatch {
 
 /* -------------------------------------------------------------------------------------- §2.5 */
 
+/* ------------------------------------------------------------------- §2.5 target confidence */
+
+export type TargetRejection =
+  | 'root'
+  | 'viewport-fraction'
+  | 'no-own-content'
+  | 'no-identity'
+  | 'passthrough-wrapper'
+
+export interface TargetAssessment {
+  /** What was examined — `document.elementFromPoint`'s answer. */
+  readonly element: Element
+  /** 0..1. */
+  readonly confidence: number
+  readonly rejections: readonly TargetRejection[]
+  /** What to anchor to: `element` when confident, else the landmark chosen by the walk. */
+  readonly anchor: Element
+  /** `anchor !== element`. */
+  readonly landmark: boolean
+}
+
+export interface AssessOptions {
+  document?: Document
+  /** The point, for the nearest-descendant branch. Without it, only step 1 and step 3 run. */
+  point?: { readonly clientX: number; readonly clientY: number }
+  /** Accept score. Default 0.50. */
+  threshold?: number
+  /** Fraction of viewport area that triggers `viewport-fraction`. Default 0.55. */
+  maxViewportFraction?: number
+  /** Descendant-search radius in px. Default 240. */
+  searchRadius?: number
+  /** CSS selector for step 1. Defaults to the landmark set of §2.5. */
+  landmarks?: string
+}
+
 export interface CaptureOptions {
   /** Defaults to target's ownerDocument. */
   document?: Document
+  /**
+   * The viewport point the user clicked (decision log #42/#43). When present, `captureTarget`
+   * runs `assessTarget` on the target first: a **low-confidence** target is not anchored to —
+   * the descriptor is built for the landmark `assessTarget` chose instead — and the point is
+   * stored on `AnchorDescriptor.point`, relative to whichever element was chosen.
+   * Absent ⇒ no assessment, no `point`, and byte-identical behaviour to before the field existed.
+   */
+  point?: { readonly clientX: number; readonly clientY: number }
+  /** Overrides for the confidence heuristic. See `assessTarget`. */
+  assess?: AssessOptions
   /** Extra strategies, merged with defaultStrategies and sorted by weight. */
   strategies?: readonly SelectorStrategy[]
   /** outerHTML byte cap after sanitization. Default 8192. */

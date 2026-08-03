@@ -189,7 +189,34 @@ async function scene(
 }
 
 /**
- * The 27 contract-level cases. Every one of them must pass against every shipped presentation,
+ * A **mark**, for §3.1.2 drawing obligation 2: a drawn glyph, i.e. an `<svg>` instance or a text
+ * run made of pictographic characters. A tabular *count* is a value, not a mark — §10's whole
+ * thesis is that what leaves the screen is verbs and nouns while values stay — so a presentation
+ * that draws a number beside nothing else is still carrying one mark.
+ */
+const PICTOGRAPH = /[\u{1F300}-\u{1FAFF}]|[\u{2190}-\u{2BFF}]|\u{FE0F}/u
+
+function marksIn(node: Element): number {
+  let count = node.querySelectorAll('svg').length
+  const walker = node.ownerDocument.createTreeWalker(node, 4 /* NodeFilter.SHOW_TEXT */)
+  for (let text = walker.nextNode(); text; text = walker.nextNode()) {
+    if (PICTOGRAPH.test(text.textContent ?? '')) count += 1
+  }
+  return count
+}
+
+/** Is this node drawn right now, with no interaction of any kind? */
+function isDrawn(node: Element): boolean {
+  if (node.hasAttribute('hidden') || node.getAttribute('aria-hidden') === 'true') return false
+  const view = node.ownerDocument.defaultView
+  const style = view?.getComputedStyle(node)
+  if (style && (style.display === 'none' || style.visibility === 'hidden' || style.opacity === '0'))
+    return false
+  return (node.textContent ?? '').trim().length > 0
+}
+
+/**
+ * The 30 contract-level cases. Every one of them must pass against every shipped presentation,
  * which is what makes "swappable" a property rather than a claim.
  */
 export function presentationConformance(presentation: () => Presentation): ConformanceCase[] {
@@ -586,6 +613,55 @@ export function presentationConformance(presentation: () => Presentation): Confo
     s.engine.placement.cancel('escape')
     await tick()
     assertEqual(status?.textContent, '', 'the region is cleared so a re-entry re-announces')
+  })
+
+  /* ----------------------------------------- §3.1.2's drawing obligations (§0 D2/D4/D5) */
+
+  test("an open thread's metadata is drawn with no interaction at all (§0 D2)", async (s) => {
+    // Contract, not taste: intent-based hiding governs surfaces *at rest*; it has no authority
+    // inside a surface the user has already opened. Hover may only ever ADD.
+    const id = await s.seed('#a', 'a body worth reading')
+    await s.engine.appendComment(id, { author: 'copilot', body: 'and a reply' })
+    await s.settle()
+    s.ui.focus(id)
+    await tick()
+    const dialog = visibleDialog(s.root, 'comment (2)')
+    assert(dialog, 'the thread dialog is open')
+
+    const times = [...dialog.querySelectorAll('time')]
+    assertEqual(times.length, 2, 'every comment carries its own timestamp')
+    for (const time of times) {
+      assert(time.getAttribute('datetime'), 'the timestamp is a machine value')
+      assert(isDrawn(time), 'the timestamp is drawn without hover, focus or any other signal')
+    }
+    // The author axis is in the accessibility tree for both authors, drawn or not.
+    const text = dialog.textContent ?? ''
+    assert(text.includes('user'), 'a user comment exposes its author')
+    assert(text.includes('copilot'), 'a copilot comment exposes its author')
+  })
+
+  test('a pin draws at most one mark, and keeps its count in the name (§0 D5)', async (s) => {
+    const id = await s.seed('#a', 'x', 'ask')
+    await s.engine.appendComment(id, { author: 'copilot', body: 'reply' })
+    await s.settle()
+    for (const pin of badges(s.root)) {
+      const marks = marksIn(pin)
+      assert(marks <= 1, `a pin drew ${String(marks)} marks; the contract allows one`)
+    }
+    // …which is affordable precisely because the count never left the accessibility tree.
+    assert(badgeNamed(s.root, 'Ask (2)'), 'the count is in the accessible name')
+  })
+
+  test('actions.reply means a reply affordance INSIDE the thread surface (§0 D4)', async (s) => {
+    const id = await s.seed('#a')
+    s.ui.focus(id)
+    await tick()
+    const dialog = visibleDialog(s.root, 'comment (1)')
+    assert(dialog, 'the thread dialog is open')
+    const affordance = control(dialog, s.labels.reply)
+    assert(affordance, 'a reply affordance is rendered, not merely summonable')
+    assert(dialog.contains(affordance), 'and it lives inside the thread surface')
+    assert(isDrawn(affordance) || !affordance.hasAttribute('hidden'), 'it is not hidden at rest')
   })
 
   test('unmount removes every node the presentation added', async (s) => {
