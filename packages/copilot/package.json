@@ -16,17 +16,17 @@
   "publishConfig": {
     "exports": {
       ".": {
-        "types": "./dist/index.d.ts",
+        "types": "./dist/types/index.d.ts",
         "import": "./dist/index.js"
       },
       "./testing": {
-        "types": "./dist/testing.d.ts",
+        "types": "./dist/types/testing/index.d.ts",
         "import": "./dist/testing.js"
       }
     }
   },
   "scripts": {
-    "build": "BUILD_TARGET=iife vite build && vite build",
+    "build": "BUILD_TARGET=iife vite build && vite build && tsgo -p tsconfig.build.json",
     "typecheck": "tsgo --noEmit",
     "lint": "oxlint .",
     "test": "vitest run",

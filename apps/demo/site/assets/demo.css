@@ -1,0 +1,246 @@
+/* Demo page chrome only. comment-ui ships its own styles inside its shadow root — nothing in
+   this file can reach the widgets, which is the point of the shadow boundary. */
+
+:root {
+  color-scheme: light dark;
+  --ink: #16181d;
+  --muted: #5c6370;
+  --line: #e2e5ea;
+  --bg: #ffffff;
+  --panel: #f6f7f9;
+  --accent: #4f46e5;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    --ink: #e8eaee;
+    --muted: #9aa2b1;
+    --line: #2b2f38;
+    --bg: #101318;
+    --panel: #171b22;
+    --accent: #8b87ff;
+  }
+}
+
+* {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+  padding: 0 0 6rem;
+  background: var(--bg);
+  color: var(--ink);
+  font:
+    16px/1.6 ui-sans-serif,
+    system-ui,
+    -apple-system,
+    'Segoe UI',
+    sans-serif;
+}
+
+main,
+.demo-bar {
+  max-width: 62rem;
+  margin: 0 auto;
+  padding: 1.25rem 1.5rem;
+}
+
+/* --- toolbar (built by demo.js) --- */
+
+.demo-bar {
+  position: sticky;
+  top: 0;
+  z-index: 10;
+  background: var(--panel);
+  border-bottom: 1px solid var(--line);
+  max-width: none;
+  display: grid;
+  gap: 0.6rem;
+}
+
+.demo-bar-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 0.75rem;
+}
+
+.demo-bar-title {
+  margin: 0;
+  font-size: 1.05rem;
+  letter-spacing: -0.01em;
+}
+
+.demo-bar-hint,
+.demo-bar-counts {
+  margin: 0;
+  color: var(--muted);
+  font-size: 0.85rem;
+}
+
+.demo-bar-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.5rem;
+}
+
+button,
+.demo-bar-actions a {
+  font: inherit;
+  font-size: 0.85rem;
+  padding: 0.35rem 0.7rem;
+  border: 1px solid var(--line);
+  border-radius: 0.5rem;
+  background: var(--bg);
+  color: var(--ink);
+  cursor: pointer;
+  text-decoration: none;
+}
+
+button:hover,
+.demo-bar-actions a:hover {
+  border-color: var(--accent);
+  color: var(--accent);
+}
+
+kbd {
+  font: inherit;
+  font-size: 0.75rem;
+  padding: 0 0.25rem;
+  border: 1px solid var(--line);
+  border-radius: 0.25rem;
+  color: var(--muted);
+}
+
+.demo-log {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  max-height: 7.5rem;
+  overflow: auto;
+  font:
+    12px/1.5 ui-monospace,
+    SFMono-Regular,
+    Menlo,
+    monospace;
+  color: var(--muted);
+}
+
+.demo-log li {
+  padding: 0.05rem 0;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.demo-log li[data-kind='error'] {
+  color: #d2453d;
+}
+
+.demo-log li[data-kind='echo'],
+.demo-log li[data-kind='thread:create'] {
+  color: var(--accent);
+}
+
+/* --- page content --- */
+
+h2 {
+  font-size: 1.35rem;
+  margin: 2rem 0 0.5rem;
+}
+
+h3 {
+  font-size: 1.05rem;
+  margin: 1.5rem 0 0.4rem;
+}
+
+.demo-note {
+  border-left: 3px solid var(--accent);
+  background: var(--panel);
+  padding: 0.75rem 1rem;
+  margin: 1rem 0 1.5rem;
+  font-size: 0.9rem;
+}
+
+.demo-note ol,
+.demo-note ul {
+  margin: 0.4rem 0 0;
+  padding-left: 1.2rem;
+}
+
+.demo-controls {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+  margin: 1rem 0;
+  padding: 0.75rem;
+  border: 1px dashed var(--line);
+  border-radius: 0.6rem;
+}
+
+.card,
+.item {
+  border: 1px solid var(--line);
+  border-radius: 0.6rem;
+  padding: 0.75rem 1rem;
+  margin: 0.5rem 0;
+  background: var(--panel);
+}
+
+.grid {
+  display: grid;
+  gap: 0.5rem;
+  grid-template-columns: repeat(auto-fill, minmax(14rem, 1fr));
+}
+
+table {
+  border-collapse: collapse;
+  width: 100%;
+  font-size: 0.9rem;
+}
+
+th,
+td {
+  border: 1px solid var(--line);
+  padding: 0.4rem 0.6rem;
+  text-align: left;
+}
+
+code {
+  font:
+    0.85em ui-monospace,
+    SFMono-Regular,
+    Menlo,
+    monospace;
+  background: var(--panel);
+  padding: 0.1rem 0.3rem;
+  border-radius: 0.25rem;
+}
+
+.popover-panel {
+  border: 1px solid var(--accent);
+  border-radius: 0.6rem;
+  padding: 1rem;
+  margin: 1rem 0;
+  background: var(--panel);
+}
+
+.index-list {
+  list-style: none;
+  padding: 0;
+  display: grid;
+  gap: 0.75rem;
+}
+
+.index-list a {
+  font-weight: 600;
+  color: var(--accent);
+}
+
+.index-list p {
+  margin: 0.2rem 0 0;
+  color: var(--muted);
+  font-size: 0.9rem;
+}

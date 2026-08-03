@@ -78,6 +78,24 @@ describe('§2.4 / §3.4 tool execution', () => {
     expect(execute).not.toHaveBeenCalled()
   })
 
+  test('a failed call reports the model’s RAW input — it may not satisfy the schema (§2.8)', async () => {
+    // Decision log #29: `ToolCall.input` is statically the tool's input type on both arms, but on
+    // `ok: false` it is evidence about what the model tried, never a validated value.
+    const tool = defineTool({
+      name: 't',
+      description: 'd',
+      inputSchema: z.object({ n: z.number() }),
+      execute: () => 'never',
+    })
+    const invalid = await executeToolCall(tool, { n: 'not a number' }, ctx())
+    expect(invalid.ok).toBe(false)
+    expect(invalid.input).toEqual({ n: 'not a number' })
+    // …and a model that sent nothing at all still yields an object, never null/undefined.
+    const missing = await executeToolCall(tool, undefined, ctx())
+    expect(missing.ok).toBe(false)
+    expect(missing.input).toEqual({})
+  })
+
   test('passes the validated (parsed) value to execute', async () => {
     const tool = defineTool({
       name: 't',

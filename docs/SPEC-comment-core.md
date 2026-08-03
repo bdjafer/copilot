@@ -61,7 +61,12 @@ identifiers do not exist. A service worker therefore imports from `comment-core/
 whose emitted declarations must reference no `lib.dom` identifier at all. A CI test
 typechecks a file that imports `comment-core/headless` under a DOM-free `lib`.
 
-Build: Vite lib mode, ESM + IIFE. IIFE global: `Comments`.
+Build: Vite lib mode, ESM + IIFE. IIFE global: `Comments`. Declarations are emitted by
+`tsgo -p tsconfig.build.json` into `dist/types/`, and **`publishConfig.exports` must name files the
+build actually produces** — a `types` condition pointing at a `.d.ts` no build step writes is
+invisible in the workspace (where `exports` resolves to `src`) and resolves to `any` for every
+published consumer (SPEC-copilot decision log #33; this package's four subpaths were verified
+against a real build and a consumer type-check, and needed no change).
 Runtime deps: `@medv/finder`, `approx-string-match`, `nanoid`, and vendored Hypothesis
 `annotator/anchoring` (BSD-2, `src/anchor/vendor/hypothesis/`). Nothing else.
 One **optional peer** dependency: `happy-dom`, required only by `createTestPage` (§2.16),

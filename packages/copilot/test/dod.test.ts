@@ -1,5 +1,5 @@
 // SPEC-copilot §9 — the definition-of-done checklist, one test per item.
-import { readdirSync, readFileSync, statSync } from 'node:fs'
+import { existsSync, readdirSync, readFileSync, statSync } from 'node:fs'
 import { join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { describe, expect, test, vi } from 'vitest'
@@ -265,6 +265,43 @@ describe('§9 definition of done', () => {
       for (const [key, descriptor] of saved) {
         if (descriptor !== undefined) Object.defineProperty(globalThis, key, descriptor)
       }
+    }
+  })
+
+  test('publishConfig.exports names files the build actually produces (§1, decision log #33)', () => {
+    // A `types` condition pointing at a .d.ts no build step writes is invisible here — the
+    // workspace resolves `exports`, which points at src — and resolves to `any` for every
+    // published consumer. So: every subpath maps to `dist/<entry>.js` (vite lib mode) and
+    // `dist/types/<src path>.d.ts` (tsgo -p tsconfig.build.json), and when a build is present on
+    // disk, the files are really there.
+    const root = fileURLToPath(new URL('..', import.meta.url))
+    const pkg = JSON.parse(readFileSync(join(root, 'package.json'), 'utf8')) as {
+      exports: Record<string, string>
+      publishConfig: { exports: Record<string, { types: string; import: string }> }
+    }
+    const build = readFileSync(join(root, 'tsconfig.build.json'), 'utf8')
+    expect(build).toContain('"outDir": "dist/types"')
+    expect(pkg.publishConfig.exports).toEqual({
+      '.': { types: './dist/types/index.d.ts', import: './dist/index.js' },
+      './testing': { types: './dist/types/testing/index.d.ts', import: './dist/testing.js' },
+    })
+    // The publish map must cover exactly the subpaths the workspace map declares.
+    expect(Object.keys(pkg.publishConfig.exports)).toEqual(Object.keys(pkg.exports))
+    for (const [subpath, source] of Object.entries(pkg.exports)) {
+      const published = pkg.publishConfig.exports[subpath]!
+      // `./src/testing/index.ts` → `./dist/types/testing/index.d.ts`
+      expect(published.types).toBe(
+        source.replace('./src/', './dist/types/').replace(/\.ts$/, '.d.ts'),
+      )
+    }
+    if (!existsSync(join(root, 'dist'))) return // no build in this working tree
+    for (const entry of Object.values(pkg.publishConfig.exports)) {
+      expect({ [entry.types]: existsSync(join(root, entry.types)) }).toEqual({
+        [entry.types]: true,
+      })
+      expect({ [entry.import]: existsSync(join(root, entry.import)) }).toEqual({
+        [entry.import]: true,
+      })
     }
   })
 

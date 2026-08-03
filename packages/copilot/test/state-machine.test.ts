@@ -204,11 +204,12 @@ describe('§3.1 run state machine', () => {
     }
   })
 
-  test('a resume in a FRESH process replays with the default spec — overrides are not durable', async () => {
-    // `Run` is locked at nine fields (§2.2): `model`, `tools` and `maxSteps` from `TriggerInput`
-    // have nowhere durable to live, so an instance that did not issue the trigger cannot know
-    // them. A cross-process resume therefore replays with the primary provider and the full
-    // registry — the run:start model is 'default' and a tool the trigger excluded is available.
+  test('a resume in a FRESH process replays with the run’s persisted spec snapshot', async () => {
+    // §2.2 / decision log #26: `model` (as a `models` KEY), `tools` and `maxSteps` are snapshotted
+    // into `run.spec` at trigger time, so an instance that never saw the `TriggerInput` still
+    // replays the SAME run — the named tier, not the default provider, and the trigger's tool
+    // subset, not the full registry. (This test asserted the opposite in wave 1, when the record
+    // had nowhere to keep them.)
     const store = createMemoryRunStore()
     const executed: string[] = []
     const tools = [
@@ -232,9 +233,12 @@ describe('§3.1 run state machine', () => {
     })
     first.trigger({ runId: 'r1', input: 'hi', model: 'fast', tools: [] })
     await vi.waitFor(async () => expect((await store.get('r1'))?.state).toBe('processing'))
+    expect((await store.get('r1'))?.spec).toEqual({ model: 'fast', tools: [] })
     await first.destroy()
 
     const second = createCopilot({
+      // If the snapshot were ignored, THIS model would run: it calls the excluded tool and
+      // answers 'replayed'. The `fast` tier answers 'fast' and calls nothing.
       provider: scriptedModel([{ toolCall: { name: 'write', input: {} } }, { text: 'replayed' }]),
       models: { fast: scriptedModel('fast') },
       runStore: store,
@@ -244,9 +248,154 @@ describe('§3.1 run state machine', () => {
     second.on('run:start', ({ model }) => models.push(model))
     await second.resumePending({ staleAfterMs: 0 })
     const result = await second.attach('r1').result()
-    expect(result.ok && result.output).toBe('replayed')
+    expect(result.ok && result.output).toBe('fast')
+    expect(models).toEqual(['fast'])
+    expect(executed).toEqual([]) // `tools: []` survived the process boundary
+    await second.destroy()
+  })
+
+  test('a slot created by attach() is resumed with the snapshot too — "any process" means any slot', async () => {
+    // The ruling says resumePending AND attach replay the snapshot. `attach` never processes, but
+    // it leaves an unowned slot behind (`spec: null`), and the watchdog adopts exactly that slot:
+    // the resolution must come off the RECORD, not off whatever the slot was born with.
+    const store = createMemoryRunStore()
+    const first = createCopilot({
+      provider: scriptedModel('primary'),
+      models: { fast: scriptedModel([{ text: 'never', delayMs: 60_000 }]) },
+      runStore: store,
+    })
+    first.trigger({ runId: 'r1', input: 'hi', model: 'fast' })
+    await vi.waitFor(async () => expect((await store.get('r1'))?.state).toBe('processing'))
+    await first.destroy()
+
+    const second = createCopilot({
+      provider: scriptedModel('primary'),
+      models: { fast: scriptedModel('fast') },
+      runStore: store,
+    })
+    const models: string[] = []
+    second.on('run:start', ({ model }) => models.push(model))
+    const attached = second.attach('r1') // the slot exists BEFORE the resume
+    const settled = attached.result()
+    await second.resumePending({ staleAfterMs: 0 })
+    const result = await settled
+    expect(result.ok && result.output).toBe('fast')
+    expect(models).toEqual(['fast'])
+    await second.destroy()
+  })
+
+  test('a trigger with no overrides persists NO spec — absence means "this instance’s defaults"', async () => {
+    const store = createMemoryRunStore()
+    const copilot = createCopilot({ provider: scriptedModel('ok'), runStore: store })
+    await copilot.trigger({ runId: 'r1', input: 'hi' }).result()
+    const stored = await store.get('r1')
+    expect(stored?.spec).toBeUndefined()
+    expect(Object.keys(stored ?? {})).not.toContain('spec')
+    await copilot.destroy()
+  })
+
+  test('an inline model INSTANCE is not snapshotted (nothing serialises an object)', async () => {
+    const store = createMemoryRunStore()
+    const copilot = createCopilot({ provider: scriptedModel('default'), runStore: store })
+    await copilot
+      .trigger({ runId: 'r1', input: 'hi', model: scriptedModel('inline'), maxSteps: 4 })
+      .result()
+    // maxSteps is durable; the instance is not — a reviving process could not resolve it.
+    expect((await store.get('r1'))?.spec).toEqual({ maxSteps: 4 })
+    await copilot.destroy()
+  })
+
+  test('the persisted maxSteps drives the replay, not the reviving instance’s default', async () => {
+    const store = createMemoryRunStore()
+    const tools = [
+      defineTool({
+        name: 'probe',
+        description: 'stub',
+        inputSchema: z.object({}),
+        execute: () => 'ok',
+      }),
+    ] as const
+    const call = { toolCall: { name: 'probe', input: {} } }
+
+    const first = createCopilot({
+      provider: scriptedModel([{ text: 'never', delayMs: 60_000 }]),
+      runStore: store,
+      tools,
+    })
+    first.trigger({ runId: 'r1', input: 'hi', maxSteps: 1 })
+    await vi.waitFor(async () => expect((await store.get('r1'))?.state).toBe('processing'))
+    await first.destroy()
+
+    // The reviving instance defaults to 8 steps; the snapshot says 1, so the model's second step
+    // never happens and the run ends as `step_limit` (§3.4) instead of 'done'.
+    const second = createCopilot({
+      provider: scriptedModel([call, { text: 'done' }]),
+      runStore: store,
+      tools,
+    })
+    await second.resumePending({ staleAfterMs: 0 })
+    const result = await second.attach('r1').result()
+    expect(result.ok).toBe(false)
+    expect(!result.ok && result.error?.code).toBe('step_limit')
+    await second.destroy()
+  })
+
+  test('an unresolvable spec degrades with an `error` event instead of failing the resume', async () => {
+    // The reviving process may register different tiers and a different tool set (§2.2): a resume
+    // must finish the work, and report the degradation, rather than throw at the host.
+    const store = createMemoryRunStore()
+    const executed: string[] = []
+    const tools = [
+      defineTool({
+        name: 'keep',
+        description: 'stub',
+        inputSchema: z.object({}),
+        execute: () => {
+          executed.push('keep')
+          return 'ok'
+        },
+      }),
+    ] as const
+
+    const first = createCopilot({
+      provider: scriptedModel('primary'),
+      models: { fast: scriptedModel([{ text: 'never', delayMs: 60_000 }]) },
+      runStore: store,
+      tools: [
+        ...tools,
+        defineTool({
+          name: 'gone',
+          description: 'a tool the next process does not register',
+          inputSchema: z.object({}),
+          execute: () => 'ok',
+        }),
+      ] as const,
+    })
+    first.trigger({ runId: 'r1', input: 'hi', model: 'fast', tools: ['keep', 'gone'] })
+    await vi.waitFor(async () => expect((await store.get('r1'))?.state).toBe('processing'))
+    await first.destroy()
+
+    // No `fast` tier here, and no `gone` tool.
+    const second = createCopilot({
+      provider: scriptedModel([{ toolCall: { name: 'keep', input: {} } }, { text: 'degraded' }]),
+      runStore: store,
+      tools,
+    })
+    const errors: Array<{ code: string; scope: string }> = []
+    second.on('error', ({ error, scope }) => errors.push({ code: error.code, scope }))
+    const models: string[] = []
+    second.on('run:start', ({ model }) => models.push(model))
+
+    const report = await second.resumePending({ staleAfterMs: 0 })
+    expect(report.restarted).toEqual(['r1'])
+    const result = await second.attach('r1').result()
+    expect(result.ok && result.output).toBe('degraded')
     expect(models).toEqual(['default'])
-    expect(executed).toEqual(['write'])
+    expect(executed).toEqual(['keep'])
+    expect(errors).toEqual([
+      { code: 'unknown_model', scope: 'provider' },
+      { code: 'unknown_tool', scope: 'tool' },
+    ])
     await second.destroy()
   })
 

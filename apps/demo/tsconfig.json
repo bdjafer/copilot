@@ -1,0 +1,10 @@
+{
+  "extends": "../../tsconfig.base.json",
+  "compilerOptions": {
+    // The demo's shared modules (`site/assets/*.js`) are plain ESM served straight to the
+    // browser — no build step is the point. `allowJs` lets the test import them; they are not
+    // type-checked (`checkJs` stays off), the test that drives them is.
+    "allowJs": true
+  },
+  "include": ["test", "vitest.config.ts", "site/assets"]
+}

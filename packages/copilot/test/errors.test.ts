@@ -109,14 +109,18 @@ describe('§2.9 provider classification', () => {
     expect(classifyProviderError(new Error('network down')).retryable).toBe(true)
   })
 
-  test('a 4xx other than 429 is provider_error but NOT retryable (declared deviation from §2.9)', () => {
-    // §2.9 defines `provider_error` as "5xx / network" and puts the CODE in the retryable set.
-    // A 400 has no other code to map to, and it will be rejected identically on every attempt,
-    // so the instance is classified non-retryable: `isRetryable(e)` is the authority, not the code.
+  test('a 4xx other than 429 is provider_error but NOT retryable (§2.9, decision log #30)', () => {
+    // A 400 has no other code to map to, and the provider rejects it identically on every attempt,
+    // so classification sets `retryable: false` on the INSTANCE: `isRetryable(e)` is the source of
+    // truth and the code is only its default. Retrying would spend the whole MAX_ATTEMPTS budget
+    // and report `max_attempts` instead of the 401 the host has to show.
     const e = classifyProviderError(httpError(400))
     expect(e.code).toBe('provider_error')
     expect(e.retryable).toBe(false)
     expect(isRetryable(e)).toBe(false)
+    for (const status of [401, 403, 404, 422]) {
+      expect(isRetryable(classifyProviderError(httpError(status)))).toBe(false)
+    }
   })
 
   test('an abort is `aborted` and never retried — the host asked for it', () => {

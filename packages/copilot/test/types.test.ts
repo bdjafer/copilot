@@ -119,6 +119,7 @@ export type ExportedTypeSurface = [
   Api.Usage,
   Api.RunContext<Ctx>,
   Api.RunRecord,
+  Api.RunSpec,
   Api.Run<Ctx>,
   Api.ToolDefinition,
   Api.ToolContext<Ctx>,
@@ -153,17 +154,32 @@ export type ConstantAssertions = [
   Expect<Equal<typeof HEARTBEAT_MS, 10_000>>,
 ]
 
-/** §2.2 — `RunRecord` is the eight non-context fields; `context` arrives via `RunContext`. */
+/**
+ * §2.2 — `RunRecord` is the nine non-context fields (PLAN §4.2's eight plus the `spec` replay
+ * snapshot, decision log #26); `context` arrives via `RunContext`. Nothing else is ever added.
+ */
 export type RunShapeAssertions = [
   Expect<
     Equal<
       keyof Api.RunRecord,
-      'id' | 'state' | 'input' | 'output' | 'error' | 'attempts' | 'heartbeat' | 'createdAt'
+      | 'id'
+      | 'state'
+      | 'input'
+      | 'output'
+      | 'error'
+      | 'attempts'
+      | 'heartbeat'
+      | 'createdAt'
+      | 'spec'
     >
   >,
   Expect<Equal<keyof Api.Run<Ctx>, keyof Api.RunRecord | 'context'>>,
   Expect<Equal<Api.Run<Ctx>['context'], Ctx>>,
   Expect<Equal<Api.Run['context'], unknown>>,
+  Expect<Equal<Api.Run['spec'], Api.RunSpec | undefined>>,
+  Expect<Equal<keyof Api.RunSpec, 'model' | 'tools' | 'maxSteps'>>,
+  Expect<Equal<Api.RunSpec['model'], string | undefined>>,
+  Expect<Equal<Api.RunSpec['tools'], readonly string[] | undefined>>,
 ]
 
 /* -- §2.11 — the harness is parameterized by TTools, not cast to it -- */

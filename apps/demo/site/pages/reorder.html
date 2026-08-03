@@ -1,0 +1,119 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>List reorder · exp-spec demo</title>
+    <link rel="stylesheet" href="../assets/demo.css" />
+    <script src="../vendor/comment-core.iife.js"></script>
+    <script src="../vendor/comment-ui.iife.js"></script>
+  </head>
+  <body>
+    <main>
+      <h2>List reorder</h2>
+      <div class="demo-note">
+        A comment belongs to <em>the item</em>, not to <code>li:nth-child(3)</code>.
+        <ol>
+          <li>Comment on <strong>Kiwi</strong> (the third row).</li>
+          <li>Press <em>Shuffle</em> or <em>Sort A→Z</em>. The badge follows Kiwi.</li>
+          <li>Press <em>Remove Kiwi</em>. The thread orphans and its badge docks to the corner.</li>
+          <li>
+            Press <em>Restore</em>. It re-anchors — watch <code>thread:anchored</code> in the log.
+          </li>
+        </ol>
+        Rows deliberately have no <code>id</code>: position and CSS path are both worthless here, so
+        the match has to come from the fingerprint and the row's own text. <br /><br />
+        <strong>Why the demo raises <code>anchoring.threshold</code> to 0.9</strong> (in
+        <code>assets/demo.js</code>, for every page). After a shuffle the stored CSS selector
+        <code>#list &gt; li:nth-of-type(3)</code> still matches — it now points at whoever moved
+        into that slot. That wrong row scores ≈0.76: tag, classes, depth and shape all still match,
+        and only the text differs, which is worth 0.12 of the total weight. The library's default
+        accept score is 0.62, so the resolver takes it and never runs the fingerprint scan that
+        would have found the row at its new position (score 1.00). Raising the accept score is the
+        documented knob; whether the default itself should move is a question for the M2 anchoring
+        bench against real sites (PLAN §3.8).
+      </div>
+
+      <div class="demo-controls">
+        <button type="button" id="shuffle">Shuffle</button>
+        <button type="button" id="sort">Sort A→Z</button>
+        <button type="button" id="up">Move first row down</button>
+        <button type="button" id="remove">Remove Kiwi</button>
+        <button type="button" id="restore">Restore all rows</button>
+      </div>
+
+      <ul id="list"></ul>
+    </main>
+
+    <script type="module">
+      import { bootDemo } from '../assets/demo.js'
+
+      const { log } = bootDemo({
+        title: 'List reorder',
+        hint: 'Rows move, are removed and come back. Badges must follow the row, not the slot.',
+      })
+
+      // Each row says something different. Rows that are byte-identical apart from their
+      // position are ambiguous by construction — no anchor can tell them apart after a shuffle,
+      // and comment-core would rather hold the position than invent a match.
+      const FRUIT = {
+        Apricot: 'ripens in July, bruises if you look at it',
+        Blackberry: 'grows on the fence nobody maintains',
+        Kiwi: 'furry, sliced in half, eaten with a teaspoon',
+        Damson: 'too sharp raw, unbeatable as jam',
+        Elderberry: 'flowers make cordial, berries need cooking',
+        Fig: 'a flower turned inside out, technically',
+      }
+      const list = document.querySelector('#list')
+
+      function render(names) {
+        list.replaceChildren(
+          ...names.map((name) => {
+            const li = document.createElement('li')
+            li.className = 'item'
+            li.innerHTML = '<strong></strong> — <span></span>'
+            li.querySelector('strong').textContent = name
+            li.querySelector('span').textContent = FRUIT[name]
+            return li
+          }),
+        )
+      }
+
+      const names = () => [...list.children].map((li) => li.querySelector('strong').textContent)
+
+      render(Object.keys(FRUIT))
+
+      document.querySelector('#shuffle').addEventListener('click', () => {
+        const next = names()
+        for (let i = next.length - 1; i > 0; i -= 1) {
+          const j = Math.floor(Math.random() * (i + 1))
+          ;[next[i], next[j]] = [next[j], next[i]]
+        }
+        render(next)
+        log(`shuffled → ${next.join(', ')}`)
+      })
+
+      document.querySelector('#sort').addEventListener('click', () => {
+        render([...names()].sort())
+        log('sorted A→Z')
+      })
+
+      document.querySelector('#up').addEventListener('click', () => {
+        const next = names()
+        if (next.length > 1) next.splice(1, 0, next.shift())
+        render(next)
+        log('moved the first row down one slot')
+      })
+
+      document.querySelector('#remove').addEventListener('click', () => {
+        render(names().filter((name) => name !== 'Kiwi'))
+        log('removed Kiwi — any thread on it should orphan')
+      })
+
+      document.querySelector('#restore').addEventListener('click', () => {
+        render(Object.keys(FRUIT))
+        log('restored all rows — orphans should re-anchor')
+      })
+    </script>
+  </body>
+</html>

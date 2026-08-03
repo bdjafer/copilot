@@ -1,0 +1,95 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Basic static page · exp-spec demo</title>
+    <link rel="stylesheet" href="../assets/demo.css" />
+    <!-- comment-core FIRST: comment-ui.iife.js declares it external and reads it off
+         `globalThis.Comments` (SPEC-comment-core §1.2). Swapping these two lines breaks the page. -->
+    <script src="../vendor/comment-core.iife.js"></script>
+    <script src="../vendor/comment-ui.iife.js"></script>
+  </head>
+  <body>
+    <main>
+      <h2>Basic static page</h2>
+      <div class="demo-note">
+        The baseline. Nothing on this page ever moves, so every anchor should resolve on the
+        <code>css</code> selector at confidence 1.
+        <ol>
+          <li>Press <kbd>C</kbd> (or <kbd>A</kbd> to ask), click any element, type, Send.</li>
+          <li>The echo responder replies as <code>copilot</code> after ~0.8&nbsp;s.</li>
+          <li>Reload. The thread is still there — <code>localStorage</code>, keyed by page URL.</li>
+        </ol>
+      </div>
+
+      <h3>Prose</h3>
+      <p id="intro">
+        Anchoring is a scoring problem, not a lookup: the engine stores several selectors per thread
+        and re-resolves them against whatever DOM it finds later, keeping the best match.
+      </p>
+      <p>
+        This paragraph has no <code>id</code> at all, so its capture leans on the CSS path, the
+        element fingerprint and the surrounding text. Comment on it and reload — it comes back.
+      </p>
+
+      <h3>A list</h3>
+      <ul>
+        <li>Selection-based anchors: select part of this sentence, then press <kbd>C</kbd>.</li>
+        <li>Element anchors: press <kbd>C</kbd> and click a whole element.</li>
+        <li>
+          Both are the same <code>Thread</code> record; only <code>anchor.mode</code> differs.
+        </li>
+      </ul>
+
+      <h3>A table</h3>
+      <table>
+        <thead>
+          <tr>
+            <th>Scenario</th>
+            <th>What it stresses</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td>Reorder</td>
+            <td>position-independent matching</td>
+          </tr>
+          <tr>
+            <td>Popover</td>
+            <td>orphan → re-anchor, with no store write</td>
+          </tr>
+          <tr>
+            <td>Infinite scroll</td>
+            <td>late-arriving nodes, off-screen badges</td>
+          </tr>
+        </tbody>
+      </table>
+
+      <h3>Cards</h3>
+      <div class="grid">
+        <div class="card">
+          <strong>One</strong>
+          <p>Identical siblings — the fingerprint has to break the tie.</p>
+        </div>
+        <div class="card">
+          <strong>Two</strong>
+          <p>Identical siblings — the fingerprint has to break the tie.</p>
+        </div>
+        <div class="card">
+          <strong>Three</strong>
+          <p>Identical siblings — the fingerprint has to break the tie.</p>
+        </div>
+      </div>
+    </main>
+
+    <script type="module">
+      import { bootDemo } from '../assets/demo.js'
+
+      bootDemo({
+        title: 'Basic static page',
+        hint: 'Baseline — no mutation, no navigation. Place, reload, the badge comes back.',
+      })
+    </script>
+  </body>
+</html>

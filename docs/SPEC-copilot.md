@@ -6,8 +6,10 @@
 > the code. Converged from entropy+ proposals A (dx), B (minimal), C (capability) against
 > `PLAN.md` v2. Decision log in §8.
 >
-> **Locked-by-PLAN invariants this spec never renegotiates:** the `Run` record — exactly nine
-> fields (§4.2); `createCopilot({ provider, systemPrompt, tools: ToolDefinition[], runStore })`
+> **Locked-by-PLAN invariants this spec never renegotiates:** the `Run` record — PLAN §4.2's nine
+> fields, none removed, none reinterpreted, plus the one durable addition ruled in decision log
+> #26 (the `spec` replay snapshot, §2.2);
+> `createCopilot({ provider, systemPrompt, tools: ToolDefinition[], runStore })`
 > (§4.1); `copilot.trigger({ input, context?, runId? })` returning a handle (§4.1);
 > `copilot.cancel(runId)`; `copilot.resumePending()`; the event names
 > `run:start | run:step | run:token | run:done | run:error | run:cancelled` (§4.1); `context`
@@ -31,7 +33,11 @@
 through `remoteTool` / `ToolTransport`; MV3 keepalive and alarms are host duties driven by two
 events (§4.4). A CI test imports both entry points with those globals deleted.
 
-Build: Vite lib mode, ESM + IIFE. IIFE global: `Copilot`.
+Build: Vite lib mode, ESM + IIFE. IIFE global: `Copilot`. **The build also emits declarations**
+(`tsgo -p tsconfig.build.json` → `dist/types/`), and `publishConfig.exports` must point every
+subpath at files the build actually produces — a `types` condition naming a `.d.ts` that no build
+step writes is a package that type-checks in the workspace and resolves to `any` everywhere else
+(decision log #33).
 Runtime deps: `ai` (v6+), `nanoid`. Provider packages (`@ai-sdk/anthropic`,
 `@built-in-ai/core`), schema libraries (zod / valibot / arktype) and messaging are the host's
 — they are peer-optional and never imported by this package.
@@ -61,7 +67,13 @@ export type LanguageModelLike = import('ai').LanguageModel
  * `provider: anthropic({ apiKey: await getKey() })` — a top-level await before
  * `chrome.runtime.onStartup.addListener(...)` — forfeits the wake events the whole restart
  * story depends on. `lazyModel` moves the `await` inside the first attempt, where it is free.
- * The factory is memoized; a rejection surfaces as `provider_error` on that attempt.
+ *
+ * **The factory memoizes success only (normative, decision log #32).** A resolved model is built
+ * once and reused by every later attempt; a *rejected* factory is NOT cached — the rejection
+ * surfaces as `provider_error` on that attempt and the next attempt calls the factory again. That
+ * is the only reading under which "on that attempt" carries weight, and it is the one the MV3 case
+ * needs: the first wake can find no API key stored yet, and a cached rejection would poison every
+ * run for the rest of the worker's life.
  */
 export function lazyModel(factory: () => Awaitable<LanguageModelLike>): LanguageModelLike
 
@@ -75,7 +87,7 @@ export interface Usage {
 }
 ```
 
-### 2.2 The `Run` record (locked — PLAN §4.2, exactly nine fields)
+### 2.2 The `Run` record (PLAN §4.2's nine fields + the `spec` replay snapshot)
 
 ```ts
 /**
@@ -110,14 +122,66 @@ export interface RunRecord<TContext = unknown> {
    */
   heartbeat: string
   createdAt: string
+  /**
+   * **The replay snapshot (normative, decision log #26).** Written once, at trigger time, when —
+   * and only when — the trigger supplied at least one of `model` / `tools` / `maxSteps`. Never
+   * mutated afterwards, and never written by a resume: a run's spec is decided by the trigger that
+   * created it, exactly like `input` and `context`.
+   *
+   * It exists because a restart is cross-process. `resumePending()` in a fresh service worker
+   * reads a record, not a `TriggerInput`, so without this field the replay silently runs on the
+   * default provider with the full tool registry — a batch run's `reply_to_thread` becomes
+   * available to a single run, an `ask` run drops off its fast tier, and a `maxSteps: 12` review
+   * replays with 8. That is a behaviour change no host can detect, let alone correct.
+   */
+  spec?: RunSpec
+}
+
+/**
+ * A JSON snapshot of the per-run overrides in `TriggerInput`. Every member is optional and an
+ * absent member means "the processing instance's own default", so a run triggered with no
+ * overrides carries no `spec` at all.
+ */
+export interface RunSpec {
+  /**
+   * A **key of `CopilotOptions.models`** — never a model instance, which is not serialisable.
+   * `trigger({ model })` with an inline `LanguageModelLike` therefore records nothing, and a
+   * cross-process replay of that run uses the primary `provider`: an object the reviving process
+   * never saw cannot be resurrected from a store, and inventing a name for it would only make the
+   * record lie.
+   */
+  model?: string
+  /** The per-run tool subset, by name, exactly as `TriggerInput.tools` gave it (`[]` included). */
+  tools?: readonly string[]
+  maxSteps?: number
 }
 ```
 
-`Run<T>` is still **exactly the nine locked fields** — the `RunRecord` / `RunContext` split is
-a typing device for `context`'s optionality, not a new field. No tenth field is added, ever. Everything the runtime wants to remember beyond this
-(per-step text, tool calls, usage) lives in the in-process event stream and in `RunResult` —
-not in the durable record. `TContext` is a phantom narrowing of the locked `context?: unknown`;
-`Run` (unparameterized) is assignable from `Run<T>` and vice versa at the store boundary.
+`Run<T>` is **PLAN §4.2's nine fields plus `spec`** — the `RunRecord` / `RunContext` split is a
+typing device for `context`'s optionality, not a field. The tenth field is the single addition this
+spec makes to the locked record, and it is admitted for one reason only: it is what makes a
+restarted run *the same run*, which is the property PLAN §4.5 is about. Nothing else is added —
+everything the runtime wants to remember beyond this (per-step text, tool calls, usage) lives in
+the in-process event stream and in `RunResult`, not in the durable record. `TContext` is a phantom
+narrowing of the locked `context?: unknown`; `Run` (unparameterized) is assignable from `Run<T>`
+and vice versa at the store boundary.
+
+**Replay semantics (normative).** An instance that starts an attempt for a run it did not trigger —
+`resumePending()` in a fresh process, a resumed run whose slot came from `attach()`, a
+`trigger({ runId })` that deduped onto an existing record and was later adopted — resolves the
+attempt's model, tool set and step cap from `run.spec`, not from its own defaults:
+
+| `spec` member | Resolution at attempt start | When it cannot be resolved |
+|---|---|---|
+| `model` | `options.models[spec.model]`; `run:start.model` reports the key | Key absent in this process ⇒ fall back to `provider`, `run:start.model` is `'default'`, and one `error` event (`scope: 'provider'`, code `unknown_model`) reports the degradation. A resume must never fail because the reviving process registers different tiers. |
+| `tools` | `registry.subset(spec.tools)` | Names this process does not register are dropped, each with one `error` event (`scope: 'tool'`, code `unknown_tool`). Dropping a tool is survivable; throwing `unknown_tool` out of `resumePending()` is not. |
+| `maxSteps` | used verbatim | — |
+
+`TriggerInput.system` is deliberately **not** snapshotted: it is prompt text, often large, and
+`CopilotOptions.systemPrompt` — which is a function of the `Run` and therefore reproducible in any
+process — is the durable channel for per-run prompt shaping. A resumed run whose trigger passed
+`system` falls back to `systemPrompt(run)` (§3.5), and a host that needs the override to survive a
+restart puts it in `context`, which is durable by construction.
 
 **`TContext` must be JSON-round-trippable (normative).** `context` is written to the `RunStore`
 and read back in a different process after a service-worker restart, so a `Date`, `Map`, `Set`
@@ -385,7 +449,13 @@ export interface Copilot<
    * host-composed, so `c:{threadId}:` is a prefix the host already knows.
    */
   cancelByPrefix(prefix: string, reason?: string): Promise<readonly string[]>
-  /** Host calls on wake / alarm. Restarts runs with stale heartbeats. Idempotent. */
+  /**
+   * Host calls on wake / alarm. Restarts runs with stale heartbeats. Idempotent.
+   *
+   * **Restarts replay the run's own `spec` (§2.2), not this instance's defaults** — same model
+   * tier, same tool subset, same step cap as the trigger asked for, in whatever process picks the
+   * run up.
+   */
   resumePending(options?: { staleAfterMs?: number; limit?: number }): Promise<ResumeReport>
 
   get(runId: string): Promise<Run<TContext> | null>
@@ -433,12 +503,17 @@ export interface TriggerInput<
   context?: TContext
   /** Idempotency key. A run with this id already in the store ⇒ handle onto it, no new work. */
   runId?: string
-  /** A key of `models`, or a model instance. Unknown key ⇒ `unknown_model` thrown sync. */
+  /**
+   * A key of `models`, or a model instance. Unknown key ⇒ `unknown_model` thrown sync.
+   * A key is snapshotted into `run.spec.model` and survives a restart; an inline instance is not
+   * serialisable and does not (§2.2).
+   */
   model?: string | LanguageModelLike
-  /** Per-run system prompt override. */
+  /** Per-run system prompt override. Not snapshotted — see §2.2's replay semantics. */
   system?: string
-  /** Per-run tool subset, by name. Omit for all registered tools. */
+  /** Per-run tool subset, by name. Omit for all registered tools. Snapshotted into `run.spec`. */
   tools?: readonly TTools[number]['name'][]
+  /** Snapshotted into `run.spec`. */
   maxSteps?: number
   /** Cancels this run when aborted. */
   signal?: AbortSignal
@@ -533,6 +608,15 @@ export interface RunStore<TContext = unknown> {
   /**
    * Multi-context resume safety (SW + offscreen document). Returns false when another owner
    * holds a fresh lease. Absent ⇒ advisory heartbeat locking only, sufficient for one SW.
+   *
+   * **Leases expire on the host clock (`Date.now()`), normative (decision log #31.)** The store
+   * factories below take no clock seam, by design: a lease is a coordination fact between
+   * *processes* (an SW and an offscreen document, two tabs, a real `chrome.storage` adapter shared
+   * by both), and every one of them reads the wall clock. `CopilotOptions.now` drives heartbeats,
+   * staleness and event timestamps *inside one instance*; making it also move leases would let a
+   * test's virtual clock hand out a lease a real second process still holds. A host that wants
+   * virtual-clock leases writes them into its own adapter — which is exactly what `claim` being
+   * optional is for.
    */
   claim?(id: string, owner: string, ttlMs: number): Promise<boolean>
 }
@@ -614,7 +698,11 @@ export interface CopilotEventMap<
     reason: string | null
     at: 'queued' | 'processing'
   }
-  /** Convenience terminal: exactly one per run, after done | error(final) | cancelled. */
+  /**
+   * Convenience terminal: exactly one **per run per emitting instance**, after
+   * done | error(final) | cancelled. Cross-context uniqueness is the relay's job, not the
+   * runtime's (§3.3.5).
+   */
   'run:settled': { runId: string; run: Run<TContext>; result: RunResult<TContext> }
   'tool:call': { runId: string; step: number; name: TTools[number]['name']; input: unknown }
   'tool:result': { runId: string; step: number; call: ToolCall<TTools>; durationMs: number }
@@ -633,7 +721,19 @@ export interface CopilotEventMap<
 
 export type ErrorScope = 'provider' | 'tool' | 'store' | 'listener' | 'transport' | 'context'
 
-/** The payoff of `const TTools`: a discriminated union keyed on your literal tool names. */
+/**
+ * The payoff of `const TTools`: a discriminated union keyed on your literal tool names.
+ *
+ * **On a failed call, `input` is the model's raw input and may not satisfy the schema
+ * (normative, decision log #29).** `ok: false` covers `tool_input_invalid` (the model produced
+ * arguments the Standard Schema rejected) and `tool_not_found` (a tool that was never registered),
+ * and in both cases the only input that exists is the one the model emitted — unparsed,
+ * unvalidated, possibly absent, in which case it is reported as `{}`. The static type stays
+ * `ToolInputOf<K>` because widening it to `unknown` would force a cast in every `ok: true` branch
+ * to buy safety in a branch that is already an error path: read `call.input` on a failed call as
+ * *evidence about what the model tried*, never as a validated value. Only the `ok: true` arm
+ * carries an input the schema accepted.
+ */
 export type ToolCall<TTools extends readonly ToolDefinition[]> = {
   [K in TTools[number] as K['name']]:
     | { name: K['name']; ok: true; input: ToolInputOf<K>; output: ToolOutputOf<K> }
@@ -657,8 +757,9 @@ export type CopilotEvent<
     runId: string | null
     /**
      * Monotonic **per run, per emitting instance**, across that instance's attempts.
-     * NOT global across contexts: there is no shared durable counter (`Run` is locked at nine
-     * fields and `RunStore` has no seq), so an SW and an offscreen document — the §3.6 escape
+     * NOT global across contexts: there is no shared durable counter (`Run` carries no counter —
+     * `spec` is a trigger-time snapshot, never a running total — and `RunStore` has no seq, and
+     * neither will gain one), so an SW and an offscreen document — the §3.6 escape
      * hatch — would both emit `1..n` for the same run. A relay dedupes and orders on
      * `(runId, instanceId, seq)`; across instances, order is by `at` and ties are arbitrary.
      */
@@ -698,8 +799,17 @@ export type CopilotErrorCode =
   | 'aborted' | 'run_not_found' | 'store_failed' | 'max_attempts'
 
 /**
- * True for `provider_error` (5xx / network), `rate_limited` and `timeout`. Retries are spaced
- * by `retryDelayMs(attempt)` (§2.3).
+ * **`isRetryable(e)` — i.e. the error INSTANCE's `retryable` flag — is the source of truth
+ * (normative, decision log #30).** The code is the default, not the verdict: `provider_error`,
+ * `rate_limited` and `timeout` construct with `retryable: true`, everything else with `false`, and
+ * provider classification may override the flag on an individual error.
+ *
+ * The case that forces this: **a non-429 4xx is `provider_error` with `retryable: false`.** A 400,
+ * 401 or 403 has no other code to map to — it is neither a rate limit nor a timeout — and the
+ * provider will reject the identical request identically on the next two attempts, so retrying it
+ * spends the whole `MAX_ATTEMPTS` budget and reports `max_attempts` instead of the 401 the host
+ * needs to see. Never branch on `e.code === 'provider_error'` to decide whether to retry; branch
+ * on `isRetryable(e)`.
  *
  * **`store_failed` is NOT retryable** — §3.4 makes run-store failure fatal ("the runtime
  * refuses to process a run it cannot record"), and a code cannot be both fatal and worth three
@@ -818,6 +928,11 @@ export function createTestCopilot<
   re-triggered — a "retry" is a fresh `trigger()` with a fresh `runId` (PLAN §4.2).
 * **No mid-loop checkpoint (PLAN §4.5, deliberate).** A restart replays the run from step 1.
   It costs tokens, not correctness, because the host's append is idempotent on `runId`.
+* **A restart replays the run's `spec`, in any process (§2.2).** `input`, `context` and `spec` are
+  the run; the instance that resumes contributes only its `provider`, its registry and its
+  `systemPrompt`. A restart that silently changed model tier, tool set or step cap would not be a
+  replay of the same run — it would be a different run wearing the same `runId`, and the host's
+  idempotent append would happily commit its output.
 
 ### 3.2 Idempotency
 
@@ -848,9 +963,16 @@ export function createTestCopilot<
 4. **`run:error` with `willRetry: true` is not terminal.** The record stays `queued`; a fresh
    `run:start` (`attempt: n+1`, `resumed: true`) follows. Only `willRetry: false` sets
    `state: 'error'`.
-5. **Exactly one `run:settled` per run**, across all attempts and all contexts, emitted
-   immediately after the final terminal event. This is the one event a host binds when it only
-   cares that the work is over (clear the thinking chip, release the keepalive).
+5. **Exactly one `run:settled` per run per emitting instance**, across that instance's attempts,
+   emitted immediately after the final terminal event it observes. This is the one event a host
+   binds when it only cares that the work is over (clear the thinking chip, release the keepalive).
+   It is **not** globally unique across contexts, and it cannot be: §2.6 makes an attaching
+   instance emit the terminal locally after polling, so an SW that owns a run and an options page
+   attached to it each emit their own — with no shared counter (§3.3.8) there is nothing to
+   reconcile them with. **Cross-context uniqueness is the relay's dedupe duty**, on
+   `(runId, instanceId, seq)` exactly like every other event: a relay that forwards two instances'
+   `run:settled` for one run and lets the page act on both has skipped the dedupe every relayed
+   event needs, not hit a runtime bug.
 6. **`tool:call` always precedes its `tool:result`**; both precede the `run:step` that reports
    them in `calls`.
 7. **`run:token` is best-effort and lossy by contract** (PLAN §4.5). It may be entirely absent
@@ -874,13 +996,23 @@ export function createTestCopilot<
     after it resolves. Outstanding `result()` promises are settled locally with
     `{ ok: false, reason: 'cancelled', error: CopilotError('destroyed') }` (§2.6) — settling a
     promise is not an event, and a never-settling promise is a leak, not a guarantee.
-13. **Relayed events are projected, not cloned as-is.** `run:token`, `run:step`, `run:queued`,
-    `run:done` and `run:cancelled` payloads are structured-clone-safe. `run:error`,
-    `run:settled` and `error` are **not**: a `CopilotError` is an `Error` subclass, so
-    structured clone drops `code`, `retryable`, `runId` and `toolName`, and throws
-    `DataCloneError` on a non-cloneable `.cause`. A relay must project every error through
-    `CopilotError.toJSON()` before posting — otherwise the receiving page reads
-    `result.error.code === undefined`, which is exactly the field §7.3 branches on.
+13. **Relayed events are projected, not cloned as-is.** Exactly four payloads are
+    structured-clone-safe and may be posted verbatim: **`run:token`, `run:queued`, `run:done` and
+    `run:cancelled`** (their `Run` — `context` and `spec` included — is JSON by contract, §2.2).
+    Every other event is the relay's responsibility to project before posting:
+    * `run:error`, `run:settled` and `error` carry a `CopilotError` directly;
+    * **`run:step`, `tool:call` and `tool:result` carry one too** — §2.8's `ToolCall` holds a live
+      `CopilotError` on every failed call, and `tool:call.input` is raw model output, which is JSON
+      in practice but is never validated as such by the runtime.
+
+    A `CopilotError` is an `Error` subclass, so structured clone drops `code`, `retryable`, `runId`
+    and `toolName`, and throws `DataCloneError` on a non-cloneable `.cause`. **Hosts relaying
+    `run:step`, `tool:*` or `run:error` MUST project the errors themselves**, through
+    `CopilotError.toJSON()` — the runtime does not ship a pre-projected event stream, because the
+    events a relay actually forwards are a host decision (§6 forwards two of thirteen) and a second
+    "serialised" event shape would be a second contract to keep aligned. A relay that skips the
+    projection delivers `error.code === undefined`, which is exactly the field §7.1 and §7.3
+    branch on.
 
 ### 3.4 Error behavior
 
@@ -899,10 +1031,15 @@ export function createTestCopilot<
   in the same step. A tool that exhausts `timeoutMs` produces `tool_timeout` the same way.
 * **Input validation happens on both ends.** `remoteTool` validates against the schema before
   transport; `serveTools` validates again on arrival. A malformed model call never reaches the
-  content script. Validation failure ⇒ `tool_input_invalid`, fed back to the model.
+  content script. Validation failure ⇒ `tool_input_invalid`, fed back to the model. **The
+  resulting `ToolCall` reports the model's raw input** — the value that failed validation, or `{}`
+  when the model emitted none — so `call.input` on an `ok: false` call is evidence, not a value
+  that satisfies `inputSchema` (§2.8).
 * **Provider errors end the attempt.** Retryable set: `provider_error` (5xx / network),
   `rate_limited`, `timeout`. Not retryable: `tool_input_invalid`, `step_limit`, `aborted`,
-  `run_not_found`, `context_render_failed`, **`store_failed`** (fatal — see below). Retries are
+  `run_not_found`, `context_render_failed`, **`store_failed`** (fatal — see below), and
+  **`provider_error` carrying a non-429 4xx**, which classification constructs with
+  `retryable: false` (§2.9): the code is the default, `isRetryable(e)` is the verdict. Retries are
   bounded by `MAX_ATTEMPTS`, spaced by `retryDelayMs(attempt)` (§2.3), and then emit
   `run:error` / `max_attempts` with `willRetry: false`.
 * **Step-limit policy.** Reaching `maxSteps` ends the run as `done` with
@@ -922,11 +1059,16 @@ export function createTestCopilot<
 
 For each attempt, in order:
 1. `system` = `TriggerInput.system` ?? `await systemPrompt(run)` (or the literal string) ?? `''`.
+   In a process that did not issue the trigger there is no `TriggerInput.system` (§2.2: it is not
+   snapshotted), so a resumed attempt starts at `systemPrompt(run)`.
 2. `rendered` = `run.context === undefined ? '' : await renderContext(run.context, run)`.
    Failure ⇒ `context_render_failed`.
 3. Messages = `[{ role: 'system', content: system }, { role: 'user', content: rendered ? rendered + '\n\n' + run.input : run.input }]`.
-4. Tools = registered tools filtered by `TriggerInput.tools` when present.
-5. Loop = AI SDK `ToolLoopAgent` with `stopWhen: stepCountIs(maxSteps)`, streaming enabled.
+4. Tools = registered tools filtered by `TriggerInput.tools` when present, or by `run.spec.tools`
+   on an attempt this instance did not trigger (§2.2).
+5. Loop = AI SDK `ToolLoopAgent` with `stopWhen: stepCountIs(maxSteps)`, streaming enabled —
+   `maxSteps` being `TriggerInput.maxSteps` ?? `run.spec.maxSteps` ?? `CopilotOptions.maxSteps`,
+   and the model being `TriggerInput.model` ?? `models[run.spec.model]` ?? `provider`.
 
 Runs are **stateless**: nothing from a previous run enters the prompt. Submit and follow-up
 share one code path (PLAN §5) — the host puts the conversation in `context`.
@@ -937,7 +1079,7 @@ share one code path (PLAN §5) — the host puts the conversation in `context`.
 |---|---|---|
 | Keepalive while work is outstanding | `runtime:active` / `runtime:idle` events | 3 lines |
 | Watchdog after SW death | `resumePending()` | 3 lines (`chrome.alarms`, 30 s floor) |
-| Token relay to the open page | `subscribe()` + `CopilotError.toJSON()` for the error-carrying events (§3.3.13) | 4 lines |
+| Token relay to the open page | `subscribe()`; four payloads post verbatim, everything else needs the host's own `CopilotError.toJSON()` projection (§3.3.13) | 4 lines |
 | Idempotent write-back | `run:done.runId` + `comment-core`'s `appendComment({ id })` | 1 line |
 | Visible failure after 3 dead attempts | `run:error` with `willRetry: false` | 3 lines |
 | Re-deriving "which threads are busy" after a restart | `list({ state, idPrefix })` | 3 lines |
@@ -1117,6 +1259,10 @@ observeStore(store, async (event) => {
     runId: runIdFor(thread.id, comment.id), // idempotency key: an SW replay cannot double-trigger
     input: renderThread(await comments.get(thread.id)),
     context: { threadId: thread.id, kind: thread.kind, pageKey: thread.pageKey, mode: 'single' },
+    // `model` (as a `models` KEY) and `tools` are snapshotted into `run.spec` (§2.2), so the
+    // watchdog below restarts an `ask` run on the `fast` tier and WITHOUT `reply_to_thread` even
+    // though the worker that issued this trigger is long dead. Passing a model instance here
+    // instead of the key `'fast'` would not survive — nothing serialises an object.
     model: thread.kind === 'ask' ? 'fast' : undefined,
     tools: SINGLE_TOOLS,
   })
@@ -1170,8 +1316,10 @@ chrome.alarms.onAlarm.addListener((a) => { if (a.name === 'copilot-watchdog') co
 chrome.runtime.onStartup.addListener(() => copilot.resumePending())
 copilot.resumePending() // and on every SW wake
 
-// ── best-effort token relay (also extends SW lifetime). Errors are projected: a CopilotError
-// loses `code`/`retryable` to structured clone (§3.3.13).
+// ── best-effort token relay (also extends SW lifetime). `run:token` is one of the four
+// clone-safe payloads and posts verbatim; everything else this relay forwards is projected by
+// HAND, because projecting is the relay's duty, not the runtime's (§3.3.13). The page dedupes on
+// (runId, instanceId, seq) — `run:settled` is unique per instance, not per run (§3.3.5).
 chrome.runtime.onConnect.addListener((port) => {
   const off = copilot.subscribe((e) => {
     if (e.type === 'run:token') port.postMessage(e)
@@ -1179,6 +1327,12 @@ chrome.runtime.onConnect.addListener((port) => {
       ...e,
       payload: { ...e.payload, result: { ...e.payload.result, error: e.payload.result.ok ? null
         : e.payload.result.error?.toJSON() ?? null } },
+    })
+    // `run:step` carries a live CopilotError inside every failed ToolCall — same duty.
+    else if (e.type === 'run:step') port.postMessage({
+      ...e,
+      payload: { ...e.payload, calls: e.payload.calls.map((c) =>
+        c.ok ? c : { ...c, error: c.error.toJSON() }) },
     })
   })
   port.onDisconnect.addListener(off)
@@ -1261,7 +1415,9 @@ async function sendBatch(threadIds: string[], pageKey: string) {
     // `mode: 'batch'` is what stops the global run:done handler from appending this run's
     // summary as a comment in threadIds[0]; the per-thread writes are reply_to_thread's job.
     context: { threadId: threadIds[0], kind: 'comment', pageKey, mode: 'batch' },
-    // reply_to_thread is only offered here — that is the entire tool-set difference.
+    // reply_to_thread is only offered here — that is the entire tool-set difference. Both this
+    // subset and `maxSteps: 12` land in `run.spec`, so a batch run that outlives its worker is
+    // restarted as a batch run rather than as a single run with 8 steps (§2.2).
     tools: ['read_thread', 'list_threads', 'get_page_context', 'reply_to_thread'],
     maxSteps: 12,
   })
@@ -1280,9 +1436,12 @@ const result = await handle.result()
 if (!result.ok && result.reason === 'error') retryBanner(result.error!.code)
 
 // Re-attach to a run this process never started (fresh SW, options page, devtools).
-// This handle polls the run store (§2.6) — nothing pushes terminal state across contexts.
+// This handle polls the run store (§2.6) — nothing pushes terminal state across contexts. If the
+// watchdog restarts the run in THIS process, it replays on the tier and tool subset recorded in
+// `run.spec`, not on this instance's defaults (§2.2).
 const revived = copilot.attach(runIdFor(threadId, commentId))
 console.log(await revived.result())
+console.log(revived.run.get()?.spec) // e.g. { model: 'fast', tools: [...] } — or undefined
 
 // Opportunistic Gemini Nano: a model swap, not an API. @built-in-ai/core owns the fallback.
 import { builtInAI } from '@built-in-ai/core'
@@ -1336,7 +1495,7 @@ it('restarts from scratch after service-worker death and posts exactly once', as
 | 5 | Remote execution seam | `remoteTool` + one-method `ToolTransport` + `serveTools` (A) | C's bidirectional `MessageTransport` + `serveCopilot` / `createCopilotClient` | Three of PLAN §5's four tools run in the content script, so the seam is required. One method (`call`) is all it takes; a full runtime proxy is a whole second API surface for a case PLAN already solves with a Port relay. |
 | 6 | What `trigger()` returns | `RunHandle` — a view over a durable record (A/PLAN) | B's bare run id | PLAN §4.1 locks `const handle = copilot.trigger(...)`. B's id-only shape forces every consumer to re-query the store. |
 | 7 | Failure surfacing | `result(): Promise<RunResult>` discriminated union; never rejects (A) | A's additional `ok()` that throws; C's thenable `RunHandle` | Two error planes on one handle is exactly how drift starts. One truth: the discriminated union. Also guarantees no unhandled rejection in a worker about to be killed. |
-| 8 | Run record | Locked nine fields, no additions (B/C) | A's optional `updatedAt` / `metadata` / `v` | PLAN §4.2 is locked and the additions buy nothing: `heartbeat` is the freshness field, and the bridge's `threadId` belongs in `context`. |
+| 8 | Run record | Locked nine fields, no additions (B/C) — since amended by #26, which adds `spec` and nothing else | A's optional `updatedAt` / `metadata` / `v` | PLAN §4.2 is locked and the additions buy nothing: `heartbeat` is the freshness field, and the bridge's `threadId` belongs in `context`. The one addition that does buy something (a cross-process replay that is the same run) is ruled in #26. |
 | 9 | Run store | 3 methods (`get`, `put`, `list`) + optional `claim` | A's 5 + `claim` + `prune`; C's 5 + three optional capability interfaces; B's 2 | `get` is required for `attach` and `runId` idempotency without loading everything. `delete` is dropped — B is right that retention is adapter policy (a ring buffer in `put`). `subscribe` is dropped — cross-context observation is a Port relay, which is a host duty per PLAN §4.5 and also extends SW lifetime. |
 | 10 | Multi-context safety | Optional `RunStore.claim` (A) | C's `LeasingRunStore` + `probeRunStore`; nothing | The offscreen-document escape hatch (PLAN §4.5) needs it; making it one optional method rather than a probed capability interface keeps the required contract at three methods. |
 | 11 | Event set | 13 events: 6 locked + `run:queued`, `run:settled`, `tool:call`, `tool:result`, `runtime:active`, `runtime:idle`, `error` | B's 2 (`state`, `token`); C's 17 (`run:restart`, `budget:exceeded`, `queue:change`, `run:compensated`, `tool:progress`, `tool:approval`, …) | PLAN §4.1 locks six names, so B's collapse is not available. `run:settled` saves every host three bindings; the `runtime:*` pair reduces the entire MV3 keepalive duty to three lines. C's extras track features this spec does not ship. |
@@ -1354,6 +1513,23 @@ it('restarts from scratch after service-worker death and posts exactly once', as
 | 23 | Idempotency semantics | `trigger({ runId })` dedupes for non-terminal **and** terminal runs; `deduped` on the handle | re-running a terminal run; rejecting on duplicate | PLAN §4.5's whole restart story depends on `runId` being a true key. Dedupe-on-terminal means a replayed `chrome.runtime` message after a restart cannot double-spend tokens or double-post a reply. |
 | 24 | Test kit | `scriptedModel`, `runStoreConformance`, `createTestCopilot` with `kill()`/`revive()` (C's idea, A's runner-agnostic shape) | C's full `TestCopilot` surface with `ManualTimers`; no kit | `kill()`/`revive()` is the only way to test PLAN §4.5's central claim; it is the highest-value item in C's testing section. Conformance returns `ConformanceCase[]` rather than taking `{ describe, it, expect }` so it works in vitest, node:test and bun alike. |
 | 25 | `KeyValueAdapter` duplication | Structurally identical type declared in **both** packages | a shared third package | PLAN §2's dependency rule is absolute: the two libraries never import each other, and each must make sense published standalone. A shared package would be a third internal dependency for a six-line interface. |
+
+### 8.1 Wave-1 implementation rulings (D1–D8)
+
+Wave 1's implementation surfaced eight points where the code could not follow the spec as written,
+or followed it and produced a worse system. Each was ruled and is now normative in the body above;
+they are recorded here so a reader never has to reconstruct why the locked text moved.
+
+| # | Ruled | Where it lands | Why |
+|---|---|---|---|
+| 26 | **D1 — `Run` gains a persisted `spec` snapshot** `{ model?, tools?, maxSteps? }`, captured at trigger time only when overrides were given; `resumePending()` / a resumed `attach()` slot replay with it in ANY process. | §2.2 (field + `RunSpec` + replay table), §2.6, §3.1, §3.5, §6, §9 | The nine-field lock (#8) was written against additions that buy nothing — `updatedAt`, `metadata`, `v`. This one buys the central claim of PLAN §4.5: a restart must be a replay of *the same run*. Without it, `model: 'fast'`, `tools: SINGLE_TOOLS` and `maxSteps: 12` evaporate at the process boundary, and the fresh worker silently runs a *different* run under the same `runId` — on the expensive tier, with the batch-only `reply_to_thread` in reach, and the host's idempotent append commits the result. A model *instance* and `system` still do not survive: neither is serialisable in any honest way (§2.2). |
+| 27 | **D2 — the clone-safe list is exactly `run:token`, `run:queued`, `run:done`, `run:cancelled`.** Hosts relaying `run:step`, `tool:call`, `tool:result` or `run:error` project errors through `CopilotError.toJSON()` themselves. | §3.3.13, §3.6, §6 | The old list called `run:step` clone-safe while §2.8 puts a live `CopilotError` inside every failed `ToolCall` — both cannot hold. Shrinking the promise to the four payloads that are genuinely JSON keeps the guarantee true and keeps projection where the relay already is; the alternative (a runtime-provided serialised event stream) is a second event contract to keep aligned for a duty that is four lines at the port. |
+| 28 | **D3 — `run:settled` is exactly one per run *per emitting instance*.** Cross-context uniqueness is the relay's dedupe duty on `(runId, instanceId, seq)`. | §2.8, §3.3.5 | "Exactly one per run across all contexts" contradicted §2.6, which requires an attaching instance to emit the terminal it polled for, and §3.3.8, which says no shared counter exists. The per-instance reading is the one the runtime can actually keep, and dedupe was already the relay's job for every other event. |
+| 29 | **D4 — on a failed `ToolCall`, `input` is the model's raw input and may not satisfy the schema** (`{}` when the model emitted none). Types unchanged. | §2.8, §3.4 | `tool_input_invalid` exists precisely because the input did not validate, so the honest `input` on that arm is unvalidated. Widening the static type to `unknown` would force a cast in every `ok: true` branch — real cost in the common path to describe an error path — so the fix is a normative note, not a signature change. |
+| 30 | **D5 — a non-429 4xx is `provider_error` with `retryable: false`; `isRetryable()` is the source of truth**, the code is only its default. | §2.9, §3.4 | §2.9 defined `provider_error` as "5xx / network" and put the *code* in the retryable set, leaving 400/401/403 with no code to map to. Retrying a request the provider will reject identically burns all three attempts and reports `max_attempts` instead of the 401 the host must show. Classification therefore sets the flag per instance, and consumers branch on the flag. |
+| 31 | **D6 — run-store leases expire on the host clock (`Date.now()`); `createMemoryRunStore()` / `createKeyValueRunStore()` take no clock, by design.** | §2.7 | A lease coordinates *processes*, and every process reads the wall clock. `CopilotOptions.now` is an instance-local seam for heartbeats, staleness and event timestamps; letting it move leases would let a test clock take a lease a live offscreen document still holds. A host that wants otherwise writes its own adapter — which is what `claim` being optional is for. |
+| 32 | **D7 — `lazyModel` memoizes success only; a rejected factory is retried on the next attempt.** | §2.1 | "The factory is memoized" and "a rejection surfaces as `provider_error` on that attempt" only cohere under this reading, and it is the MV3 case: the first wake can precede the API key being stored, and a cached rejection would poison every run for the rest of the worker's life. |
+| 33 | **D8 — the build emits `.d.ts` (`dist/types/`), and `publishConfig.exports` must name files the build produces** — in this package and in `comment-core`. | §1, §9 | A `types` condition pointing at a file no build step writes is invisible in the workspace (where `exports` resolves to `src`) and resolves to `any` for every published consumer. `comment-core` already emits declarations; this package advertised them without producing them. |
 
 ---
 
@@ -1374,6 +1550,17 @@ it('restarts from scratch after service-worker death and posts exactly once', as
   `{ ok: false, reason: 'cancelled' }` and leaves the durable record resumable.
 * A test asserts a `rate_limited` run waits `retryDelayMs(attempt)` between attempts rather
   than burning all three inside one tick.
+* A test triggers with `model` (a `models` key), `tools` and `maxSteps`, kills the instance, and
+  asserts a **fresh instance over the same store** replays all three from `run.spec` — the named
+  tier is used, the excluded tool is never executed, and the step cap is the trigger's, not the
+  new instance's default (§2.2). A companion test asserts a trigger with no overrides writes no
+  `spec` at all, and that an unknown model key / unknown tool name in a snapshot degrades to the
+  default provider / a dropped tool with an `error` event, never a thrown `resumePending()`.
+* `runStoreConformance()` asserts the `spec` snapshot round-trips through the store with the other
+  nine fields.
+* `pnpm --filter <pkg> build` produces every file named by `publishConfig.exports` in both
+  packages, `.d.ts` included, and a consumer type-check against the emitted declarations resolves
+  the public API (not `any`).
 * A CI test imports `copilot` and `copilot/testing` with `document`, `window`, `navigator`,
   `localStorage` and `chrome` deleted from `globalThis`, and asserts `createCopilot` is
   callable with `scriptedModel()`.
@@ -1386,7 +1573,9 @@ it('restarts from scratch after service-worker death and posts exactly once', as
 
 ## 10. Deferred review notes
 
-Findings from the two adversarial reviews that were **not** applied above.
+Findings from the two adversarial reviews that were **not** applied above. Their D-numbers are
+local to this section and have nothing to do with the wave-1 implementation rulings D1–D8, which
+are applied in the body and recorded in §8.1.
 
 | # | Finding | Why deferred |
 |---|---|---|

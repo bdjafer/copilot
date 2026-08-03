@@ -29,6 +29,7 @@ export type {
   RunHandle,
   RunRecord,
   RunResult,
+  RunSpec,
   RunStore,
   StandardSchemaV1,
   ToolCall,

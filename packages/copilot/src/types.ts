@@ -33,7 +33,7 @@ export interface Usage {
 }
 
 /* ------------------------------------------------------------------ */
-/* §2.2 the Run record — exactly nine fields                           */
+/* §2.2 the Run record — PLAN §4.2's nine fields + the `spec` snapshot */
 /* ------------------------------------------------------------------ */
 
 export type RunContext<TContext> = unknown extends TContext
@@ -41,6 +41,23 @@ export type RunContext<TContext> = unknown extends TContext
   : { context: TContext }
 
 export type Run<TContext = unknown> = RunRecord<TContext> & RunContext<TContext>
+
+/**
+ * §2.2 — a JSON snapshot of the per-run overrides in `TriggerInput`. Every member is optional and
+ * an absent member means "the processing instance's own default", so a run triggered without
+ * overrides carries no `spec` at all.
+ */
+export interface RunSpec {
+  /**
+   * A KEY of `CopilotOptions.models` — never a model instance, which is not serialisable. An
+   * inline `LanguageModelLike` therefore records nothing and a cross-process replay of that run
+   * uses the primary `provider`.
+   */
+  model?: string
+  /** The per-run tool subset, by name, exactly as `TriggerInput.tools` gave it (`[]` included). */
+  tools?: readonly string[]
+  maxSteps?: number
+}
 
 interface RunRecordFields {
   id: string
@@ -54,12 +71,19 @@ interface RunRecordFields {
   /** ISO. Bumped at every step, by the ticker while processing, and while queued in a live queue. */
   heartbeat: string
   createdAt: string
+  /**
+   * §2.2 — the replay snapshot. Written once, at trigger time, only when the trigger supplied at
+   * least one of `model` / `tools` / `maxSteps`; never mutated afterwards and never written by a
+   * resume. It is what makes a restart in a FRESH process a replay of the same run rather than a
+   * different run wearing the same `runId`.
+   */
+  spec?: RunSpec
 }
 
 /**
- * The eight non-context fields. `context` is contributed by `RunContext<TContext>` alone, so
- * `Run<T>` is exactly the nine locked fields and `RunRecord<Ctx>` never weakens the §2.2 device
- * that makes `run.context` required once `TContext` is concrete.
+ * The nine non-context fields. `context` is contributed by `RunContext<TContext>` alone, so
+ * `Run<T>` is exactly PLAN §4.2's nine fields plus `spec`, and `RunRecord<Ctx>` never weakens the
+ * §2.2 device that makes `run.context` required once `TContext` is concrete.
  *
  * `TContext` is phantom here — `Record<never, TContext>` is `{}`, so it adds no field — but the
  * parameter is part of the locked §2.2 signature and stays.
@@ -213,12 +237,17 @@ export interface TriggerInput<
   context?: TContext
   /** Idempotency key. A run with this id already in the store ⇒ handle onto it, no new work. */
   runId?: string
-  /** A key of `models`, or a model instance. Unknown key ⇒ `unknown_model` thrown sync. */
+  /**
+   * A key of `models`, or a model instance. Unknown key ⇒ `unknown_model` thrown sync. A key is
+   * snapshotted into `run.spec.model` and survives a restart; an inline instance is not
+   * serialisable and does not (§2.2).
+   */
   model?: string | LanguageModelLike
-  /** Per-run system prompt override. */
+  /** Per-run system prompt override. NOT snapshotted — a resumed attempt uses `systemPrompt`. */
   system?: string
-  /** Per-run tool subset, by name. Omit for all registered tools. */
+  /** Per-run tool subset, by name. Omit for all registered tools. Snapshotted into `run.spec`. */
   tools?: readonly TTools[number]['name'][]
+  /** Snapshotted into `run.spec`. */
   maxSteps?: number
   /** Cancels this run when aborted. */
   signal?: AbortSignal

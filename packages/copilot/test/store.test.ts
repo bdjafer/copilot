@@ -87,10 +87,11 @@ describe('§2.7 createKeyValueRunStore specifics', () => {
     expect(defineRunStore(store)).toBe(store)
   })
 
-  test('lease expiry follows the wall clock — §2.7 gives the store factories no clock seam', async () => {
-    // `CopilotOptions.now` drives heartbeats, staleness and `at`, but `createMemoryRunStore()` /
-    // `createKeyValueRunStore(kv, options)` take no clock (locked signatures, §2.7), so a host
-    // injecting a virtual clock still gets wall-clock leases. Documented, not silently assumed.
+  test('lease expiry follows the host clock — the store factories take no clock, by design', async () => {
+    // §2.7 / decision log #31: a lease coordinates PROCESSES and every one of them reads
+    // `Date.now()`. `CopilotOptions.now` drives heartbeats, staleness and `at` inside a single
+    // instance; letting it move leases would let a test clock take a lease a live offscreen
+    // document still holds. Normative, not silently assumed.
     vi.useFakeTimers()
     try {
       for (const store of [

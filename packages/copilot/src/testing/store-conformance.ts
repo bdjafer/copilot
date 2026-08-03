@@ -85,7 +85,7 @@ export function runStoreConformance(factory: () => Awaitable<RunStore>): Conform
     },
   )
 
-  add('all nine Run fields survive the round trip', async (store) => {
+  add('all ten Run fields survive the round trip (nine + the `spec` snapshot)', async (store) => {
     const run = makeRun({
       id: 'a',
       state: 'error',
@@ -96,9 +96,24 @@ export function runStoreConformance(factory: () => Awaitable<RunStore>): Conform
       heartbeat: ISO(5_000),
       createdAt: ISO(4_000),
       context: { threadId: 't1' },
+      spec: { model: 'fast', tools: ['read_thread'], maxSteps: 12 },
     })
     await store.put(run)
     assertEqual(await store.get('a'), run, 'every field must survive')
+  })
+
+  add('the `spec` snapshot survives a JSON round trip verbatim (§2.2)', async (store) => {
+    // A resume in another process resolves the run's model tier, tool subset and step cap from
+    // exactly this value: a store that drops or reshapes it silently changes what the run is.
+    await store.put(makeRun({ id: 'a', spec: { tools: [], maxSteps: 1 } }))
+    const read = await store.get('a')
+    assertEqual(read?.spec, { tools: [], maxSteps: 1 }, 'spec must survive verbatim')
+    assert(Array.isArray(read?.spec?.tools), 'an empty tool subset must stay an array, not vanish')
+  })
+
+  add('a run without a spec stays without one', async (store) => {
+    await store.put(makeRun({ id: 'a' }))
+    assert((await store.get('a'))?.spec === undefined, 'absent spec must stay absent')
   })
 
   add('context survives a JSON round trip for a nested plain object (§2.2)', async (store) => {

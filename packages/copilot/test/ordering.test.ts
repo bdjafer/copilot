@@ -122,9 +122,9 @@ describe('§3.3 event ordering', () => {
   })
 
   test('5b. one run:settled per run PER INSTANCE: an attaching instance emits its own (§2.6)', async () => {
-    // §3.3.5 says "exactly one per run, across all contexts"; §2.6 tells `attach` to emit the
-    // terminal locally, and there is no shared counter to reconcile them (§3.3.8). §2.6 wins:
-    // the guarantee is per emitting instance, and a relay dedupes on (runId, instanceId, seq).
+    // §3.3.5 / decision log #28: the guarantee is per EMITTING INSTANCE. `attach` emits the
+    // terminal it polled for (§2.6) and no shared counter exists to reconcile the two (§3.3.8),
+    // so cross-context uniqueness is the relay's dedupe duty on (runId, instanceId, seq).
     vi.useFakeTimers()
     try {
       const store = createMemoryRunStore()
@@ -352,15 +352,29 @@ describe('§3.3 event ordering', () => {
     expect(seen.length).toBe(before)
   })
 
-  test('13. cloneable payloads survive structuredClone; error payloads need toJSON()', async () => {
+  test('13. the clone-safe list is exactly run:token / run:queued / run:done / run:cancelled', async () => {
+    // Decision log #27. The four payloads a relay may post verbatim — `Run` included, `spec` and
+    // `context` included, because §2.2 makes both JSON by contract.
     const t = createTestCopilot({ script: 'hi' })
-    await t.copilot.trigger({ runId: 'r1', input: 'hi' }).result()
+    await t.copilot
+      .trigger({ runId: 'r1', input: 'hi', context: { threadId: 't1' }, maxSteps: 3 })
+      .result()
+    const cancelled = t.copilot.trigger({ runId: 'r2', input: 'bye', maxSteps: 2 })
+    await t.copilot.cancel('r2', 'not needed')
+    await cancelled.result()
+
+    const CLONE_SAFE = ['run:token', 'run:queued', 'run:done', 'run:cancelled'] as const
+    const seen = new Set<string>()
     for (const event of t.events.all()) {
-      if (event.type === 'run:token' || event.type === 'run:queued' || event.type === 'run:done') {
+      if ((CLONE_SAFE as readonly string[]).includes(event.type)) {
         expect(() => structuredClone(event.payload)).not.toThrow()
+        seen.add(event.type)
       }
     }
-    // A CopilotError loses `code` to structured clone — that is why relays project it.
+    expect([...seen].sort()).toEqual(['run:cancelled', 'run:done', 'run:queued', 'run:token'])
+    expect(structuredClone(t.events.of('run:done')[0]?.run.spec)).toEqual({ maxSteps: 3 })
+
+    // Everything else is the relay's duty: a CopilotError loses `code` to structured clone.
     const cloned = structuredClone(new Error('x')) as { code?: unknown }
     expect(cloned.code).toBeUndefined()
     const settled = t.events.of('run:settled')[0]
@@ -369,9 +383,10 @@ describe('§3.3 event ordering', () => {
   })
 
   test('13c. run:step / tool:result carry a live CopilotError: clone keeps the shape, drops `code`', async () => {
-    // §3.3.13 lists `run:step` as structured-clone-safe, but §2.8's `ToolCall` carries a live
-    // `CopilotError` on every failed call and §7.1 branches on `CopilotError.is(call.error, …)`.
-    // Both cannot hold: a relay must project these two events exactly like `run:error`.
+    // §3.3.13 / decision log #27: the clone-safe list is exactly run:token / run:queued /
+    // run:done / run:cancelled. `run:step` and `tool:*` are NOT on it, because §2.8's `ToolCall`
+    // carries a live `CopilotError` on every failed call — a relay must project them itself,
+    // exactly like `run:error`.
     const t = createTestCopilot({
       script: [{ toolCall: { name: 'boom', input: {} } }, { text: 'done' }],
       tools: [

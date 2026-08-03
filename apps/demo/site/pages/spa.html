@@ -1,0 +1,118 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>SPA route change · exp-spec demo</title>
+    <link rel="stylesheet" href="../assets/demo.css" />
+    <script src="../vendor/comment-core.iife.js"></script>
+    <script src="../vendor/comment-ui.iife.js"></script>
+  </head>
+  <body>
+    <main>
+      <h2>SPA route change</h2>
+      <div class="demo-note">
+        Threads are keyed by page, and in a client-side app the page changes without a load.
+        <ol>
+          <li>Comment on something in <em>Inbox</em>.</li>
+          <li>
+            Switch to <em>Settings</em>: <code>page:change</code> fires, the badge disappears and
+            the panel empties. Nothing was deleted — this is a different page key.
+          </li>
+          <li>Switch back. The thread returns. The browser's Back button works too.</li>
+        </ol>
+        <strong>Why this page passes <code>navigation.source</code>:</strong> comment-core
+        deliberately never patches <code>history.pushState</code> (SPEC §4.6.6) — in an extension's
+        isolated world that patch would never see the page's own calls. A host that owns its router
+        hands the engine a signal instead, which is exactly what the four lines below do. Pages that
+        cannot do that are covered by the built-in poll (<code>popstate</code>,
+        <code>hashchange</code>, and a URL check at the head of every anchoring batch).
+        <br />
+        Routes are <code>?route=…</code> query values, so <code>defaultPageKey</code> keeps them and
+        a hard reload lands on the same route.
+      </div>
+
+      <nav class="demo-controls">
+        <button type="button" data-route="home">Home</button>
+        <button type="button" data-route="inbox">Inbox</button>
+        <button type="button" data-route="settings">Settings</button>
+      </nav>
+
+      <section id="view"></section>
+    </main>
+
+    <script type="module">
+      import { bootDemo } from '../assets/demo.js'
+
+      /** The router's subscribers — the engine registers one of these on start(). */
+      const listeners = new Set()
+
+      const { log } = bootDemo({
+        title: 'SPA route change',
+        hint: 'Same document, different page key. Threads follow the route, both ways.',
+        engine: {
+          navigation: {
+            source: (notify) => {
+              listeners.add(notify)
+              return () => listeners.delete(notify)
+            },
+          },
+        },
+      })
+
+      const VIEWS = {
+        home: `
+          <h3>Home</h3>
+          <p class="card">A welcome card. Comment here, then walk the routes.</p>
+          <p class="card">A second card, so Home has two distinct targets.</p>`,
+        inbox: `
+          <h3>Inbox</h3>
+          <ul>
+            <li class="item">Re: anchoring survey — Tuesday</li>
+            <li class="item">Re: the orphan dock — Wednesday</li>
+            <li class="item">Re: page keys — Thursday</li>
+          </ul>`,
+        settings: `
+          <h3>Settings</h3>
+          <div class="card">Hotkeys: <code>C</code> to comment, <code>A</code> to ask.</div>
+          <div class="card">Store: <code>localStorage</code>, namespace <code>exp-spec-demo</code>.</div>`,
+      }
+
+      const view = document.querySelector('#view')
+
+      function routeOf(url = location.href) {
+        return new URL(url).searchParams.get('route') ?? 'home'
+      }
+
+      function render() {
+        const route = routeOf()
+        view.innerHTML = VIEWS[route] ?? VIEWS.home
+        for (const button of document.querySelectorAll('[data-route]')) {
+          button.setAttribute('aria-current', String(button.dataset.route === route))
+        }
+      }
+
+      function go(route) {
+        if (route === routeOf()) return
+        const url = new URL(location.href)
+        url.searchParams.set('route', route)
+        history.pushState({ route }, '', url)
+        render() // paint the new route BEFORE telling the engine, so it anchors against it
+        for (const notify of listeners) notify()
+        log(`router → ${route}`)
+      }
+
+      for (const button of document.querySelectorAll('[data-route]')) {
+        button.addEventListener('click', () => go(button.dataset.route))
+      }
+
+      addEventListener('popstate', () => {
+        render()
+        for (const notify of listeners) notify()
+        log(`router ← back/forward to ${routeOf()}`)
+      })
+
+      render()
+    </script>
+  </body>
+</html>

@@ -1,0 +1,116 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Popover open/close · exp-spec demo</title>
+    <link rel="stylesheet" href="../assets/demo.css" />
+    <script src="../vendor/comment-core.iife.js"></script>
+    <script src="../vendor/comment-ui.iife.js"></script>
+  </head>
+  <body>
+    <main>
+      <h2>Popover open/close — the canonical orphan case</h2>
+      <div class="demo-note">
+        This is the scenario the whole anchoring design exists for. A Radix/shadcn popover
+        <strong>unmounts its content</strong> when it closes: the element a thread points at stops
+        existing, then a structurally identical one appears somewhere else in the DOM later.
+        <ol>
+          <li>Open the popover, comment on a row inside it.</li>
+          <li>
+            Close it. <code>thread:orphaned</code> fires, the badge docks to the panel corner, and
+            <strong>nothing is written to the store</strong> — an orphan is a live derivation, not a
+            state change.
+          </li>
+          <li>Open it again. <code>thread:anchored</code> fires and the badge snaps back.</li>
+        </ol>
+        The second popover mounts into a portal at the end of <code>&lt;body&gt;</code>, so its DOM
+        path changes between opens. That is the case a CSS selector alone cannot survive.
+      </div>
+
+      <div class="demo-controls">
+        <button type="button" id="toggle-inline" aria-expanded="false">
+          Toggle inline popover
+        </button>
+        <button type="button" id="toggle-portal" aria-expanded="false">
+          Toggle portalled popover
+        </button>
+        <button type="button" id="churn">Re-render the open popover</button>
+      </div>
+
+      <div id="inline-slot"></div>
+
+      <p>
+        Everything below is ordinary page content, so you can compare an anchored thread with an
+        orphaned one side by side.
+      </p>
+      <div class="card" id="stable">A stable element. Threads here never orphan.</div>
+    </main>
+
+    <script type="module">
+      import { bootDemo } from '../assets/demo.js'
+
+      const { log } = bootDemo({
+        title: 'Popover open/close',
+        hint: 'Close the popover → the thread orphans (badge docks). Open it → it re-anchors.',
+      })
+
+      function popover(kind) {
+        const box = document.createElement('div')
+        box.className = 'popover-panel'
+        box.dataset.popover = kind
+        box.innerHTML = `
+          <strong>Filter results</strong>
+          <ul>
+            <li class="item">Only show open threads</li>
+            <li class="item">Only show threads I authored</li>
+            <li class="item">Include resolved threads</li>
+          </ul>
+          <p>Rendered fresh on every open — new nodes, same content.</p>
+        `
+        return box
+      }
+
+      function toggler(button, mount, kind) {
+        let open = null
+        button.addEventListener('click', () => {
+          if (open) {
+            open.remove()
+            open = null
+            button.setAttribute('aria-expanded', 'false')
+            log(`${kind} popover closed — content unmounted`)
+            return
+          }
+          open = mount(popover(kind))
+          button.setAttribute('aria-expanded', 'true')
+          log(`${kind} popover opened — content mounted`)
+        })
+        return {
+          rerender() {
+            if (!open) return false
+            open.remove()
+            open = mount(popover(kind))
+            return true
+          },
+        }
+      }
+
+      const slot = document.querySelector('#inline-slot')
+      const inline = toggler(
+        document.querySelector('#toggle-inline'),
+        (node) => slot.appendChild(node),
+        'inline',
+      )
+      const portal = toggler(
+        document.querySelector('#toggle-portal'),
+        (node) => document.body.appendChild(node),
+        'portal',
+      )
+
+      document.querySelector('#churn').addEventListener('click', () => {
+        const touched = [inline.rerender(), portal.rerender()].filter(Boolean).length
+        log(`re-rendered ${touched} open popover(s) — same content, brand new nodes`)
+      })
+    </script>
+  </body>
+</html>

@@ -23,9 +23,10 @@ export async function executeToolCall(
   rawInput: unknown,
   ctx: ToolContext,
 ): Promise<ToolOutcome> {
-  // §2.8 types `ToolCall.input` as the tool's validated input on BOTH branches, but a call that
-  // failed validation has none: what the model actually sent is the only useful answer. It is
-  // never left null/undefined, so §7.1's `call.input.text` reads `undefined` instead of throwing.
+  // §2.8 (normative, decision log #29): on a FAILED call, `input` is the model's raw input and
+  // may not satisfy the schema — a call that failed validation has no validated input, and what
+  // the model actually sent is the only useful answer. It is never left null/undefined, so
+  // §7.1's `call.input.text` reads `undefined` instead of throwing.
   const fail = (error: CopilotError, input: unknown = rawInput): ToolOutcome => ({
     ok: false,
     input: input ?? {},

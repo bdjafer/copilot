@@ -315,9 +315,9 @@ describe('§2.1 lazyModel', () => {
   })
 
   test('a rejecting factory surfaces as provider_error ON THAT ATTEMPT and is not memoized', async () => {
-    // §2.1 says "the factory is memoized; a rejection surfaces as `provider_error` on that
-    // attempt" — the success is memoized, the rejection is not, which is the only reading under
-    // which the phrase "on that attempt" carries weight: attempt 2 gets a fresh factory call.
+    // §2.1 / decision log #32: `lazyModel` memoizes SUCCESS only. A cached rejection would poison
+    // every run for the rest of the worker's life, and the MV3 case is precisely "the first wake
+    // preceded the API key being stored" — so attempt 2 calls the factory again.
     vi.useFakeTimers()
     try {
       let calls = 0

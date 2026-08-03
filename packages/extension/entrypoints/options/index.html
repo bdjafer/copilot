@@ -1,0 +1,215 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>exp-spec — options</title>
+    <style>
+      :root {
+        color-scheme: light dark;
+        --fg: #111827;
+        --muted: #6b7280;
+        --line: #e5e7eb;
+        --bg: #ffffff;
+        --accent: #6366f1;
+      }
+      @media (prefers-color-scheme: dark) {
+        :root {
+          --fg: #e5e7eb;
+          --muted: #9ca3af;
+          --line: #374151;
+          --bg: #111827;
+        }
+      }
+      * {
+        box-sizing: border-box;
+      }
+      body {
+        margin: 0;
+        padding: 32px 24px 64px;
+        background: var(--bg);
+        color: var(--fg);
+        font:
+          15px/1.5 ui-sans-serif,
+          system-ui,
+          -apple-system,
+          'Segoe UI',
+          sans-serif;
+      }
+      main {
+        max-width: 720px;
+        margin: 0 auto;
+      }
+      h1 {
+        font-size: 1.375rem;
+        margin: 0 0 4px;
+      }
+      p.lede {
+        margin: 0 0 28px;
+        color: var(--muted);
+      }
+      section {
+        border-top: 1px solid var(--line);
+        padding: 20px 0;
+      }
+      section > h2 {
+        font-size: 0.8125rem;
+        text-transform: uppercase;
+        letter-spacing: 0.06em;
+        color: var(--muted);
+        margin: 0 0 12px;
+      }
+      label {
+        display: block;
+        font-weight: 600;
+        margin: 0 0 4px;
+        font-size: 0.875rem;
+      }
+      .hint {
+        color: var(--muted);
+        font-size: 0.8125rem;
+        margin: 4px 0 0;
+      }
+      input[type='text'],
+      input[type='password'],
+      select,
+      textarea {
+        width: 100%;
+        padding: 8px 10px;
+        border: 1px solid var(--line);
+        border-radius: 8px;
+        background: transparent;
+        color: inherit;
+        font: inherit;
+      }
+      input[size] {
+        width: auto;
+      }
+      textarea {
+        min-height: 132px;
+        font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+        font-size: 0.8125rem;
+        resize: vertical;
+      }
+      .row {
+        display: grid;
+        gap: 16px;
+        grid-template-columns: 1fr 1fr;
+      }
+      .field + .field {
+        margin-top: 16px;
+      }
+      .kind {
+        border: 1px solid var(--line);
+        border-radius: 10px;
+        padding: 16px;
+      }
+      .kind + .kind {
+        margin-top: 16px;
+      }
+      .kind h3 {
+        margin: 0 0 12px;
+        font-size: 0.9375rem;
+      }
+      .inline {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+      }
+      .inline label {
+        margin: 0;
+        font-weight: 400;
+      }
+      footer {
+        position: sticky;
+        bottom: 0;
+        background: var(--bg);
+        border-top: 1px solid var(--line);
+        padding: 16px 0 0;
+        margin-top: 24px;
+        display: flex;
+        align-items: center;
+        gap: 12px;
+      }
+      button {
+        font: inherit;
+        font-weight: 600;
+        padding: 9px 18px;
+        border-radius: 8px;
+        border: 0;
+        background: var(--accent);
+        color: #fff;
+        cursor: pointer;
+      }
+      button.secondary {
+        background: transparent;
+        color: var(--muted);
+        border: 1px solid var(--line);
+      }
+      #status {
+        color: var(--muted);
+        font-size: 0.875rem;
+      }
+      #status[data-tone='ok'] {
+        color: #059669;
+      }
+      #status[data-tone='warn'] {
+        color: #d97706;
+      }
+    </style>
+  </head>
+  <body>
+    <main>
+      <h1>exp-spec copilot</h1>
+      <p class="lede">
+        Anchored comment threads plus a browser copilot. Everything below is stored in
+        <code>chrome.storage.local</code>.
+      </p>
+
+      <section>
+        <h2>Provider</h2>
+        <div class="field">
+          <label for="apiKey">Anthropic API key</label>
+          <input
+            id="apiKey"
+            type="password"
+            autocomplete="off"
+            spellcheck="false"
+            placeholder="sk-ant-…"
+          />
+          <p class="hint">
+            Never bundled — a CRX is unzippable. Requests go straight from the service worker to
+            <code>api.anthropic.com</code>.
+          </p>
+        </div>
+        <div class="row field">
+          <div>
+            <label for="model">Default model</label>
+            <select id="model"></select>
+          </div>
+          <div>
+            <label for="fastModel">Fast tier</label>
+            <select id="fastModel"></select>
+            <p class="hint"><code>ask</code> runs on this tier.</p>
+          </div>
+        </div>
+        <div class="field inline">
+          <input id="enabled" type="checkbox" />
+          <label for="enabled">Run the copilot on new comments</label>
+        </div>
+      </section>
+
+      <section>
+        <h2>Modes</h2>
+        <div id="kinds"></div>
+      </section>
+
+      <footer>
+        <button id="save" type="button">Save</button>
+        <button id="reset" class="secondary" type="button">Restore defaults</button>
+        <span id="status" role="status" aria-live="polite"></span>
+      </footer>
+    </main>
+    <script type="module" src="./main.ts"></script>
+  </body>
+</html>

@@ -10,6 +10,7 @@ import type {
   Run,
   RunHandle,
   RunResult,
+  RunSpec,
   RunState,
   ToolDefinition,
   TriggerInput,
@@ -35,18 +36,21 @@ import { createWritable } from './readable.ts'
 import { createRunHandle } from './run/handle.ts'
 import { createTicker } from './run/heartbeat.ts'
 import { createQueue } from './run/queue.ts'
-import { createRunRecord, isStale, isTerminal, patchRun } from './run/record.ts'
+import { createRunRecord, isStale, isTerminal, patchRun, snapshotSpec } from './run/record.ts'
 import { createMemoryRunStore } from './store/memory.ts'
 import { createToolRegistry } from './tools/registry.ts'
 
 export const VERSION = '0.0.0'
 
+/** The resolved, in-process form of a run's spec: what an attempt actually runs with. */
 interface TriggerSpec {
   model: LanguageModelLike
   modelName: string
   tools: readonly ToolDefinition[]
   maxSteps: number
   system: string | undefined
+  /** §2.2 — the durable projection of this spec, or undefined when nothing was overridden. */
+  durable: RunSpec | undefined
 }
 
 interface Slot<TContext> extends RunSlot<TContext> {
@@ -474,7 +478,66 @@ export function createCopilot<
     tools: registry.subset(undefined),
     maxSteps,
     system: undefined,
+    durable: undefined,
   })
+
+  /**
+   * §2.2 — the replay path. An attempt started for a run this instance did not trigger resolves
+   * its model, tool subset and step cap from the record's own snapshot, so a restart in a FRESH
+   * process is a replay of the SAME run rather than a different run wearing the same `runId`.
+   *
+   * Neither half is fatal when it cannot be resolved: the reviving process may register different
+   * model tiers or a different tool set, and `resumePending()` must not throw `unknown_model` /
+   * `unknown_tool` at a host that is only trying to finish yesterday's work. Both degradations are
+   * reported as `error` events instead — invisible degradation is the failure mode this whole
+   * field exists to prevent.
+   */
+  const specFromRecord = (record: Run<TContext>): TriggerSpec | null => {
+    const snapshot = record.spec
+    if (snapshot === undefined) return null
+    const resolved = defaultSpec()
+    resolved.durable = snapshot
+
+    if (snapshot.model !== undefined) {
+      const named = options.models?.[snapshot.model]
+      if (named === undefined) {
+        emitError(
+          new CopilotError(
+            'unknown_model',
+            `run spec names an unregistered model: ${snapshot.model} — replaying on the default provider`,
+            { runId: record.id },
+          ),
+          'provider',
+          record.id,
+        )
+      } else {
+        resolved.model = named
+        resolved.modelName = snapshot.model
+      }
+    }
+
+    if (snapshot.tools !== undefined) {
+      const known: string[] = []
+      for (const name of snapshot.tools) {
+        if (registry.has(name)) known.push(name)
+        else {
+          emitError(
+            new CopilotError(
+              'unknown_tool',
+              `run spec names an unregistered tool: ${name} — replaying without it`,
+              { runId: record.id, toolName: name },
+            ),
+            'tool',
+            record.id,
+          )
+        }
+      }
+      resolved.tools = registry.subset(known)
+    }
+
+    if (snapshot.maxSteps !== undefined) resolved.maxSteps = snapshot.maxSteps
+    return resolved
+  }
 
   const failWithStoreError = (slot: Slot<TContext>, error: unknown) => {
     const failure = wrapStoreError(error, slot.id)
@@ -578,7 +641,9 @@ export function createCopilot<
     publish(slot, record)
     if (attempt > 1) slot.restarted = true
 
-    const spec = slot.spec ?? defaultSpec()
+    // The trigger's own spec when this instance issued it; the record's snapshot when it did not
+    // (§2.2 replay semantics); this instance's defaults when there is neither.
+    const spec = slot.spec ?? specFromRecord(fresh) ?? defaultSpec()
     emit('run:start', slot.id, {
       runId: slot.id,
       run: record,
@@ -791,6 +856,8 @@ export function createCopilot<
         id: slot.id,
         input: input.input,
         ...(input.context === undefined ? {} : { context: input.context }),
+        // §2.2: the overrides are part of the run, written with it, once.
+        ...(slot.spec?.durable === undefined ? {} : { spec: slot.spec.durable }),
         now: now(),
       })
       // Durable-first: the state transition is written before its event is emitted (§3.3.1).
@@ -810,6 +877,8 @@ export function createCopilot<
   const resolveSpec = (input: TriggerInput<TTools, TContext>): TriggerSpec => {
     let model: LanguageModelLike = options.provider
     let modelName = 'default'
+    /** Only a `models` KEY is durable: an instance cannot be written to a store (§2.2). */
+    let durableModel: string | undefined
     if (typeof input.model === 'string') {
       const named = options.models?.[input.model]
       if (named === undefined) {
@@ -817,6 +886,7 @@ export function createCopilot<
       }
       model = named
       modelName = input.model
+      durableModel = input.model
     } else if (input.model !== undefined) {
       model = input.model
       modelName = modelIdOf(input.model) ?? 'custom'
@@ -827,6 +897,11 @@ export function createCopilot<
       tools: registry.subset(input.tools),
       maxSteps: input.maxSteps ?? maxSteps,
       system: input.system,
+      durable: snapshotSpec({
+        ...(durableModel === undefined ? {} : { model: durableModel }),
+        ...(input.tools === undefined ? {} : { tools: input.tools }),
+        ...(input.maxSteps === undefined ? {} : { maxSteps: input.maxSteps }),
+      }),
     }
   }
 

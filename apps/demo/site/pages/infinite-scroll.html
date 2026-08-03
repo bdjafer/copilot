@@ -1,0 +1,118 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Infinite scroll · exp-spec demo</title>
+    <link rel="stylesheet" href="../assets/demo.css" />
+    <script src="../vendor/comment-core.iife.js"></script>
+    <script src="../vendor/comment-ui.iife.js"></script>
+  </head>
+  <body>
+    <main>
+      <h2>Infinite scroll</h2>
+      <div class="demo-note">
+        Two separate things are being tested here.
+        <ul>
+          <li>
+            <strong>Off-screen badges.</strong> comment-ui watches each anchor with an
+            <code>IntersectionObserver</code> and hides the badge when its element leaves the
+            viewport (<code>badge.hideOffscreen</code>, on by default). The panel still lists the
+            thread, so nothing is lost.
+          </li>
+          <li>
+            <strong>Late-arriving nodes.</strong> Comment on a post, scroll down until it is
+            recycled away, then press <em>Trim to the last 10</em> — the thread orphans. Press
+            <em>Restore</em> and it re-anchors when its element comes back.
+          </li>
+        </ul>
+        The engine never scans on scroll: it batches <code>MutationObserver</code> records, so
+        appending a hundred posts costs one anchoring pass, not a hundred.
+      </div>
+
+      <div class="demo-controls">
+        <button type="button" id="more">Load 10 more</button>
+        <button type="button" id="trim">Trim to the last 10</button>
+        <button type="button" id="restore">Restore every post</button>
+        <label><input type="checkbox" id="auto" checked /> auto-load on scroll</label>
+      </div>
+
+      <div id="feed"></div>
+      <div id="sentinel" style="height: 2rem"></div>
+    </main>
+
+    <script type="module">
+      import { bootDemo } from '../assets/demo.js'
+
+      const { log } = bootDemo({
+        title: 'Infinite scroll',
+        hint: 'Badges hide off-screen and come back. Threads survive posts being trimmed away.',
+      })
+
+      const feed = document.querySelector('#feed')
+      const auto = document.querySelector('#auto')
+      let next = 1
+      /** Everything ever rendered, so "Restore" can rebuild the exact same content. */
+      const all = []
+
+      // Every card has the same shape, so the ONLY thing telling two posts apart is what they
+      // say. Shared boilerplate would defeat that: the score gives text 0.12 against 0.22 for
+      // classes and 0.16 for structure, so two rows reading "Item N of an endless feed" are the
+      // same row as far as the anchor is concerned. Real feeds do not read like that, and
+      // neither does this one.
+      const BODIES = [
+        'Sourdough starter died over the holidays. Anyone still keeping one alive on rye?',
+        'Found a heron standing in the canal at dawn, completely still, for eleven minutes.',
+        'The 1974 pressing has a wider stereo image than every reissue since. Fight me.',
+        'Tomatoes went in three weeks late and they are still outrunning the courgettes.',
+        'Nobody warned me that a cast-iron pan seasons better with flaxseed than with olive oil.',
+        'Rebuilt the bicycle wheel by hand. Thirty-two spokes, two evenings, one bruised thumb.',
+        'The tide tables are wrong on the north side of the island by roughly twenty minutes.',
+        'Halfway through translating a cookbook that nobody has printed since the fifties.',
+        'Bats came back to the barn this year. Counted nine leaving at sunset, maybe more.',
+        'A hardware shop that still sells single screws is worth a forty-minute detour.',
+        'Learned that "aglet" is the word for the plastic tip of a shoelace. Changed nothing.',
+        'Recorded the fog horn last night. It is a minor third, which explains the dread.',
+      ]
+
+      function post(n) {
+        return { n, title: `Post #${n}`, body: `${BODIES[n % BODIES.length]} (post ${n})` }
+      }
+
+      function render(items) {
+        feed.replaceChildren(
+          ...items.map((item) => {
+            const card = document.createElement('article')
+            card.className = 'card'
+            card.innerHTML = '<h3></h3><p></p>'
+            card.querySelector('h3').textContent = item.title
+            card.querySelector('p').textContent = item.body
+            return card
+          }),
+        )
+      }
+
+      function load(count = 10) {
+        for (let i = 0; i < count; i += 1) all.push(post(next++))
+        render(all)
+        log(`feed now holds ${all.length} posts`)
+      }
+
+      load(12)
+
+      document.querySelector('#more').addEventListener('click', () => load())
+      document.querySelector('#trim').addEventListener('click', () => {
+        render(all.slice(-10))
+        log('trimmed to the last 10 — older threads should orphan')
+      })
+      document.querySelector('#restore').addEventListener('click', () => {
+        render(all)
+        log('restored every post — orphans should re-anchor')
+      })
+
+      new IntersectionObserver((entries) => {
+        if (entries.some((entry) => entry.isIntersecting) && auto.checked) load()
+      }).observe(document.querySelector('#sentinel'))
+    </script>
+  </body>
+</html>
