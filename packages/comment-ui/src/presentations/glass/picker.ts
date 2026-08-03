@@ -24,9 +24,11 @@
  */
 
 import type { PickerVM } from '../../presentation.ts'
+import type { HueOf } from './kind.ts'
 
 import { el, setAttr, setText } from '../../dom.ts'
 import { icon, kindIcon, setIcon } from './icons.ts'
+import { applyHue } from './kind.ts'
 
 /** §7 row 19: the first pick session of a mount explains itself, for this long, once. */
 const INTRO_MS = 2500
@@ -36,7 +38,7 @@ const DWELL_MS = 700
 const BAD_TARGET_RATIO = 0.72
 
 export interface Picker {
-  render(picker: PickerVM | null): void
+  render(picker: PickerVM | null, hueOf: HueOf): void
   destroy(): void
 }
 
@@ -123,7 +125,7 @@ export function createPicker(doc: Document, win: Window, layer: HTMLElement): Pi
   }
 
   return {
-    render(picker) {
+    render(picker, hueOf) {
       if (!picker) {
         leave()
         return
@@ -133,6 +135,10 @@ export function createPicker(doc: Document, win: Window, layer: HTMLElement): Pi
       setIcon(cursorGlyph, kindIcon(picker.kind))
       setAttr(ring, 'data-kind', picker.kind)
       setAttr(cursor, 'data-kind', picker.kind)
+      // §2.3: the ring and the cursor disc are the two surfaces that answer "which mode am I in"
+      // before anything has been placed, so they are the two that must not be the same blue.
+      applyHue(ring, hueOf, picker.kind)
+      applyHue(cursor, hueOf, picker.kind)
 
       const rect = picker.rect
       if (!rect) {
@@ -163,7 +169,11 @@ export function createPicker(doc: Document, win: Window, layer: HTMLElement): Pi
       // Wordlessly: "probably not what you want".
       setAttr(ring, 'data-bad', covers > BAD_TARGET_RATIO ? 'true' : null)
 
-      hint.style.translate = `${String(left)}px ${String(Math.max(0, top - 30))}px`
+      // The hint has a **fixed home** (bottom centre, in the sheet) and is not moved per
+      // candidate. Riding the candidate put it over the line above the target — the one line the
+      // eye is using to decide — and left it at `translate 0 0`, clipped under the host's own
+      // toolbar, whenever the session was opened from the keyboard with the pointer at rest.
+      // §7 row 19 rations it and gives it a rise; it never said where it lives.
       setAttr(scrim, 'hidden', false)
       setAttr(ring, 'hidden', false)
 

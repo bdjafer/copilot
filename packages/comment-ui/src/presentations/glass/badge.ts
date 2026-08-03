@@ -20,11 +20,13 @@
  */
 
 import type { BadgeVM, Intents, PresentationHost, Rect } from '../../presentation.ts'
+import type { HueOf } from './kind.ts'
 
 import { el, setAttr, setText } from '../../dom.ts'
 import { createChip, createChipSlot, type ChipSlot } from './chip.ts'
 import { renderMarks } from './chip.ts'
 import { icon, kindIcon, setIcon } from './icons.ts'
+import { applyHue } from './kind.ts'
 import { bloom, flight, roll } from './motion.ts'
 
 /** §8.1: badges whose anchors land within this many px of each other fan instead of overlapping. */
@@ -46,7 +48,7 @@ interface Entry {
 }
 
 export interface BadgeLayer {
-  render(badges: readonly BadgeVM[], reduced: boolean): void
+  render(badges: readonly BadgeVM[], hueOf: HueOf, reduced: boolean): void
   /** The nodes S1 should watch, with their reveal radius. */
   proximity(): { node: HTMLElement; radius: number }[]
   elementFor(threadId: string): HTMLElement | null
@@ -104,7 +106,7 @@ export function createBadgeLayer(host: PresentationHost, intents: Intents): Badg
     return entry
   }
 
-  function update(entry: Entry, badge: BadgeVM, reduced: boolean): void {
+  function update(entry: Entry, badge: BadgeVM, hueOf: HueOf, reduced: boolean): void {
     entry.open = badge.open
     if (badge.icon === null) {
       setIcon(entry.glyph, kindIcon(badge.kind))
@@ -128,8 +130,15 @@ export function createBadgeLayer(host: PresentationHost, intents: Intents): Badg
       badge.orphaned ? 'orphaned' : badge.resolved ? 'resolved' : 'open',
     )
     setAttr(entry.button, 'data-kind', badge.kind)
+    // §2.3: the mode's hue offset, by its index in `engine.modes`. `ask` must not be `comment`
+    // in a different glyph — a mode is a different *thing*, and the fill says so before the
+    // glyph is legible.
+    applyHue(entry.button, hueOf, badge.kind)
     setAttr(entry.button, 'data-approximate', badge.approximate ? 'true' : null)
     setAttr(entry.button, 'data-tone', badge.tone)
+    // §7 row 1b: a docked badge is held revealed. An orphan has no anchor for the cursor to be
+    // *near*, so proximity can never reveal it, and a 12 px dot for a thread whose element is
+    // gone is the one resting mark nobody can summon.
     setAttr(entry.button, 'data-docked', badge.docked ? 'true' : null)
     // §8.1: `transform-origin` follows the positioner's resolved placement, so the pill grows
     // *out of its anchor* rather than out of itself, and never over the element it annotates.
@@ -181,7 +190,7 @@ export function createBadgeLayer(host: PresentationHost, intents: Intents): Badg
   }
 
   return {
-    render(badges, reduced) {
+    render(badges, hueOf, reduced) {
       const wanted = new Set<string>()
       const now = Date.now()
       if (badges.length > 0 && !hadBadges) revealUntil = now + PAGE_REVEAL_MS
@@ -195,7 +204,7 @@ export function createBadgeLayer(host: PresentationHost, intents: Intents): Badg
           entry = create(badge)
           entries.set(badge.threadId, entry)
         }
-        update(entry, badge, reduced)
+        update(entry, badge, hueOf, reduced)
         // A first sighting after the page already had badges is a creation. A first sighting of
         // the whole set is a load, and a re-show after the off-screen skip is neither.
         if (fresh && !seen.has(badge.threadId) && seen.size > 0) bloom(entry.button, reduced)

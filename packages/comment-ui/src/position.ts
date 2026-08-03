@@ -23,9 +23,47 @@
  */
 
 import type { DocumentRect } from '@astrale-os/comment-core'
-import type { Placement, ReferenceElement } from '@floating-ui/dom'
+import type { Middleware, Placement, ReferenceElement } from '@floating-ui/dom'
 
 import { autoUpdate, computePosition, flip, offset, shift } from '@floating-ui/dom'
+
+/** A rect a surface must not land on. Structurally a `DOMRect`'s read half. */
+export interface Obstacle {
+  readonly left: number
+  readonly top: number
+  readonly right: number
+  readonly bottom: number
+}
+
+/**
+ * DESIGN §8.7: **the panel owns its rect.** A badge that resolves underneath the sheet is a badge
+ * nobody can click, and floating-ui has no concept of an obstacle that is not an ancestor — so
+ * this is the one custom middleware in the package. It nudges along the anchor edge (x, the axis
+ * a badge is already free on) to whichever side has room, and does nothing at all when neither
+ * side does: a badge shifted somewhere arbitrary is worse than a badge behind a sheet the user
+ * can close. It runs last, so `flip`/`shift` have already had their say.
+ */
+export function avoidRect(get: () => Obstacle | null, padding: number): Middleware {
+  return {
+    name: 'cc-avoid',
+    fn({ x, y, rects, elements }) {
+      const box = get()
+      if (!box) return {}
+      const { width, height } = rects.floating
+      if (x >= box.right || x + width <= box.left || y >= box.bottom || y + height <= box.top) {
+        return {}
+      }
+      const gap = 6
+      const left = box.left - width - gap
+      if (left >= padding) return { x: left }
+      const right = box.right + gap
+      const limit = elements.floating.ownerDocument.defaultView?.innerWidth ?? 0
+      // Neither side has room: leave it where it was. A badge shoved somewhere arbitrary is
+      // worse than one behind a sheet the user can close in a keystroke.
+      return right + width + padding <= limit ? { x: right } : {}
+    },
+  }
+}
 
 export interface Tracker {
   /** Force a reposition (used when the reference's rect is known to have changed). */
@@ -41,6 +79,8 @@ export interface TrackOptions {
   onError?: (error: unknown) => void
   /** Fired after every successful pass, with floating-ui's *resolved* placement. */
   onPlaced?: (placement: string) => void
+  /** DESIGN §8.7: a rect this surface must not land on, re-read every pass. */
+  avoid?: () => Obstacle | null
 }
 
 export function track(
@@ -50,6 +90,7 @@ export function track(
 ): Tracker {
   const [crossAxis, mainAxis] = options.offset ?? [0, 6]
   const padding = options.padding ?? 8
+  const avoid = options.avoid
   let stopped = false
 
   const update = (): void => {
@@ -57,7 +98,15 @@ export function track(
     computePosition(reference, floating, {
       strategy: 'fixed',
       placement: options.placement ?? 'top-end',
-      middleware: [offset({ mainAxis, crossAxis }), flip({ padding }), shift({ padding })],
+      middleware: [
+        offset({ mainAxis, crossAxis }),
+        flip({ padding }),
+        // §8.7 / DESIGN amendment A3: `crossAxis` is what keeps a badge whose anchor sits at the
+        // very top of the document *inside the viewport* — without it, a `top-end` badge that
+        // cannot flip resolves at a negative y and paints a clipped half-dot over the page.
+        shift({ padding, crossAxis: true }),
+        ...(avoid ? [avoidRect(avoid, padding)] : []),
+      ],
     })
       .then((result) => {
         if (stopped) return
@@ -178,6 +227,8 @@ export interface SurfaceRef {
   offset: readonly [number, number]
   /** False while the surface is deliberately un-tracked (an off-screen, un-pinned badge). */
   active: boolean
+  /** DESIGN §8.7: a rect this surface must not land on, re-read every positioning pass. */
+  avoid?: () => Obstacle | null
 }
 
 interface Surface {
@@ -187,6 +238,7 @@ interface Surface {
   placement: Placement
   offset: readonly [number, number]
   active: boolean
+  avoid: (() => Obstacle | null) | undefined
   tracker: Tracker | null
   resolved: string | null
 }
@@ -224,6 +276,9 @@ export function createPositioner(options: { onError: (error: unknown) => void })
     surface.tracker = track(surface.reference, surface.node, {
       placement: surface.placement,
       offset: surface.offset,
+      // A getter, not a rect: the obstacle moves (rail mode, hover peek, a corner change) and
+      // the tracker outlives every one of those without a rebuild.
+      avoid: surface.avoid,
       onError: options.onError,
       onPlaced: (placement) => {
         surface.resolved = placement
@@ -241,6 +296,7 @@ export function createPositioner(options: { onError: (error: unknown) => void })
         placement: 'top-end',
         offset: [0, 6],
         active: false,
+        avoid: undefined,
         tracker: null,
         resolved: null,
       }
@@ -287,6 +343,7 @@ export function createPositioner(options: { onError: (error: unknown) => void })
         surface.placement = ref.placement
         surface.offset = ref.offset
         surface.active = ref.active
+        surface.avoid = ref.avoid
         if (ref.active) start(surface)
         else stop(surface)
       }

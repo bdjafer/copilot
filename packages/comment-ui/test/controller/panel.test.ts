@@ -156,8 +156,68 @@ describe('section assignment is total and exclusive', () => {
   })
 })
 
+/**
+ * §8.5: the panel follows its own data. `slots.section` used to move on an explicit click and on
+ * nothing else, so resolving the thread you were reading left the panel sitting on an empty
+ * "Open" list while the count it was watching moved one segment to the right — and orphaning it
+ * left the page blank AND the panel on `Open 0`.
+ */
+describe('the selected section follows the active thread', () => {
+  test('resolving the open thread selects Resolved; reopening it comes back', async () => {
+    const s = await boot({ ui: { panel: { defaultOpen: true } } })
+    const id = await s.seed('#a')
+    s.intents.openThread(id)
+    await s.settle()
+    expect(s.vm().panel?.sections.find((section) => section.current)?.id).toBe('open')
+
+    await s.engine.resolve(id)
+    await s.settle()
+    expect(s.vm().panel?.sections.find((section) => section.current)?.id).toBe('resolved')
+
+    await s.engine.reopen(id)
+    await s.settle()
+    expect(s.vm().panel?.sections.find((section) => section.current)?.id).toBe('open')
+  })
+
+  test('orphaning the open thread selects Unanchored', async () => {
+    const s = await boot({ ui: { panel: { defaultOpen: true } } })
+    const id = await s.seed('#a')
+    s.intents.openThread(id)
+    await s.settle()
+    await s.page.mutate((doc) => {
+      doc.querySelector('#a')?.remove()
+    })
+    await s.settle()
+    expect(s.vm().panel?.sections.find((section) => section.current)?.id).toBe('unanchored')
+  })
+
+  test('a transition of a thread nobody opened leaves the selection alone', async () => {
+    const s = await boot({ ui: { panel: { defaultOpen: true } } })
+    const open = await s.seed('#a')
+    const other = await s.seed('#b')
+    s.intents.openThread(open)
+    await s.settle()
+
+    // The panel follows the thread the user is acting *on*. A background resolve — a copilot, a
+    // second tab, a bulk action — must not yank the list out from under them.
+    await s.engine.resolve(other)
+    await s.settle()
+    expect(s.vm().panel?.sections.find((section) => section.current)?.id).toBe('open')
+  })
+
+  test('an explicit selection still wins, because nothing fires without a transition', async () => {
+    const s = await boot({ ui: { panel: { defaultOpen: true } } })
+    const id = await s.seed('#a')
+    s.intents.openThread(id)
+    await s.settle()
+    s.intents.selectSection('unanchored')
+    await s.settle()
+    expect(s.vm().panel?.sections.find((section) => section.current)?.id).toBe('unanchored')
+  })
+})
+
 describe('rows', () => {
-  test('a row carries the mode, the count, the latest body and the capture title', async () => {
+  test('a row carries the mode, the count, the OPENING body and the capture title', async () => {
     const s = await boot({ ui: { panel: { defaultOpen: true } } })
     const id = await s.seed('#a', 'the first thing')
     await s.engine.appendComment(id, { author: 'copilot', body: 'the latest thing' })
@@ -169,7 +229,10 @@ describe('rows', () => {
       kind: 'comment',
       label: 'comment',
       ariaLabel: 'comment (2)',
-      body: 'the latest thing',
+      // The row is how a thread is RECOGNISED, and the newest comment is usually a reply: with a
+      // copilot answering every thread, every row on the page read "echo: …" and the panel
+      // identified nothing at all. The count is what says there is more.
+      body: 'the first thing',
       count: 2,
       anchor: 'anchored',
       status: 'open',

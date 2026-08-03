@@ -24,7 +24,7 @@ import type { DomScene } from './support.ts'
 
 import { glassPresentation, glassStyles } from '../src/glass.ts'
 import { BUSY_QUIET_MS, rungOf } from '../src/presentations/glass/chip.ts'
-import { ICON_IDS } from '../src/presentations/glass/icons.ts'
+import { ICON_IDS, ICONS } from '../src/presentations/glass/icons.ts'
 import { createPolarityWatcher, lightnessOf } from '../src/presentations/glass/intent.ts'
 import { $, $$, click, domScene, press, tick, type } from './support.ts'
 
@@ -202,12 +202,21 @@ describe('§7 — nothing exists until intent is expressed', () => {
       'resolved',
       'unanchored',
     ])
-    // Words leave the screen and stay in the accessibility tree, exactly as §10 requires.
+    // Words leave the screen and stay in the accessibility tree, exactly as §10 requires — with
+    // amendment A1's single exception, the *selected* segment, which draws its own word.
     for (const segment of segments) {
-      expect(segment.textContent?.replace(/[\d\s]/g, '')).toBe('')
       expect(segment.getAttribute('aria-label')).toBeTruthy()
       expect(segment.getAttribute('title')).toBe(segment.getAttribute('aria-label'))
+      const label = $(segment, '.cc-segment-label')
+      expect(label?.getAttribute('aria-hidden')).toBe('true')
+      // Written on every segment, *drawn* on one: which one is a CSS state, so switching
+      // sections costs no DOM write and the accessible name never depends on the selection.
+      expect(label?.textContent).toBe(segment.getAttribute('aria-label'))
     }
+    expect(glassStyles).toContain('.cc-segment-label { display: none;')
+    expect(glassStyles).toContain(
+      ".cc-segment[aria-pressed='true'] .cc-segment-label { display: inline; }",
+    )
     expect(segments[0].getAttribute('aria-pressed')).toBe('true')
     expect($(segments[0], '.cc-segment-count')?.getAttribute('data-value')).toBe('1')
 
@@ -350,6 +359,258 @@ describe('§7 — nothing exists until intent is expressed', () => {
   })
 })
 
+/* ------------------------------------------------------ the first-touch pass (amendments A1–A4) */
+
+/**
+ * What a browser said and this environment could not. Every case below is a finding from a
+ * real-Chromium walk of the demo, and each one was green in happy-dom while being wrong on
+ * screen — which is exactly why the assertions here reach for the emitted **sheet** as often as
+ * for the DOM: there is no cascade, no top layer and no UA stylesheet in this runtime, so a rule
+ * that exists is the strongest statement this suite can make about a rule that renders.
+ */
+describe('§3.3 / A4 — the UA popover border, and the states the sheet forgot to draw', () => {
+  test('every top-layer surface resets `border`, because the UA gives it a 3 px frame', async () => {
+    const s = await boot()
+    // The UA sheet styles EVERY `[popover]` with `border: solid` — a 3 px currentColor rectangle,
+    // near-black on light and white on dark, drawn outside our own keyline. happy-dom ships no UA
+    // stylesheet, so 256 green tests said nothing at all about it. §3.3 also bans borders on our
+    // own surfaces: hairlines are box-shadow spreads, always.
+    expect(glassStyles).toContain(
+      '.cc-float { position: fixed; top: 0; left: 0; margin: 0; border: 0; }',
+    )
+    expect(glassStyles).toContain('.cc-composer, .cc-thread { display: none; border: 0; }')
+    for (const node of [$(s.root, '.cc-composer'), $(s.root, '.cc-thread')]) {
+      expect(node?.classList.contains('cc-float')).toBe(true)
+    }
+  })
+
+  test('a resolved thread draws a silhouette and mutes, rather than swapping one colour', async () => {
+    const s = await boot()
+    const id = await s.seed('#a')
+    s.ui.focus(id)
+    await s.settle()
+    await s.engine.resolve(id)
+    await s.settle()
+    const popover = $(s.root, '.cc-thread')!
+    expect(popover.getAttribute('data-resolved')).toBe('true')
+    // The check is a drawn 10 px glyph beside the head — §1.3's guarantee is made of shapes.
+    expect($(popover, '.cc-mark')?.getAttribute('data-mark')).toBe('resolved')
+    expect(glassStyles).toContain(".cc-thread[data-resolved='true'] .cc-head-icon")
+    expect(glassStyles).toContain(
+      ".cc-thread[data-resolved='true'] .cc-body,\n.cc-thread[data-resolved='true'] .cc-quote { color: var(--_muted); }",
+    )
+  })
+
+  test('delete arms on the first click and fires on the second (§6.4 `arm`)', async () => {
+    const s = await boot()
+    const id = await s.seed('#a')
+    s.ui.focus(id)
+    await s.settle()
+    const remove = $(s.root, '.cc-thread [data-action="delete"]')!
+
+    click(remove)
+    await s.settle()
+    // Nothing was deleted, and the control says so with a tint AND a ring — 26 px, unlabelled,
+    // adjacent to Resolve, is not a control that may destroy a thread on one click.
+    expect(remove.getAttribute('data-confirm')).toBe('true')
+    expect(s.engine.listThreads()).toHaveLength(1)
+    // The name is unchanged: no eighteenth `Labels` key, no second string, no dialog.
+    expect(remove.getAttribute('aria-label')).toBe('Delete')
+
+    click(remove)
+    await s.settle()
+    expect(s.engine.listThreads()).toHaveLength(0)
+    expect(remove.hasAttribute('data-confirm')).toBe(false)
+  })
+
+  test('…and anything else disarms it: another click in the sheet, or `Esc`', async () => {
+    const s = await boot()
+    const id = await s.seed('#a')
+    s.ui.focus(id)
+    await s.settle()
+    const remove = $(s.root, '.cc-thread [data-action="delete"]')!
+
+    click(remove)
+    expect(remove.getAttribute('data-confirm')).toBe('true')
+    click($(s.root, '.cc-thread [data-action="reply"]'))
+    expect(remove.hasAttribute('data-confirm')).toBe(false)
+    expect(s.engine.listThreads()).toHaveLength(1)
+
+    click(remove)
+    expect(remove.getAttribute('data-confirm')).toBe('true')
+    press($(s.root, '.cc-thread'), 'Escape')
+    expect(remove.hasAttribute('data-confirm')).toBe(false)
+    expect(s.engine.listThreads()).toHaveLength(1)
+  })
+
+  test('the panel row that deletes an invisible thread arms too', async () => {
+    const s = await boot()
+    const id = await s.seed('#a')
+    await s.page.mutate((doc) => {
+      doc.querySelector('#a')?.remove()
+    })
+    await s.settle()
+    s.ui.panel.open('unanchored')
+    await tick()
+    const remove = $(s.root, `.cc-row[data-thread="${id}"] [data-action="delete"]`)!
+
+    click(remove)
+    await s.settle()
+    expect(remove.getAttribute('data-confirm')).toBe('true')
+    expect(s.engine.listThreads()).toHaveLength(1)
+    click(remove)
+    await s.settle()
+    expect(s.engine.listThreads()).toHaveLength(0)
+  })
+
+  test('row 1b: a docked orphan is drawn, held revealed, and never `hidden`', async () => {
+    const s = await boot()
+    const id = await s.seed('#a')
+    await s.page.mutate((doc) => {
+      doc.querySelector('#a')?.remove()
+    })
+    await s.settle()
+
+    const badge = $(s.root, `.cc-badge[data-thread="${id}"]`)!
+    expect(badge.getAttribute('data-docked')).toBe('true')
+    // The off-screen skip is about elements scrolling away. A dock has no element, so nothing can
+    // ever report it back on screen — and a `hidden` badge is the only mark an orphaned thread
+    // has on the page.
+    expect(badge.hasAttribute('hidden')).toBe(false)
+    // …and the sheet actually draws the state the attribute names.
+    expect(glassStyles).toContain(".cc-badge[data-docked='true']::after { opacity: 1; scale: 1; }")
+    expect(glassStyles).toContain('border: 1.5px dashed var(--_muted);')
+  })
+
+  test('the scroll mask is only drawn when there is something to scroll to', async () => {
+    const s = await boot()
+    const id = await s.seed('#a')
+    s.ui.focus(id)
+    await s.settle()
+    const list = $(s.root, '.cc-comments')!
+    // A popover that has not been laid out reports `clientHeight: 0`, and every list looks
+    // overflowing at zero height — which is how the mask came to fade out the tail of the newest
+    // comment with nothing scrollable underneath it.
+    Object.defineProperty(list, 'scrollHeight', { value: 300, configurable: true })
+    Object.defineProperty(list, 'clientHeight', { value: 0, configurable: true })
+    list.dispatchEvent(new (s.doc.defaultView as Window & typeof globalThis).Event('scroll'))
+    expect(list.hasAttribute('data-scroll-bottom')).toBe(false)
+
+    Object.defineProperty(list, 'clientHeight', { value: 120, configurable: true })
+    list.dispatchEvent(new (s.doc.defaultView as Window & typeof globalThis).Event('scroll'))
+    expect(list.getAttribute('data-scroll-bottom')).toBe('true')
+
+    // …and it is asked again when the entrance ends. `cc-stagger` translates each comment 4 px on
+    // the way in, and **a translated child counts toward its scroll container's overflow** — so a
+    // list that fits exactly reports 4 px of scrollable height for the length of the animation,
+    // turns the mask on, and then never resizes again to turn it off. Found in a browser, on a
+    // two-comment thread whose last line was faded to grey with nothing to scroll to.
+    Object.defineProperty(list, 'scrollHeight', { value: 120, configurable: true })
+    list.dispatchEvent(new (s.doc.defaultView as Window & typeof globalThis).Event('animationend'))
+    expect(list.hasAttribute('data-scroll-bottom')).toBe(false)
+  })
+
+  test('the pick hint has one fixed home for the session, and is never moved per candidate', async () => {
+    const s = await boot()
+    s.engine.startPlacement('comment')
+    await s.settle()
+    const hint = $(s.root, '.cc-pick-hint')!
+    // §7 row 19 rations the hint and gives it a rise; it never said where it lives. Riding the
+    // candidate covered the line above the target, and a keyboard-opened session with the pointer
+    // at rest left it at 0,0 under the host's own chrome.
+    expect(hint.getAttribute('style') ?? '').not.toContain('translate')
+    expect(glassStyles).toContain('  left: 50%;\n  bottom: 24px;')
+    expect(glassStyles).toContain(
+      '@keyframes cc-rise { from { translate: -50% 4px; opacity: 0; } }',
+    )
+  })
+
+  test('A2: rail mode is clipped to the rail, and the rail carries count + section glyph', async () => {
+    const s = await boot()
+    const id = await s.seed('#a')
+    s.ui.panel.open()
+    await tick()
+    s.ui.focus(id)
+    await s.settle()
+
+    const panel = $(s.root, '.cc-panel')!
+    expect(panel.getAttribute('data-rail')).toBe('true')
+    const rail = $(panel, '.cc-rail')!
+    expect($(rail, '.cc-rail-count')?.getAttribute('data-value')).toBe('1')
+    expect($(rail, 'use')?.getAttribute('href')).toBe('#cc-i-comment')
+    expect(rail.getAttribute('aria-hidden')).toBe('true')
+    // The sheet is clipped so nothing renders outside the viewport — the old rule translated a
+    // 300 px sheet 256 px to the right and left the remainder hanging off the edge.
+    expect(glassStyles).toContain('clip-path: inset(0 calc(100% - 44px) 0 0 round var(--_r-xl));')
+  })
+
+  test('§2.3: a mode carries its own hue, by index in `engine.modes`', async () => {
+    const s = await boot()
+    const comment = await s.seed('#a')
+    const ask = await s.seed('#b', 'x', { kind: 'ask' })
+    // Index 0 and index 1 of the scene's mode list: 0 and +38. Never a hash of the string — that
+    // would make two modes' colours depend on what a host called them. And **unitless**: `h` is a
+    // `<number>` in relative colour syntax, so `calc(h + 38deg)` is invalid at computed-value
+    // time and resolves the badge fill to `transparent` — every badge a hollow ring, in a
+    // browser, with this suite green behind it.
+    expect(
+      $(s.root, `.cc-badge[data-thread="${comment}"]`)?.style.getPropertyValue('--_kind-h'),
+    ).toBe('0')
+    expect($(s.root, `.cc-badge[data-thread="${ask}"]`)?.style.getPropertyValue('--_kind-h')).toBe(
+      '38',
+    )
+
+    s.ui.focus(ask)
+    await s.settle()
+    expect($(s.root, '.cc-thread')?.style.getPropertyValue('--_kind-h')).toBe('38')
+
+    s.engine.startPlacement('ask')
+    await s.settle()
+    expect($(s.root, '.cc-ring')?.style.getPropertyValue('--_kind-h')).toBe('38')
+    expect($(s.root, '.cc-cursor')?.style.getPropertyValue('--_kind-h')).toBe('38')
+
+    // …and the five places §2.3 says spend it, spend it. `--_kind` is declared on the surfaces
+    // that carry `--_kind-h` and never on `:host`, where a `var()` would resolve once, at index 0.
+    expect(glassStyles).toContain(
+      '.cc-badge, .cc-thread, .cc-composer, .cc-pearl, .cc-ring, .cc-cursor {\n  --_kind: oklch(from var(--_accent) l c calc(h + var(--_kind-h, 0)));\n}',
+    )
+    expect(glassStyles).toContain('background: var(--_kind);')
+    expect(glassStyles).toContain('.cc-head-icon { color: var(--_kind); }')
+    expect(glassStyles).toContain(
+      'box-shadow: 0 0 0 1.5px var(--_kind), inset 0 0 0 1px oklch(100% 0 0/.6);',
+    )
+  })
+
+  test('a kind that is no longer a mode falls back to the accent rather than a random hue', async () => {
+    const s = await boot()
+    const id = await s.seed('#a', 'x', { kind: 'gone' })
+    expect($(s.root, `.cc-badge[data-thread="${id}"]`)?.style.getPropertyValue('--_kind-h')).toBe(
+      '0',
+    )
+  })
+
+  test('a reply is one sheet growing downward: it docks to the popover and matches its width', async () => {
+    const s = await boot()
+    const id = await s.seed('#a')
+    s.ui.focus(id)
+    await s.settle()
+    // The same path `intents.startReply` takes — a reply is the composer, the draft state machine
+    // and the `placement:*` events a fresh thread uses (decision log #21).
+    s.engine.placement.start('comment', { threadId: id })
+    await s.settle()
+    const composer = $(s.root, '.cc-composer')!
+    expect(composer.getAttribute('data-reply')).toBe(id)
+    // One width for both, so "matches its width" is a fact rather than two numbers that agree.
+    expect(glassStyles).toContain('  width: var(--_w-thread);\n  border-top-left-radius: 0;')
+    // …and the seam follows the positioner when the popover is low enough to flip the reply above
+    // it — `data-placement` is the controller's, so the sheet only has to know which edge it is.
+    expect(glassStyles).toContain(".cc-composer[data-reply][data-placement^='top']")
+    expect(glassStyles).toContain(
+      '.cc-thread {\n  flex-direction: column;\n  gap: 8px;\n  width: var(--_w-thread);',
+    )
+  })
+})
+
 /* -------------------------------------------------------------------------- §5, the glyphs */
 
 describe('§5 — 19 hand-drawn glyphs, one sprite, no font', () => {
@@ -428,6 +689,41 @@ describe('§5 — 19 hand-drawn glyphs, one sprite, no font', () => {
     // A different font, a different baseline and a different colour on every operating system —
     // which is exactly what a 12 px status marker cannot afford.
     expect(s.root.textContent ?? '').not.toMatch(/[\u{1F300}-\u{1FAFF}\u{2700}-\u{27BF}✓✕⚑]/u)
+  })
+
+  test('reopen and reply differ by SILHOUETTE, not by a few px of tail', async () => {
+    const reply = ICONS['cc-i-reply']
+    const reopen = ICONS['cc-i-uturn']
+    // Both were left-curving arrows, adjacent in the same 14 px action row, and §1.3 requires the
+    // shape to carry the state — "answer it" and "put it back" are not the same gesture and must
+    // not be the same drawing. The ring is the difference a screenshot can see.
+    expect(reopen.some((path) => /A5\.25 5\.25 0 1 1/.test(path))).toBe(true)
+    expect(reply.some((path) => /A5\.25/.test(path))).toBe(false)
+    expect(reopen[0]).not.toBe(reply[0])
+  })
+
+  test('every glyph in the sprite is the path DESIGN §5 documents, character for character', async () => {
+    const { readFileSync } = await import('node:fs')
+    const { dirname, resolve } = await import('node:path')
+    const { fileURLToPath } = await import('node:url')
+    const here = dirname(fileURLToPath(import.meta.url))
+    const design = readFileSync(resolve(here, '../../../docs/DESIGN.md'), 'utf8')
+
+    // §5's table IS the spec — "implementers must not make design decisions; if something appears
+    // underspecified, it is a design bug: fix this document, then the code". A glyph redrawn in
+    // the code and not in the table is exactly that drift, and it is invisible in every other test.
+    const documented = new Map<string, string[]>()
+    for (const [, id, cell] of design.matchAll(/^\| `(cc-i-[a-z-]+)` \| [^|]+ \| (.+?) \|$/gm)) {
+      const paths = cell.split(' + ').flatMap((token) => {
+        const value = token.trim().replace(/^`|`$/g, '')
+        return value.startsWith('cc-i-') ? (documented.get(value) ?? []) : [value]
+      })
+      documented.set(id, paths)
+    }
+    expect(documented.size).toBe(19)
+    for (const [id, paths] of documented) {
+      expect({ id, paths }).toEqual({ id, paths: [...(ICONS[id] ?? [])] })
+    }
   })
 
   test('`icons: none` hands the sprite over to a host that already ships one', async () => {

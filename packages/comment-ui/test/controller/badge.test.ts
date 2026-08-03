@@ -338,6 +338,35 @@ describe('off-screen skip', () => {
       io.restore()
     }
   })
+
+  test('a DOCKED badge is never off-screen — the skip is about elements, and it has none', async () => {
+    const io = fakeIntersectionObserver()
+    try {
+      const s = await boot()
+      const id = await s.seed('#a')
+      const element = s.doc.querySelector('#a')!
+
+      // The exact sequence that lost an orphan: the element scrolls out of view, and then goes
+      // away. The observer's last `isIntersecting: false` for an element that no longer exists
+      // can land after its watcher was torn down, and after that nothing can ever report a dock
+      // back on screen — so the badge stayed `hidden`, the page showed nothing at all, and the
+      // panel sat on "Open 0" while Unanchored said 1.
+      io.set(element, false)
+      await tick()
+      expect(badgeOf(s.vm(), id)?.offscreen).toBe(true)
+
+      await s.page.mutate((doc) => {
+        doc.querySelector('#a')?.remove()
+      })
+      await s.settle()
+      io.set(element, false)
+      await tick()
+
+      expect(badgeOf(s.vm(), id)).toMatchObject({ docked: true, offscreen: false })
+    } finally {
+      io.restore()
+    }
+  })
 })
 
 describe('badge teardown', () => {

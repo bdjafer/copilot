@@ -200,12 +200,17 @@ kbd {
   color: var(--muted);
 }
 
-/* The log is the demo's whole argument: quiet at rest, fully legible the moment you look. */
+/* The log is the demo's whole argument: quiet at rest, fully legible the moment you look.
+
+   A FIXED height, not a max: the bar is sticky, so a log that grows from nothing to 112 px as the
+   first events land slides the page — and every anchor in it — out from under the badges that
+   annotate them, mid-flight, exactly while the demo is trying to argue that anchoring is stable.
+   §8.9 governs the log's type, not its height. */
 .demo-log {
   margin: 0;
   padding: 0;
   list-style: none;
-  max-height: 112px;
+  height: 112px;
   overflow: auto;
   overscroll-behavior: contain;
   scrollbar-width: none;

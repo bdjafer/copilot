@@ -75,6 +75,45 @@ describe.each(SHEETS)('the custom-property contract — %s', (_name, sheet) => {
   })
 })
 
+/**
+ * The rules the *runtime* cannot check. happy-dom ships no UA stylesheet and no cascade, so a
+ * sheet that forgot to reset something the browser sets for us is invisible here in every way
+ * except one: the text of the sheet itself.
+ */
+describe('glassStyles — what a real browser adds behind our back', () => {
+  test('the UA `[popover]` border is reset on every top-layer surface', () => {
+    // Every `[popover]` gets `border: solid` from the UA sheet — a 3 px currentColor rectangle,
+    // near-black on light, white on dark, outside our own keyline. It was on the thread popover
+    // and the composer in both schemes, and 256 green tests said nothing about it because there
+    // is no UA stylesheet in this runtime.
+    expect(glassStyles).toContain(
+      '.cc-float { position: fixed; top: 0; left: 0; margin: 0; border: 0; }',
+    )
+    expect(glassStyles).toContain('.cc-composer, .cc-thread { display: none; border: 0; }')
+  })
+
+  test('§3.3 holds: the only `border` declarations are the ones that draw something', () => {
+    // Hairlines are `box-shadow` spreads, never borders (§3.3). The exceptions are drawn marks:
+    // the resets above, the picker's corner ticks, the chip ring, the quote rail and the dashed
+    // orphan silhouette — each of which IS the shape, not a hairline around a surface.
+    const declarations = [...glassStyles.matchAll(/(?:^|[;{\s])border:\s*([^;]+);/g)].map((match) =>
+      match[1].trim(),
+    )
+    const drawn = [...new Set(declarations.filter((value) => value !== '0'))].sort()
+    expect(drawn).toEqual([
+      // The dashed orphan silhouette (§7 row 3): the one hairline in this design a `box-shadow`
+      // cannot draw, and it is a *state mark*, not an outline around a surface.
+      '1.5px dashed var(--_muted)',
+      // The chip's 5 px ring, and the picker's corner ticks — both are the shape itself.
+      '1.5px solid currentColor',
+      '1.5px solid var(--_kind)',
+      // …and the `forced-colors` fallback, which is where a border is the only tool there is.
+      '1px solid CanvasText',
+    ])
+    expect(declarations.filter((value) => value === '0').length).toBeGreaterThan(8)
+  })
+})
+
 describe('labels', () => {
   test('the default set is frozen and complete', () => {
     expect(Object.isFrozen(defaultLabels)).toBe(true)

@@ -101,10 +101,21 @@ redeclares the eight accent-derived aliases with `color-mix(in oklab, …)` at 8
 ### 2.3 Mode hues
 
 `Mode.kind` is an opaque string and modes carry no colour. Each mode takes a deterministic hue
-offset **by index in `engine.modes`** (never a hash of the string): `[0°, +38°, −34°, +72°, −68°]`,
-applied as `oklch(from var(--_accent) l c calc(h + var(--_kind-h, 0deg)))`. `comment` is the
+offset **by index in `engine.modes`** (never a hash of the string): `[0, +38, −34, +72, −68]`,
+applied as `oklch(from var(--_accent) l c calc(h + var(--_kind-h, 0)))`. **The offset is a plain
+number, not an angle** (corrected, A5): inside relative colour syntax `h` resolves to a
+`<number>`, so `calc(h + 38deg)` is a type error — the declaration is invalid at computed-value
+time, the fill resolves to `transparent`, and every badge on the page becomes a hollow ring. `comment` is the
 accent; `ask` is a warm violet; a third mode is teal. Beyond index 4 the offset repeats from 0 —
 colour is a hint, not an identifier, and every mode also has its own glyph.
+
+The index is the one thing a presentation cannot re-derive (it has no mode list), so the ordered
+kinds cross the seam as `UIViewModel.kinds` (SPEC-comment-core §3.1.2, decision log #41) and the
+**offset table stays here**, in the design layer. `--_kind-h` is written on the surface that
+carries `data-kind` — badge, thread, composer, picker ring and cursor — and the five places that
+spend it are the badge fill, the pick ring, the cursor disc, the composer send disc and the
+thread head glyph. Everything else stays `--_accent`: a hue is a hint about *which mode*, not a
+second palette.
 
 ### 2.4 Two calls inside the palette, stated so they are not "fixed" later
 
@@ -277,7 +288,7 @@ icon library (there is none in this product, by rule). **≈ 2.4 KB raw / 1.0 KB
 | `cc-i-comment` | comment mode, thread head, panel "open" | `M13.25 7.75a5.25 5.25 0 0 1-7.35 4.87L2.75 13.5l.9-2.85A5.25 5.25 0 1 1 13.25 7.75Z` |
 | `cc-i-ask` | ask mode | `cc-i-comment` + `M6.9 6.4a1.15 1.15 0 1 1 1.6 1.06c-.45.2-.6.55-.6.99` + `M8 10.75h.01` |
 | `cc-i-check` | resolve, saved | `M3.25 8.25 6.5 11.5 12.75 4.75` |
-| `cc-i-uturn` | reopen, restore defaults | `M12.75 10.25A3.5 3.5 0 0 0 9.25 6.75H3.25` + `M5.75 4.25 3.25 6.75l2.5 2.5` |
+| `cc-i-uturn` | reopen, restore defaults | `M8 2.75A5.25 5.25 0 1 1 2.75 8` + `M1.25 9.75 2.75 8 4.25 9.75` |
 | `cc-i-close` | dismiss | `M4.25 4.25 11.75 11.75` + `M11.75 4.25 4.25 11.75` |
 | `cc-i-reply` | reply | `M6.25 3.75 2.75 7.25l3.5 3.5` + `M2.75 7.25h6a3.5 3.5 0 0 1 3.5 3.5v1.5` |
 | `cc-i-pencil` | edit | `M10.9 2.85a1.63 1.63 0 0 1 2.3 2.3L5.6 12.75l-3.1.6.6-3.1Z` + `M9.75 4 12 6.25` |
@@ -369,7 +380,7 @@ floating box; `content-visibility: auto` on non-current panel sections.
 | `sweep` | submitting / sending | a 1.5 px `--_accent` hairline travels the box's bottom edge, 1200 ms loop. The surface does **not** dim to `.7` — dimming text you are still allowed to read is a lie about what failed. |
 | `sink` | resolve | 3 beats: check draws (`stroke-dashoffset 22→0`, `--_d3`); surface desaturates 100→45 % at +160 ms; at +300 ms a 10 px glass ghost detaches and arcs to the panel seed over `--_d4` `--_spring-1` while the thread dissolves. Total 780 ms. |
 | `cut` | delete | 110 ms dissolve. No sink, no ghost, no ceremony. |
-| `arm` | destructive confirm | hold 420 ms; a `conic-gradient` fills the button ring; release early cancels. `⌘⌫` bypasses. |
+| `arm` | destructive confirm | **two clicks, in place** (A4): the first sets `data-confirm` on the control — it tints `--_danger` and draws a 1.5 px danger ring, so the armed state is a *shape* and not only a colour — and the second, within 4 s, performs the delete. `Esc`, blur, any other click in the surface, and the 4 s timeout all disarm. No second string, no dialog, no new `Labels` key. `⌘⌫` bypasses. |
 
 **`sink` vs `cut` is the design's thesis about consequence.** Motion encodes reversibility: the
 thing you can undo gets a story that teaches you where it went; the thing you cannot gets a cut,
@@ -444,6 +455,7 @@ revealed, no exceptions.
 | # | Surface | Rest state | Reveal signal | Revealed state | Dismiss |
 |---|---|---|---|---|---|
 | 1 | Badge | **12 px dot**, accent fill, keyline sandwich, `--_e0`, α .72 | S1 ≤ 96 px, S2, S3, S6, S8, or 2 s after `page:change` | 22 px pill: glyph + count, `--_e1`, `translateY(-1px)`, `--_d2` | pointer leaves + 96 px, blur |
+| 1b | Badge, **docked** (A4) | the revealed pill, muted, wearing the dashed orphan silhouette | none needed — it is never at rest | — | never, while it is docked |
 | 2 | Badge count | absent (and absent at count 1 — a badge reading "1" is noise) | with #1, at count ≥ 2 | `reveal` + `roll` on change | with #1 |
 | 3 | Badge state | silhouette, always: filled = open · hollow + check = resolved · dashed = orphaned · open-ring 82 % arc = approximate | — | 10 px `.cc-mark` glyph rides the pill | — |
 | 4 | Badge chip | 5 px dot (hollow = pending, filled accent = unread, triangle = failed); **nothing at all for busy < 450 ms** | S2/S3 on the badge, or `warn`/`danger` tone (auto-expands once, 2.4 s) | full pill via `clip-path: inset(0 100% 0 0 round 8px) → inset(0)`, `--_d2` | badge blur; text stays in the DOM for `aria-live` throughout |
@@ -451,10 +463,10 @@ revealed, no exceptions.
 | 6 | Panel disc | (from #5) | S2/S3 | 34 px, `--_e2`, `scale 1.02`, `--_d1` | blur |
 | 7 | Panel sheet | closed | click disc, S7, `panel.defaultOpen` | 300 px × `min(62vh, 540px)`, glass `--_e3`, `emerge` from the corner over `--_d4` | `Esc` · click outside · disc click · a thread opening → **rail mode** (§8.5) |
 | 8 | Panel section switch | segmented control, 3 icon segments + counts | click / `←→` | selected pill slides `--_d3` `--_spring-1` | — |
-| 9 | Panel row action | `opacity 0` | row S2/S3 | icon-only, right-aligned, native `title` | row blur |
+| 9 | Panel row action | `opacity 0` | row S2/S3 | icon-only, right-aligned, native `title`; a destructive one **arms** (§6.4) | row blur |
 | 10 | Thread popover | closed | badge click · panel row click · `ui.focus()` | 320 px glass `--_e3`, `emerge` from the badge | `Esc` · `✕` · click outside · badge re-click |
 | 11 | Popover close `✕` | α .40 | popover S2/S3 | α 1, `--_d1` | blur |
-| 12 | Popover resolve / delete | `opacity 0` | popover S2/S3 | 26 px icon ghosts; delete tints `--_danger` on hover only | blur |
+| 12 | Popover resolve / delete | `opacity 0` | popover S2/S3 | 26 px icon ghosts; delete tints `--_danger` on hover only, and **arms rather than deletes on the first click** (`arm`, §6.4) | blur — which also disarms |
 | 13 | Comment edit `✎` | `opacity 0` | comment row S2/S3 | 16 px ghost | blur |
 | 14 | Timestamp | a 3 px dot | comment row S2 | `Intl.RelativeTimeFormat(navigator.language)` — built from **values**, so it needs no `Labels` key | blur |
 | 15 | Composer | closed | pick click · reply · selection + mode key | 280 px, `--_glass-bg-2` at 94 %, `emerge` from the click point, caret already in | `Esc` · `⌘↵` · click outside → **draft pearl** (#16) |
@@ -521,7 +533,9 @@ the sheet. `Labels.placeholder` survives (the only thing naming the box). Textar
 deleted. `⌘↵` hint (`⌘ ↵` glyph pair, `--_t-11`, α .8) appears on `:focus-within` only.
 
 **8.4 Thread popover.** Head = kind glyph · state silhouette · chip · close. **Title text
-deleted** — the mode is the glyph. Comments stagger in **oldest-first** (reading order) at 22 ms.
+deleted** — the mode is the glyph. A resolved thread is not a colour change: the head draws the
+§7-row-3 resolved silhouette (the hollow disc + `cc-i-check` mark), the head glyph and the body
+mute, and the sheet keeps that state in a screenshot with no motion and no hue. Comments stagger in **oldest-first** (reading order) at 22 ms.
 A newly arrived copilot comment gets a 2 px `--_accent` left rail decaying to transparent over
 1200 ms. Comment list `max-height: 280px` with scroll-fade masks
 (`mask-image: linear-gradient(#000 calc(100% - 20px), transparent)` toggled by
@@ -537,9 +551,19 @@ above a `--_surface-2` @ 55 % card, rows separated by `--_line-sep` inset 10 px.
 20 px glyph at 26 % opacity in 64 px of air**; the four `Labels.empty*` strings move to
 `aria-label` on the list, so screen readers keep the sentence and the eye gets nothing. Section
 `<h3>`s survive as visually-hidden `aria-labelledby` targets — the §3 a11y shape holds.
-**Rail mode:** when a popover opens, the panel does not close; it slides to
+**Rail mode (A2):** when a popover opens, the panel does not close; it slides to
 `translateX(calc(100% - 44px))` with its content fading over 200 ms, leaving a 44 px rail that
-peeks back on hover. Attention becomes singular; state is preserved.
+peeks back on hover. **The rail is not empty and the sheet never hangs off the screen**: the sheet
+is clipped to the rail (`clip-path: inset(0 calc(100% - 44px) 0 0 round var(--_r-xl))` — an
+animatable property, §6.3), so no part of it renders outside the viewport, and the rail keeps the
+panel's total count above the current section's glyph. Attention becomes singular; state is
+preserved; nothing reads as a rendering glitch.
+
+**The selected segment carries its word (A1).** §10 cuts the three section nouns from the screen;
+this is the one exception, and it costs ≤ 10 characters: the **selected** segment renders its
+`Labels.section*` word beside its tabular count, unselected segments stay glyph + count, and all
+three keep the word in `title` / `aria-label` regardless. Without it the panel is an unlabelled
+box with three unlabelled icon-pills, which is the one place §10's audit over-cut.
 
 **8.6 Chips → the presence ladder.** `Decoration` is locked and unchanged; only its rendering
 changes, and `chips.ts`'s precedence (busy > failed > pending > unread) is preserved.
@@ -561,8 +585,11 @@ Collapsed for eyes, complete for AT.
 `run:step { step, steps }`; feed it into `--_p` and render the send disc as
 `conic-gradient(var(--_accent) calc(var(--_p) * 360deg), transparent 0)`. An indeterminate spinner
 where a real progress number exists is a design failure, not a style choice. Stays below
-`CommentUIOptions.zIndex` at 2147482000, unchanged. **Collision contract:** the pill owns the
-corner; the panel seed/sheet shifts 44 px inward while `pendingCount > 0`.
+`CommentUIOptions.zIndex` at 2147482000, unchanged. **Collision contract (A3):** the pill owns the
+corner; the panel seed/sheet shifts 44 px inward while `pendingCount > 0`; and **the panel owns
+its rect** — a badge whose resolved rect intersects the panel sheet or its rail is nudged along
+its anchor edge to the free side, and **no badge is ever positioned outside the viewport**,
+including the §8.1 fan members, whose 14/28 px offsets are part of the rect that must fit.
 
 **8.8 Options page.** macOS System Settings: 220 px icon+label sidebar, right pane of cards with
 hairline dividers, labels left / controls right, 44 px rows. **The footer dies** — autosave,
@@ -646,7 +673,7 @@ what a locked i18n interface should be.
 | popover | copilot author name | ✂ | `cc-i-sparkle` |
 | popover | orphan quote (`capture.text`) | ✔ **keep** | 2 px rail, 11 px `--_muted`, 3-line clamp, mask fade — the only place the deleted content still exists |
 | panel | `Labels.panelTitle` `<h2>` | ✂ visually | already `aria-label`; heading visually hidden |
-| panel | `sectionOpen` / `sectionResolved` / `sectionUnanchored` | ✂ | segmented control: icons + tabular counts; words in `title` / `aria-label` |
+| panel | `sectionOpen` / `sectionResolved` / `sectionUnanchored` | ✂ **except the selected segment** (A1) | segmented control: icons + tabular counts; the selected segment also draws its word; words in `title` / `aria-label` for all three |
 | panel | 3 × `empty*` sentences | ✂ | one 20 px glyph @ 26 % + `aria-label` |
 | panel | `(2)` per row | ✔ **keep as a value** | glyph + tabular count |
 | pill | `3 comments` | → `3` | glyph + tabular count |
@@ -755,3 +782,23 @@ re-projection · the controller's ownership of `left`/`top` · the `var(--cc-x, 
 alias discipline (never a declaration on `:host`) · `isolateEvents` · `all: initial` + explicit
 `font-size` + no `rem` · IIFE globals · the `Decoration`, `CommentUIOptions`, `CommentUI` and
 `Labels` type surfaces · `domPresentation`, which is frozen.
+
+---
+
+## 15. Amendments
+
+This document is locked, so it changes by amendment and never by drift. Each row below was
+written **before** the code that implements it, and each is backed by a first-touch UX pass whose
+evidence lives in `bench/ux-shots/`. `Labels` stays a 17-key interface, 100 % used; the eleven
+`--cc-*` tokens stay eleven.
+
+| # | Where | What changed | Why |
+|---|---|---|---|
+| **A1** | §8.5, §10 | The **selected** panel segment draws its `Labels.section*` word beside its count; unselected segments stay glyph + count. | Three independent testers read the panel as "an unlabelled box with three unlabelled icon-pills" (`first-touch/06-basic-light-virgin.png`, `43-orphan-docked.png`). Chosen over restoring the `<h2>` title and the three empty-state sentences: one word answers the same complaint as five sentences, adds no public token and keeps `Labels` at 17 keys. |
+| **A2** | §8.5 | Rail mode clips the sheet to the 44 px rail so no part renders outside the viewport, and the rail carries the total count + the current section glyph. | The old text ("content fading over 200 ms, leaving a 44 px rail") produced, in a browser, a large empty slab half off the right edge that reads as a rendering bug (`first-touch/28-panel-railed-sliver.png`). |
+| **A3** | §8.7 | The collision contract extends from "the pill owns the corner" to "**the panel owns its rect**", and no badge — fan members included — is ever positioned outside the viewport. | Fan members were measured at y = −16/−17/−18, painting clipped half-dots over the page title, and badges were painting underneath the panel sheet where they cannot be clicked. |
+| **A5** | §2.3 | The hue offset is a plain number (`calc(h + 38)`), not an angle (`calc(h + 38deg)`). | A typing bug in the formula, not a design change. `h` is a `<number>` in relative colour syntax; the angle form is invalid at computed-value time, which resolves the badge fill to `transparent` — every badge on the page a hollow ring, in a browser, with a green suite behind it. |
+| **A4** | §6.4 `arm`, §7 rows 1b, 9, 12 | Destructive confirm is **two clicks in place** rather than a 420 ms hold; a **docked** badge is held in its revealed, muted, dashed state instead of resting as a dot. | The hold gesture was never implemented and an unlabelled 26 px trash icon adjacent to Resolve deleted a thread on the first click. A docked orphan has no anchor for the cursor to be *near*, so proximity can never reveal it — resting it as a 12 px dot means the only affordance for a thread the user cannot see is invisible too. Both are the disclosure map applied more strictly, not relaxed: nothing gains a permanent label, and the docked mark exists only while the thread is orphaned. |
+
+The redrawn `cc-i-uturn` (§5) is documentation, not an amendment: `reply` and `reopen` were two
+left-curving arrows a few px apart at 14 px, and §1.3 requires the *shape* to carry the state.

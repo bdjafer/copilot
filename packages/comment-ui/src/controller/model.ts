@@ -272,6 +272,10 @@ export function createModelBuilder(): ModelBuilder {
         const approximate = isApproximate(view)
         const rect = rectOf(view.id, view)
         if (rect) nextRects.set(view.id, rect)
+        // A docked badge has no element, so nothing can ever report it back on screen: the
+        // off-screen skip is about elements scrolling away, and applying it to a dock is how a
+        // thread the user cannot see loses the one mark that says it still exists.
+        const docked = view.anchoring.element === null
         const badge: BadgeVM = {
           threadId: view.id,
           kind: view.kind,
@@ -282,8 +286,8 @@ export function createModelBuilder(): ModelBuilder {
           resolved: view.isResolved,
           orphaned: view.isOrphaned,
           approximate,
-          docked: view.anchoring.element === null,
-          offscreen: state.offscreen.has(view.id) && state.activeId !== view.id,
+          docked,
+          offscreen: !docked && state.offscreen.has(view.id) && state.activeId !== view.id,
           open: state.activeId === view.id,
           tone: decoration?.tone ?? 'default',
           title: decoration?.title ?? (approximate ? labels.approximate : null),
@@ -420,7 +424,10 @@ export function createModelBuilder(): ModelBuilder {
               kind: view.kind,
               label: modeLabel(view.kind),
               ariaLabel: nameOf(view),
-              body: view.lastComment.body,
+              // The **opening** comment, not the newest: a row is how you recognise a thread, and
+              // the last comment is usually a reply — with a copilot answering every thread, every
+              // row on the page reads "echo: …" and the panel stops identifying anything.
+              body: (view.comments[0] ?? view.lastComment).body,
               count: view.comments.length,
               anchor: view.anchoring.status,
               approximate: isApproximate(view),
@@ -467,6 +474,12 @@ export function createModelBuilder(): ModelBuilder {
       const vm: UIViewModel = Object.freeze({
         seq,
         labels,
+        // Decision log #41: the ordering of `engine.modes`, and nothing else about a `Mode`.
+        // A presentation cannot re-derive an index, and DESIGN §2.3's hue offsets are indexed.
+        kinds: stableList(
+          cache.vm?.kinds,
+          state.modes.map((mode) => mode.kind),
+        ),
         badges: stableList(cache.vm?.badges, badges),
         thread,
         composer,

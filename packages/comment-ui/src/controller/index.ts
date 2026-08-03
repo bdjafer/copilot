@@ -50,9 +50,16 @@ import { centerReference, createPositioner, dockedReference, watchVisibility } f
 import { createLayer } from '../shadow.ts'
 import { createFocusPolicy } from './focus.ts'
 import { createIntents } from './intents.ts'
-import { createModelBuilder } from './model.ts'
+import { createModelBuilder, sectionOf } from './model.ts'
 
 const ALL_SECTIONS: readonly PanelSection[] = ['open', 'resolved', 'unanchored']
+
+/** A composer reference, plus whether it is docked to the popover it is replying into (§7). */
+interface ComposerRef {
+  token: unknown
+  reference: ReferenceElement
+  docked?: boolean
+}
 
 export function resolveOptions(
   options: CommentUIOptions | undefined,
@@ -130,8 +137,10 @@ export function createController(
   let composerOpen = false
   let lastOpenThread: string | null = null
   let picking = false
-  let composerRef: { token: unknown; reference: ReferenceElement } | null = null
+  let composerRef: ComposerRef | null = null
   let placementJustCancelled = false
+  /** The section the *active* thread was last in, so a transition can follow it (§8.5). */
+  let activeSection: { threadId: string; section: PanelSection | null } | null = null
 
   function schedule(): void {
     if (destroyed) return
@@ -270,6 +279,24 @@ export function createController(
       slots.editing = null
       if (openThread !== null) focus.request({ kind: 'thread-close' })
     }
+
+    // §8.5: the panel follows its own data. A resolve, a reopen, an orphan or a re-anchor moves
+    // the *active* thread between sections, and a panel left sitting on the section it just left
+    // shows an empty list while the count it is watching moved elsewhere. Only a transition of
+    // the thread the user is acting on moves the selection — an explicit click still wins,
+    // because nothing here fires unless the section genuinely changed under it.
+    const section = view ? sectionOf(view) : null
+    if (
+      view &&
+      section &&
+      activeSection?.threadId === view.id &&
+      activeSection.section !== section
+    ) {
+      if (resolved.panel.enabled && resolved.panel.sections.includes(section)) {
+        slots.section = section
+      }
+    }
+    activeSection = view ? { threadId: view.id, section } : null
   }
 
   function referenceForThread(view: ThreadView): { token: unknown; reference: ReferenceElement } {
@@ -284,12 +311,17 @@ export function createController(
     return { token: view.id, reference: centerReference(layer.win) }
   }
 
-  function referenceForComposer(): { token: unknown; reference: ReferenceElement } | null {
+  function referenceForComposer(): ComposerRef | null {
     const state = engine.placement.get()
     if (state.phase === 'submitting') return composerRef
     if (state.phase !== 'composing') return null
     if (state.replyTo !== null) {
       const view = engine.getThreadView(state.replyTo)
+      // §7's mutual exclusion: "a reply docks the composer to the popover's bottom edge and
+      // matches its width, so reply reads as one sheet growing downward". Against the *badge*
+      // it opened as a second box beside the popover, over its own close control.
+      const popover = lastOpenThread === state.replyTo ? positioner.node('thread') : null
+      if (popover) return { token: popover, reference: popover, docked: true }
       const badge = positioner.node(`badge:${state.replyTo}`)
       if (badge) return { token: badge, reference: badge }
       if (view?.anchoring.element) {
@@ -308,6 +340,24 @@ export function createController(
     return { token: state.element, reference: state.element }
   }
 
+  /**
+   * DESIGN §8.7's collision contract, as a live read: while the panel is open it owns its rect,
+   * and a badge that resolves underneath it is a badge nobody can click. The rect is read at
+   * positioning time (so rail mode, the corner option and the hover peek are all accounted for)
+   * and only while the sheet is actually on screen.
+   */
+  function panelObstacle(): DOMRect | null {
+    if (!slots.panelOpen) return null
+    const node = positioner.node('panel')
+    if (!node) return null
+    try {
+      const rect = node.getBoundingClientRect()
+      return rect.width > 0 && rect.height > 0 ? rect : null
+    } catch {
+      return null
+    }
+  }
+
   /** §3.1.5: the controller decides what every registered surface is positioned against. */
   function syncPositions(visible: readonly ThreadView[]): void {
     const refs = new Map<string, SurfaceRef>()
@@ -320,6 +370,7 @@ export function createController(
           placement: 'top-end',
           offset: resolved.badge.offset,
           active: !offscreen.has(view.id) || slots.activeId === view.id,
+          avoid: panelObstacle,
         })
         continue
       }
@@ -332,6 +383,7 @@ export function createController(
         placement: 'top-end',
         offset: resolved.badge.offset,
         active: true,
+        avoid: panelObstacle,
       })
     }
 
@@ -346,7 +398,15 @@ export function createController(
     const composer = referenceForComposer()
     if (composer) {
       composerRef = composer
-      refs.set('composer', { ...composer, placement: 'bottom-start', offset: [0, 8], active: true })
+      refs.set('composer', {
+        token: composer.token,
+        reference: composer.reference,
+        placement: 'bottom-start',
+        // Flush against the popover's bottom edge, so the reply reads as the same sheet growing
+        // downward rather than as a second box that happens to be nearby.
+        offset: composer.docked ? [0, 0] : [0, 8],
+        active: true,
+      })
     }
 
     positioner.sync(refs)
@@ -358,19 +418,36 @@ export function createController(
     const wanted = new Set<string>()
     for (const view of visible) {
       const element = view.anchoring.element
-      if (!element) continue
+      // A view that lost its element is a dock, and a dock is never off-screen: its position is
+      // ours, not the page's. Forgetting the flag here is what left an orphan permanently
+      // `hidden` — the observer's last `isIntersecting: false` for the element that was just
+      // removed can land after the teardown, and nothing would ever clear it again.
+      if (!element) {
+        const stale = watchers.get(view.id)
+        if (stale) {
+          stale.watcher?.destroy()
+          watchers.delete(view.id)
+        }
+        offscreen.delete(view.id)
+        continue
+      }
       wanted.add(view.id)
       const entry = watchers.get(view.id)
       if (entry?.element === element) continue
       entry?.watcher?.destroy()
       offscreen.delete(view.id)
-      watchers.set(view.id, {
+      const next: { element: Element; watcher: VisibilityWatcher | null } = {
         element,
-        watcher: watchVisibility(element, layer.win, (isVisible) => {
-          if (isVisible) offscreen.delete(view.id)
-          else offscreen.add(view.id)
-          schedule()
-        }),
+        watcher: null,
+      }
+      watchers.set(view.id, next)
+      next.watcher = watchVisibility(element, layer.win, (isVisible) => {
+        // …and a callback that outlives its own registration is ignored outright, so a
+        // disconnect that raced a queued record cannot resurrect the flag.
+        if (watchers.get(view.id) !== next) return
+        if (isVisible) offscreen.delete(view.id)
+        else offscreen.add(view.id)
+        schedule()
       })
     }
     for (const [id, entry] of Array.from(watchers)) {

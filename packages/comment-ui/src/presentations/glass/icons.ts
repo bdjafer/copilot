@@ -28,7 +28,12 @@ export const ICONS: Readonly<Record<string, readonly string[]>> = {
     'M8 10.75h.01',
   ],
   'cc-i-check': ['M3.25 8.25 6.5 11.5 12.75 4.75'],
-  'cc-i-uturn': ['M12.75 10.25A3.5 3.5 0 0 0 9.25 6.75H3.25', 'M5.75 4.25 3.25 6.75l2.5 2.5'],
+  // A **circular** arrow, not a second hooked one. `cc-i-reply` and this glyph were both
+  // left-curving arrows differing by a few px of tail, sitting next to each other in the same
+  // 14 px action row — and §1.3 requires the *shape* to carry the state, not the detail. A ring
+  // with a gap reads as "put it back" at 14 px and cannot be mistaken for "answer it"; the arc's
+  // endpoints are the circle's cardinal points, so the ¼-pixel rule of §5 still holds.
+  'cc-i-uturn': ['M8 2.75A5.25 5.25 0 1 1 2.75 8', 'M1.25 9.75 2.75 8 4.25 9.75'],
   'cc-i-close': ['M4.25 4.25 11.75 11.75', 'M11.75 4.25 4.25 11.75'],
   'cc-i-reply': ['M6.25 3.75 2.75 7.25l3.5 3.5', 'M2.75 7.25h6a3.5 3.5 0 0 1 3.5 3.5v1.5'],
   'cc-i-pencil': ['M10.9 2.85a1.63 1.63 0 0 1 2.3 2.3L5.6 12.75l-3.1.6.6-3.1Z', 'M9.75 4 12 6.25'],

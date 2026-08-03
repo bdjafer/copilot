@@ -21,6 +21,7 @@
  */
 
 import type { CommentVM, Intents, Labels, PresentationHost, ThreadVM } from '../../presentation.ts'
+import type { HueOf } from './kind.ts'
 
 import {
   el,
@@ -31,8 +32,10 @@ import {
   setText,
   showFloating,
 } from '../../dom.ts'
+import { createArm } from './arm.ts'
 import { createChip, createChipSlot, renderMarks, type ChipSlot } from './chip.ts'
 import { icon, kindIcon, setIcon } from './icons.ts'
+import { applyHue } from './kind.ts'
 import { transferOrigin, type Rectish } from './motion.ts'
 
 /** §6.2: 22 ms per item, capped at six; the remainder enters together. */
@@ -41,7 +44,7 @@ const STAGGER_CAP = 6
 export interface ThreadPopover {
   readonly element: HTMLElement
   readonly close: HTMLElement
-  render(thread: ThreadVM | null, labels: Labels, origin: Rectish | null): void
+  render(thread: ThreadVM | null, labels: Labels, origin: Rectish | null, hueOf: HueOf): void
   destroy(): void
 }
 
@@ -143,21 +146,53 @@ export function createThreadPopover(host: PresentationHost, intents: Intents): T
     if (current.actions.reopen) intents.reopenThread(openId)
     else intents.resolveThread(openId)
   })
+  // §6.4 `arm` / A4: the first click arms, the second deletes. Everything else disarms.
+  const arm = createArm(remove)
   remove.addEventListener('click', () => {
-    if (openId) intents.deleteThread(openId)
+    if (!openId) return
+    if (arm.click()) intents.deleteThread(openId)
+  })
+  element.addEventListener('click', (event: Event) => {
+    if (!event.composedPath().includes(remove)) arm.disarm()
   })
   element.addEventListener('keydown', (event: KeyboardEvent) => {
     if (event.key !== 'Escape') return
+    arm.disarm()
     if (intents.escape()) event.preventDefault()
   })
 
-  /** The mask *is* the scroll affordance (§8.4), so it has to know where the list is. */
+  /**
+   * The mask *is* the scroll affordance (§8.4), so it has to know where the list is — and it has
+   * to ask again once the list has a size. Bound to `scroll` alone, it was evaluated while the
+   * popover was still `display: none`, where `clientHeight` is 0 and *every* list looks
+   * overflowing: the mask then faded out the tail of the newest comment with nothing to scroll
+   * to. `clientHeight > 0` is the guard, and the observer is what re-asks after layout, after an
+   * append, and after the textarea inside an inline edit grows.
+   */
   function syncScroll(): void {
+    const height = list.clientHeight
     setAttr(list, 'data-scroll-top', list.scrollTop > 2 ? 'true' : null)
-    const bottom = list.scrollHeight - list.clientHeight - list.scrollTop > 2
+    const bottom = height > 0 && list.scrollHeight - height - list.scrollTop > 2
     setAttr(list, 'data-scroll-bottom', bottom ? 'true' : null)
   }
   list.addEventListener('scroll', syncScroll, { passive: true })
+  // …and once more when the entrance finishes. `cc-stagger` translates each comment 4 px on its
+  // way in, and a translated child **counts toward its scroll container's overflow** — so a list
+  // that fits exactly reports 4 px of scrollable height for the length of the animation, turns
+  // the mask on, and then never resizes again to turn it off. `animationend` bubbles, so one
+  // listener on the list covers every comment in it.
+  list.addEventListener('animationend', syncScroll)
+
+  const view = doc.defaultView
+  const Observer = (view as { ResizeObserver?: typeof ResizeObserver } | null)?.ResizeObserver
+  /**
+   * **Held in a variable that `destroy()` reads, and that is load-bearing twice over.** An
+   * observer nothing references is collectable, and a browser will collect it: the callback fires
+   * once and then silently stops, which looks exactly like a mask that is broken again.
+   * Disconnecting it is also the ordinary teardown obligation for a per-mount observer.
+   */
+  const resize = typeof Observer === 'function' ? new Observer(syncScroll) : null
+  resize?.observe(list)
 
   function renderComment(node: HTMLElement, comment: CommentVM, index: number): void {
     const author = node.querySelector<HTMLElement>('.cc-author')
@@ -254,7 +289,7 @@ export function createThreadPopover(host: PresentationHost, intents: Intents): T
     element,
     close,
 
-    render(thread, next, origin) {
+    render(thread, next, origin, hueOf) {
       labels = next
       setAttr(close, 'aria-label', next.dismiss)
       setAttr(close, 'title', next.dismiss)
@@ -268,6 +303,7 @@ export function createThreadPopover(host: PresentationHost, intents: Intents): T
         openId = null
         current = null
         known = new Set()
+        arm.disarm()
         chip.render(null)
         hideFloating(element)
         return
@@ -277,6 +313,7 @@ export function createThreadPopover(host: PresentationHost, intents: Intents): T
       if (opening) {
         openId = thread.threadId
         known = new Set()
+        arm.disarm()
         showFloating(element)
         transferOrigin(element, origin)
       }
@@ -285,8 +322,12 @@ export function createThreadPopover(host: PresentationHost, intents: Intents): T
       setAttr(element, 'aria-label', thread.ariaLabel)
       setAttr(element, 'data-thread', thread.threadId)
       setAttr(element, 'data-status', thread.status)
+      // §8.4: resolved is a *silhouette*, not a tint. The head draws the hollow disc + check the
+      // badge draws, and the sheet mutes — so a screenshot of a resolved thread says so.
+      setAttr(element, 'data-resolved', thread.resolved ? 'true' : null)
       setAttr(element, 'data-anchor', thread.anchor)
       setAttr(element, 'data-kind', thread.kind)
+      applyHue(element, hueOf, thread.kind)
       setAttr(element, 'title', thread.title)
       setIcon(headGlyph, kindIcon(thread.kind))
       renderMarks(doc, marks, thread)
@@ -319,6 +360,8 @@ export function createThreadPopover(host: PresentationHost, intents: Intents): T
         },
       )
       syncScroll()
+      // …and again on the next frame, when the sheet the popover just became actually has one.
+      if (opening) view?.requestAnimationFrame(syncScroll)
 
       const reopening = thread.actions.reopen
       setAttr(resolve, 'data-action', reopening ? 'reopen' : 'resolve')
@@ -332,7 +375,10 @@ export function createThreadPopover(host: PresentationHost, intents: Intents): T
 
     destroy() {
       chip.destroy()
+      arm.destroy()
+      resize?.disconnect()
       list.removeEventListener('scroll', syncScroll)
+      list.removeEventListener('animationend', syncScroll)
       host.anchor('thread', null)
       element.remove()
     },

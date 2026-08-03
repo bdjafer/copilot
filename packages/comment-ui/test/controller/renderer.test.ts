@@ -93,6 +93,20 @@ describe('the model is a wire format', () => {
     expect(seen.size).toBeGreaterThan(5)
   })
 
+  test('`kinds` carries the mode ORDER, and nothing else about a mode (decision log #41)', async () => {
+    const s = await boot()
+    // The index is the one fact about modes a presentation cannot re-derive, and DESIGN §2.3's
+    // hue offsets are indexed — deliberately never hashed from the kind string, which would make
+    // two modes' colours depend on what a host happened to call them.
+    expect(s.vm().kinds).toEqual(['comment', 'ask', 'triage'])
+    expect(Object.isFrozen(s.vm().kinds)).toBe(true)
+    // Strings only: the model stays `structuredClone`-able and no `Mode` crosses the seam.
+    for (const kind of s.vm().kinds) expect(typeof kind).toBe('string')
+    const before = s.vm().kinds
+    await s.seed('#a')
+    expect(s.vm().kinds).toBe(before)
+  })
+
   test('seq is monotonic and never resets', async () => {
     const s = await boot()
     const first = s.vm().seq

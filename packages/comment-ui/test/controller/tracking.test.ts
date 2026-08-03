@@ -160,6 +160,50 @@ describe('a badge that is pinned while off-screen', () => {
   })
 })
 
+describe('§7 mutual exclusion — a reply is one sheet growing downward', () => {
+  test('the composer is positioned against the POPOVER, not the badge behind it', async () => {
+    const s = await boot()
+    const id = await s.seed('#a')
+    s.intents.openThread(id)
+    await tick()
+    const popover = s.probe.nodes.get('thread')
+    const badge = s.probe.nodes.get(`badge:${id}`)
+
+    s.intents.startReply(id)
+    await tick()
+    const composer = s.probe.nodes.get('composer')
+    // Against the badge, the reply opened as a second sheet BESIDE the popover — over its own
+    // close control, and clipped at the viewport edge. §7: "a reply docks the composer to the
+    // popover's bottom edge and matches its width".
+    expect(
+      trackers.entries.some(
+        (entry) => entry.alive && entry.floating === composer && entry.reference === popover,
+      ),
+    ).toBe(true)
+    expect(
+      trackers.entries.some(
+        (entry) => entry.alive && entry.floating === composer && entry.reference === badge,
+      ),
+    ).toBe(false)
+  })
+
+  test('…and falls back to the badge when the popover is not open', async () => {
+    const s = await boot()
+    const id = await s.seed('#a')
+    s.intents.startReply(id)
+    await tick()
+    const composer = s.probe.nodes.get('composer')
+    expect(
+      trackers.entries.some(
+        (entry) =>
+          entry.alive &&
+          entry.floating === composer &&
+          entry.reference === s.probe.nodes.get(`badge:${id}`),
+      ),
+    ).toBe(true)
+  })
+})
+
 describe('teardown', () => {
   test('unmount leaves no live tracker behind', async () => {
     const probe = probePresentation({ anchor: true })

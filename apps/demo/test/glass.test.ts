@@ -148,7 +148,9 @@ describe('the demo mounts the product, not the fallback', () => {
     const api = boot()
     await api.engine.ready()
     await settle()
-    expect(api.ui.panel.isOpen).toBe(true)
+    // The panel starts closed (§7 row 5), which is also what makes the chord worth having: the
+    // summon is the discoverability *moment*, and a panel that was already open has none.
+    expect(api.ui.panel.isOpen).toBe(false)
 
     const chord = (): void => {
       document.dispatchEvent(
@@ -156,15 +158,45 @@ describe('the demo mounts the product, not the fallback', () => {
       )
     }
     chord()
-    expect(api.ui.panel.isOpen).toBe(false)
-    chord()
     expect(api.ui.panel.isOpen).toBe(true)
+    chord()
+    expect(api.ui.panel.isOpen).toBe(false)
 
     // …and it comes off with the rest of the page, or a detached demo keeps eating keystrokes.
     api.detach()
     demo = null
     chord()
-    expect(api.ui.panel.isOpen).toBe(true)
+    expect(api.ui.panel.isOpen).toBe(false)
+  })
+})
+
+/* ------------------------------------------------------- what the browser adds behind our back */
+
+describe('the surfaces the page itself has to get right', () => {
+  test('the injected sheet resets the UA `[popover]` border on both top-layer surfaces', async () => {
+    const api = boot()
+    await api.engine.ready()
+    await settle()
+    const sheet = api.ui.root.querySelector('style[data-cc="base"]')?.textContent ?? ''
+    // The UA stylesheet gives every `[popover]` `border: solid` — 3 px of currentColor, drawn
+    // outside our own keyline, near-black on light and white on dark. No DOM emulator ships a UA
+    // sheet, so this is asserted where it is decided: on the CSS the page actually injects.
+    expect(sheet).toContain('.cc-float { position: fixed; top: 0; left: 0; margin: 0; border: 0; }')
+    expect(sheet).toContain('.cc-composer, .cc-thread { display: none; border: 0; }')
+
+    // …and both surfaces really are `.cc-float`, so the reset reaches them.
+    for (const selector of ['.cc-composer', '.cc-thread']) {
+      expect(api.ui.root.querySelector(`${selector}.cc-float`)).not.toBeNull()
+    }
+  })
+
+  test('the demo log has a FIXED height, so the sticky bar never moves the page under a badge', () => {
+    const css = readFileSync(`${site}/assets/demo.css`, 'utf8')
+    // A `max-height` still grows from 0 to 112 px as the first events land, which slides every
+    // anchor out from under its own badge mid-flight — while the demo is arguing that anchoring
+    // is stable. §8.9 governs the log's type, not its height.
+    expect(css).toMatch(/\.demo-log \{[^}]*\n\s*height: 112px;/)
+    expect(css).not.toMatch(/\.demo-log \{[^}]*max-height/)
   })
 })
 

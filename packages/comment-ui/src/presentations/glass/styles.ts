@@ -75,6 +75,9 @@ export const glassStyles = `
 ${LIGHT}
   --_badge-size: var(--cc-badge-size, 22px);
   --_radius: var(--cc-radius, 10px);
+  /* One width for the popover and for the reply composer that docks under it: §7's mutual
+     exclusion asks for one sheet growing downward, and two numbers cannot promise that. */
+  --_w-thread: 320px;
 
   /* The derived ramp — about thirty values out of the eleven public ones. */
   --_accent-hi: oklch(from var(--_accent) calc(l + 0.055) c h);
@@ -227,11 +230,32 @@ ${LIGHT}
   .cc-glass { corner-shape: squircle; border-radius: 18px; }
 }
 
-.cc-float { position: fixed; top: 0; left: 0; margin: 0; }
+/* \`border: 0\` is not tidiness: the UA sheet gives EVERY \`[popover]\` \`border: solid\` — a 3 px
+   currentColor frame, near-black on light and white on dark — and it is drawn outside our own
+   keyline, so the popover and the composer arrived wearing a hard rectangle that no rule in this
+   file had asked for. It is reset here, on the class every top-layer surface carries, so a future
+   \`[popover]\` inherits the reset by construction. §3.3: hairlines are box-shadows, never borders. */
+.cc-float { position: fixed; top: 0; left: 0; margin: 0; border: 0; }
 /* Author styles beat the UA's \`[popover]:not(:popover-open) { display: none }\`, so the same
    markup degrades to an ordinary positioned box wherever the top layer is missing. */
-.cc-composer, .cc-thread { display: none; }
+.cc-composer, .cc-thread { display: none; border: 0; }
 .cc-composer[data-open='true'], .cc-thread[data-open='true'] { display: flex; }
+
+/* §2.3 — the mode hue, declared on the surfaces that carry \`--_kind-h\` and NEVER on \`:host\`: the
+   \`var()\`s inside a custom property resolve on the element that declares it, so a \`:host\`
+   declaration would bake index 0's offset into every mode. Colour is a hint here and nothing
+   more; every mode also has its own glyph, which is what keeps §1.3 true under \`forced-colors\`,
+   in a screenshot and for a colour-blind reader.
+
+   The offset is a **plain number**: inside relative colour syntax \`h\` resolves to a \`<number>\`,
+   so \`calc(h + 38deg)\` is a type error — the declaration is invalid at computed-value time, the
+   fill resolves to \`transparent\`, and every badge on the page turns into a hollow ring. */
+.cc-badge, .cc-thread, .cc-composer, .cc-pearl, .cc-ring, .cc-cursor {
+  --_kind: oklch(from var(--_accent) l c calc(h + var(--_kind-h, 0)));
+}
+@supports not (color: oklch(from red l c h)) {
+  .cc-badge, .cc-thread, .cc-composer, .cc-pearl, .cc-ring, .cc-cursor { --_kind: var(--_accent); }
+}
 
 /* ------------------------------------------------------------------------------- badges */
 
@@ -267,7 +291,7 @@ ${LIGHT}
   width: 12px; height: 12px;
   margin: -6px 0 0 -6px;
   border-radius: var(--_r-pill);
-  background: var(--_accent);
+  background: var(--_kind);
   box-shadow: var(--_keyline), var(--_e0);
   opacity: .72;
   transition: opacity var(--_d2) var(--_ease-std), scale var(--_d2) var(--_spring-1);
@@ -278,7 +302,7 @@ ${LIGHT}
   position: absolute;
   inset: 0;
   border-radius: var(--_r-pill);
-  background: var(--_accent);
+  background: var(--_kind);
   box-shadow: var(--_keyline), var(--_e1);
   opacity: 0;
   scale: .7;
@@ -344,10 +368,27 @@ ${LIGHT}
 }
 .cc-badge[data-state='orphaned'] { color: var(--_muted); }
 .cc-badge[data-approximate='true']::before {
-  background: conic-gradient(var(--_accent) 0 82%, transparent 82%);
+  background: conic-gradient(var(--_kind) 0 82%, transparent 82%);
 }
 .cc-badge[data-tone='muted']::after { background: var(--_surface-2); }
 .cc-badge[data-tone='muted'] { color: var(--_muted); }
+
+/* §7 row 1b (amendment A4). A docked orphan is the one badge proximity can NEVER reach: the
+   cursor can be near an element, and this thread no longer has one. So it is held in its
+   revealed state — muted, wearing the dashed silhouette of §7 row 3 — for exactly as long as it
+   is docked, and it goes back to being nothing at all the moment it re-anchors. The dash is a
+   border because a dashed ring is the one hairline in this design that a \`box-shadow\` cannot
+   draw, and \`box-sizing: border-box\` keeps the mark 12/22 px regardless. */
+.cc-badge[data-docked='true']::after { opacity: 1; scale: 1; }
+.cc-badge[data-docked='true']::before { opacity: 0; scale: .5; }
+.cc-badge[data-docked='true'] > * { max-width: 2.4ch; opacity: 1; }
+.cc-badge[data-docked='true'] { color: var(--_muted); }
+.cc-badge[data-docked='true']::before,
+.cc-badge[data-docked='true']::after {
+  background: var(--_surface-2);
+  border: 1.5px dashed var(--_muted);
+  box-shadow: var(--_keyline), var(--_e1);
+}
 
 .cc-badge:focus-visible { outline: none; }
 .cc-badge:focus-visible::after { box-shadow: var(--_keyline), var(--_focus), var(--_e1); }
@@ -447,7 +488,7 @@ ${LIGHT}
   position: fixed;
   top: 0; left: 0;
   border-radius: var(--_r-sm);
-  box-shadow: 0 0 0 1.5px var(--_accent), inset 0 0 0 1px oklch(100% 0 0/.6);
+  box-shadow: 0 0 0 1.5px var(--_kind), inset 0 0 0 1px oklch(100% 0 0/.6);
   contain: layout size paint;
   /* Snap: the outline slides between candidates. One instrument scanning, not twelve boxes
      flickering. */
@@ -459,15 +500,21 @@ ${LIGHT}
 .cc-tick {
   position: absolute;
   width: 6px; height: 6px;
-  border: 1.5px solid var(--_accent);
+  border: 1.5px solid var(--_kind);
 }
 .cc-tick[data-corner='tl'] { top: -3px; left: -3px; border-width: 1.5px 0 0 1.5px; }
 .cc-tick[data-corner='tr'] { top: -3px; right: -3px; border-width: 1.5px 1.5px 0 0; }
 .cc-tick[data-corner='bl'] { bottom: -3px; left: -3px; border-width: 0 0 1.5px 1.5px; }
 .cc-tick[data-corner='br'] { bottom: -3px; right: -3px; border-width: 0 1.5px 1.5px 0; }
+/* §7 row 19 rations the hint and gives it a rise; it never said where it lives, and riding the
+   candidate was the wrong answer twice over — it covered the line ABOVE the target (the one the
+   eye is using to decide), and a session opened from the keyboard with the pointer at rest left
+   it at 0,0, clipped under whatever the host page puts in its own top-left. One fixed slot for
+   the whole session: the eye learns it once, and it never covers a candidate. */
 .cc-pick-hint {
   position: fixed;
-  top: 0; left: 0;
+  left: 50%;
+  bottom: 24px;
   padding: 4px 8px;
   border-radius: var(--_r-sm);
   box-shadow: var(--_e2);
@@ -476,9 +523,10 @@ ${LIGHT}
   font-weight: 500;
   letter-spacing: 0.006em;
   white-space: nowrap;
+  translate: -50% 0;
   animation: cc-rise var(--_d2) var(--_spring-1);
 }
-@keyframes cc-rise { from { translate: 0 4px; opacity: 0; } }
+@keyframes cc-rise { from { translate: -50% 4px; opacity: 0; } }
 .cc-cursor {
   position: fixed;
   top: 0; left: 0;
@@ -491,7 +539,7 @@ ${LIGHT}
   width: 20px; height: 20px;
   padding: 3px;
   border-radius: var(--_r-pill);
-  background: var(--_accent);
+  background: var(--_kind);
   color: var(--_on-accent);
   box-shadow: var(--_e2);
 }
@@ -521,6 +569,25 @@ ${LIGHT}
   to { clip-path: circle(142% at var(--_ox, 50%) var(--_oy, 50%)); scale: 1; opacity: 1; }
 }
 .cc-composer:focus-within { box-shadow: var(--_focus), var(--_e3); }
+/* §7's mutual exclusion, drawn: "a reply docks the composer to the popover's bottom edge and
+   matches its width, so reply reads as one sheet growing downward". The controller docks it with
+   a zero offset; this is the other half — the same width, and a flush top edge, so there is no
+   seam where the two boxes meet. Positioned against the badge instead, it opened as a second
+   sheet BESIDE the popover, over its own close control, clipped at the viewport edge. */
+.cc-composer[data-reply] {
+  width: var(--_w-thread);
+  border-top-left-radius: 0;
+  border-top-right-radius: 0;
+}
+/* …and when the popover is near the bottom of the viewport the positioner flips the reply above
+   it, so the flush edge flips too. \`data-placement\` is the controller's (§3.1.5) — the sheet only
+   has to know which edge is the seam. */
+.cc-composer[data-reply][data-placement^='top'] {
+  border-top-left-radius: var(--_r-xl);
+  border-top-right-radius: var(--_r-xl);
+  border-bottom-left-radius: 0;
+  border-bottom-right-radius: 0;
+}
 /* The sheet IS the field: no border of its own, and the ring belongs to the box. */
 .cc-composer-input {
   width: 100%;
@@ -574,7 +641,7 @@ ${LIGHT}
   padding: 0;
   border: 0;
   border-radius: var(--_r-pill);
-  background: var(--_accent);
+  background: var(--_kind);
   color: var(--_on-accent);
   cursor: pointer;
   opacity: 1;
@@ -595,7 +662,7 @@ ${LIGHT}
   border: 0;
   border-radius: var(--_r-pill);
   background: var(--_surface);
-  color: var(--_accent);
+  color: var(--_kind);
   box-shadow: var(--_keyline), var(--_e2);
   cursor: pointer;
   animation: cc-pop var(--_d2) var(--_spring-2);
@@ -605,7 +672,7 @@ ${LIGHT}
   right: -1px; top: -1px;
   width: 4px; height: 4px;
   border-radius: var(--_r-pill);
-  background: var(--_accent);
+  background: var(--_kind);
 }
 .cc-pearl:focus-visible { outline: none; box-shadow: var(--_keyline), var(--_focus), var(--_e2); }
 @keyframes cc-pop { from { scale: .6; opacity: 0; } }
@@ -615,7 +682,7 @@ ${LIGHT}
 .cc-thread {
   flex-direction: column;
   gap: 8px;
-  width: 320px;
+  width: var(--_w-thread);
   max-width: calc(100vw - 24px);
   padding: 10px;
   border-radius: var(--_r-xl);
@@ -625,7 +692,20 @@ ${LIGHT}
   animation: cc-emerge var(--_d3) var(--_spring-1);
 }
 .cc-head { display: flex; align-items: center; gap: 6px; }
-.cc-head-icon { color: var(--_accent); }
+.cc-head-icon { color: var(--_kind); }
+/* §8.4: resolved is a SILHOUETTE, not a tint. The head glyph moves inside the hollow disc the
+   badge draws for the same state, the check rides beside it as a 10 px mark, and the bodies mute
+   — so a screenshot of a resolved thread says "resolved" with no colour, no motion and no word.
+   Before this the only response in the whole sheet was one \`color\` swap on a 14 px glyph. */
+.cc-thread[data-resolved='true'] .cc-head-icon {
+  width: 20px; height: 20px;
+  padding: 3px;
+  border-radius: var(--_r-pill);
+  color: var(--_muted);
+  box-shadow: inset 0 0 0 1.5px var(--_muted);
+}
+.cc-thread[data-resolved='true'] .cc-body,
+.cc-thread[data-resolved='true'] .cc-quote { color: var(--_muted); }
 .cc-thread[data-status='resolved'] .cc-head-icon { color: var(--_muted); }
 .cc-badge-marks { display: inline-flex; align-items: center; gap: 3px; color: var(--_muted); }
 .cc-head .cc-chip-slot { margin-left: auto; }
@@ -658,6 +738,20 @@ ${LIGHT}
 .cc-ghost:hover { background: var(--_accent-06); color: var(--_text); }
 .cc-ghost[data-variant='danger']:hover { color: var(--_danger); background: transparent; }
 .cc-ghost:focus-visible { outline: none; opacity: 1; box-shadow: var(--_focus); }
+/* §6.4 \`arm\` (A4): armed for four seconds after the first click. A tint AND a ring, because
+   §1.3 does not let colour carry a state on its own — and the control stays visible while it is
+   armed even in a row whose ghosts are \`opacity: 0\` at rest, or the second click would be a
+   click on something the user can no longer see. */
+.cc-ghost[data-confirm='true'],
+.cc-ghost[data-confirm='true']:hover {
+  opacity: 1;
+  color: var(--_danger);
+  background: color-mix(in oklab, var(--_danger) 10%, transparent);
+  box-shadow: inset 0 0 0 1.5px var(--_danger);
+}
+.cc-ghost[data-confirm='true']:focus-visible {
+  box-shadow: var(--_focus), inset 0 0 0 1.5px var(--_danger);
+}
 
 .cc-quote {
   margin: 0;
@@ -805,19 +899,51 @@ ${LIGHT}
   overflow-y: auto;
   overscroll-behavior: contain;
   scrollbar-width: none;
-  transition: translate var(--_d4) var(--_spring-1);
+  transition: translate var(--_d4) var(--_spring-1), clip-path var(--_d4) var(--_spring-1);
   animation: cc-emerge var(--_d4) var(--_spring-1);
 }
 .cc-panel::-webkit-scrollbar { display: none; }
 .cc-panel[data-open='true'] { display: flex; }
-/* Rail mode: a popover makes attention singular without costing the panel its state. */
-.cc-panel[data-rail='true'] { translate: calc(100% - 44px) 0; }
-.cc-panel[data-rail='true']:hover { translate: 0 0; }
+/* Rail mode (§8.5, amendment A2): a popover makes attention singular without costing the panel
+   its state. The sheet slides out AND is clipped to the 44 px that remain, so what is left is a
+   rail with its own rounded corners rather than a 300 px slab hanging half off the right edge of
+   the viewport — which is what "translate and fade the content" produced in a browser, and it
+   reads as a rendering bug rather than as a design. \`clip-path\` is on §6.3's animate list, so the
+   clip travels with the slide on the compositor. */
+.cc-panel[data-rail='true'] {
+  translate: calc(100% - 44px) 0;
+  clip-path: inset(0 calc(100% - 44px) 0 0 round var(--_r-xl));
+  overflow: hidden;
+}
+.cc-panel[data-rail='true']:hover {
+  translate: 0 0;
+  clip-path: inset(0 round var(--_r-xl));
+}
 .cc-panel[data-rail='true'] .cc-panel-head, .cc-panel[data-rail='true'] .cc-section {
   opacity: 0;
   transition: opacity 200ms var(--_ease-exit);
 }
 .cc-panel[data-rail='true']:hover .cc-panel-head, .cc-panel[data-rail='true']:hover .cc-section { opacity: 1; }
+
+/* …and the rail is not empty: the total count over the current section's glyph, which is the
+   smallest pair that says "your threads are still here, and this is the one you were reading". */
+.cc-rail {
+  position: absolute;
+  left: 0; top: 0;
+  z-index: 1;
+  display: none;
+  flex-direction: column;
+  align-items: center;
+  gap: 6px;
+  width: 44px;
+  padding: 12px 0;
+  color: var(--_muted);
+  opacity: 1;
+  transition: opacity var(--_d2) var(--_ease-std);
+}
+.cc-rail-count { color: var(--_text); font-size: 12px; font-variant-numeric: tabular-nums; }
+.cc-panel[data-rail='true'] .cc-rail { display: flex; }
+.cc-panel[data-rail='true']:hover .cc-rail { opacity: 0; }
 
 .cc-seed[data-corner='br'] { right: 16px; bottom: 16px; }
 .cc-seed[data-corner='bl'] { left: 16px; bottom: 16px; }
@@ -857,6 +983,7 @@ ${LIGHT}
 .cc-segment {
   display: inline-flex;
   flex: 1;
+  min-width: 0;
   align-items: center;
   justify-content: center;
   gap: 4px;
@@ -872,12 +999,18 @@ ${LIGHT}
   transition: background-color var(--_d3) var(--_spring-1), color var(--_d1) var(--_ease-std);
 }
 .cc-segment[aria-pressed='true'] {
+  flex: 1.9;
   background: var(--_surface);
   color: var(--_text);
   box-shadow: var(--_e0);
 }
 .cc-segment:focus-visible { outline: none; box-shadow: var(--_focus); }
 .cc-segment-count { font-variant-numeric: tabular-nums; font-size: 11px; }
+/* Amendment A1 — the one noun §10 puts back, on the selected segment only. 3 unlabelled
+   icon-pills in an unlabelled box is a puzzle; ten characters on the pill you are already looking
+   at is the smallest thing that answers it, and it costs no public token and no \`Labels\` key. */
+.cc-segment-label { display: none; overflow: hidden; white-space: nowrap; }
+.cc-segment[aria-pressed='true'] .cc-segment-label { display: inline; }
 
 .cc-section { display: none; flex-direction: column; }
 .cc-section[data-current='true'] { display: flex; }

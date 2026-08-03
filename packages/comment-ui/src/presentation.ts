@@ -175,6 +175,13 @@ export interface UIViewModel {
   /** Monotonic. Increments on every published model, never resets. */
   readonly seq: number
   readonly labels: Labels
+  /**
+   * `engine.modes`' kinds, in declaration order — the ordering, and nothing else about a `Mode`.
+   * A presentation has no mode list, so a kind's *index* is the one fact about modes it cannot
+   * re-derive, and a per-mode hue is exactly that fact (decision log #41, DESIGN §2.3). The
+   * offset table stays in the presentation, where a second appearance is free to disagree.
+   */
+  readonly kinds: readonly string[]
   readonly badges: readonly BadgeVM[]
   readonly thread: ThreadVM | null
   readonly composer: ComposerVM | null

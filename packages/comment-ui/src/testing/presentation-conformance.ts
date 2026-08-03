@@ -374,8 +374,16 @@ export function presentationConformance(presentation: () => Presentation): Confo
     const id = await s.seed('#a')
     s.ui.focus(id)
     await tick()
-    fire(control(visibleDialog(s.root, 'comment (1)')!, s.labels.delete), 'click')
-    await s.settle()
+    // The contract is that the delete is **reachable from the dialog by its accessible name and
+    // removes the thread** — not that it takes exactly one click. A presentation is free to arm
+    // a destructive control first (`docs/DESIGN.md` §6.4 `arm`: the glass appearance requires a
+    // second click within 4 s, on the same control, with the same name), so the case activates
+    // it until it fires. Two activations is the ceiling: a control that still has not deleted
+    // anything is a broken control, not a careful one.
+    for (let attempt = 0; attempt < 2 && s.engine.listThreads().length > 0; attempt += 1) {
+      fire(control(visibleDialog(s.root, 'comment (1)')!, s.labels.delete), 'click')
+      await s.settle()
+    }
     assertEqual(s.engine.listThreads().length, 0, 'the thread is gone')
     assert(s.root.activeElement !== null, 'focus stayed inside the shadow root')
     assertEqual(s.doc.activeElement, s.root.host, 'the page only ever sees the host')

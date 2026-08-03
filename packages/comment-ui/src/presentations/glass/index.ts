@@ -36,6 +36,7 @@ import type {
   UIViewModel,
 } from '../../presentation.ts'
 import type { ProximityTarget } from './intent.ts'
+import type { HueOf } from './kind.ts'
 import type { Panel } from './panel.ts'
 
 import { safeFocus, setAttr } from '../../dom.ts'
@@ -43,6 +44,7 @@ import { createBadgeLayer } from './badge.ts'
 import { createComposer } from './composer.ts'
 import { createSprite } from './icons.ts'
 import { createIntentTracker, createPolarityWatcher } from './intent.ts'
+import { createHueOf } from './kind.ts'
 import { prefersReducedMotion } from './motion.ts'
 import { createPanel } from './panel.ts'
 import { createPicker } from './picker.ts'
@@ -82,6 +84,9 @@ function createInstance(
   let lastFocus = -1
   /** The rect the picker last highlighted — the composer's morph origin after the click. */
   let pickRect: Rect | null = null
+  /** §2.3's hue table, rebuilt only when the engine's mode list itself changes identity. */
+  let kinds: readonly string[] = []
+  let hueOf: HueOf = createHueOf(kinds)
 
   /**
    * Apply the target whenever `focus.seq` changes, then do nothing until it changes again.
@@ -101,19 +106,24 @@ function createInstance(
   return {
     update(vm) {
       polarity.refresh()
-      badges.render(vm.badges, reduced)
+      // The model is referentially stable, so this rebuilds only when `engine.modes` did.
+      if (vm.kinds !== kinds) {
+        kinds = vm.kinds
+        hueOf = createHueOf(kinds)
+      }
+      badges.render(vm.badges, hueOf, reduced)
 
       // §6.6: the popover grows out of the badge that summoned it, and the composer out of the
       // rect the click landed on. Both origins are read from a live node at open time, once.
       const threadOrigin = vm.thread ? badges.rectFor(vm.thread.threadId) : null
-      thread.render(vm.thread, vm.labels, threadOrigin)
+      thread.render(vm.thread, vm.labels, threadOrigin, hueOf)
 
       if (vm.picker?.rect) pickRect = vm.picker.rect
       const replyRect = vm.composer?.replyTo ? badges.rectFor(vm.composer.replyTo) : null
-      composer.render(vm.composer, vm.labels, replyRect ?? pickRect)
+      composer.render(vm.composer, vm.labels, replyRect ?? pickRect, hueOf)
       if (!vm.composer) pickRect = null
 
-      picker.render(vm.picker)
+      picker.render(vm.picker, hueOf)
       if (vm.panel) {
         panel ??= createPanel(host, intents, vm.panel)
         // Rail mode: a popover makes attention singular without costing the panel its state.

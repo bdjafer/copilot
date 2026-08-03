@@ -17,6 +17,7 @@
  */
 
 import type { ComposerVM, Intents, Labels, PresentationHost } from '../../presentation.ts'
+import type { HueOf } from './kind.ts'
 
 import {
   deepActiveElement,
@@ -28,12 +29,13 @@ import {
   showFloating,
 } from '../../dom.ts'
 import { icon, kindIcon, setIcon } from './icons.ts'
+import { applyHue } from './kind.ts'
 import { transferOrigin, type Rectish } from './motion.ts'
 
 export interface Composer {
   readonly element: HTMLElement
   readonly input: HTMLTextAreaElement
-  render(composer: ComposerVM | null, labels: Labels, origin: Rectish | null): void
+  render(composer: ComposerVM | null, labels: Labels, origin: Rectish | null, hueOf: HueOf): void
   destroy(): void
 }
 
@@ -171,7 +173,7 @@ export function createComposer(host: PresentationHost, intents: Intents): Compos
     element,
     input,
 
-    render(composer, labels, origin) {
+    render(composer, labels, origin, hueOf) {
       setAttr(send, 'aria-label', labels.send)
       setAttr(send, 'title', labels.send)
       setAttr(pearl, 'aria-label', labels.placeholder)
@@ -191,6 +193,10 @@ export function createComposer(host: PresentationHost, intents: Intents): Compos
       setAttr(input, 'aria-label', composer.placeholder)
       setIcon(pearlGlyph, kindIcon(composer.kind))
       setAttr(pearl, 'data-kind', composer.kind)
+      // §2.3: the send disc is the composer's one saturated surface, so it is the one that says
+      // which mode you are composing in while the sheet itself stays neutral glass.
+      applyHue(element, hueOf, composer.kind)
+      applyHue(pearl, hueOf, composer.kind)
 
       if (!open) {
         open = true

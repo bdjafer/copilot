@@ -86,7 +86,9 @@ export function bootDemo(options = {}) {
   })
 
   const ui = CommentsUI.mountCommentUI(engine, {
-    panel: { defaultOpen: true },
+    // No `defaultOpen`. DESIGN §7 row 5 is "0 threads → zero pixels", and a demo whose headline
+    // is "nothing exists until intent is expressed" cannot open with a `0 · 0 · 0` card parked
+    // over the scenario it is trying to show. `⌥⇧C` and the seed are how you ask for it.
     // One field. That is the entire cost of a second appearance, and it is the whole argument
     // for the presentation seam: none of the logic below knows which one is mounted.
     ...(theme === 'glass' ? { presentation: CommentsUIGlass.glassPresentation() } : {}),

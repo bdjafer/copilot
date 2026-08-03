@@ -104,8 +104,12 @@ describe('bootDemo wires the page', () => {
     expect(Reflect.get(globalThis, 'demo')).toBe(api)
     expect(bar('.demo-bar-title').textContent).toBe('Basic static page')
     expect(bar('.demo-bar-hint').textContent).toBe('press C')
-    // The renderer is really mounted — shadow root, panel open by default.
-    expect(api.ui.root.querySelector('.cc-panel')?.getAttribute('data-open')).toBe('true')
+    // The renderer is really mounted — and the panel is CLOSED. DESIGN §7 row 5 is "0 threads →
+    // zero pixels", and a demo whose headline is "nothing exists until intent is expressed"
+    // cannot open with an empty `0 · 0 · 0` card parked over the scenario it is showing. It is
+    // one chord (`⌥⇧C`) or one seed click away, and the seed itself is zero pixels at zero.
+    expect(api.ui.root.querySelector('.cc-panel')?.getAttribute('data-open')).toBe('false')
+    expect(api.ui.panel.isOpen).toBe(false)
     // The pages' own configuration reached the engine, rather than the library defaults.
     expect(api.engine.modes.map((mode) => mode.kind)).toEqual(DEMO_MODES.map((mode) => mode.kind))
     // Back on the library default: the 0.9 the demo used to demand was a workaround for the
