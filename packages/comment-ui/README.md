@@ -1,8 +1,9 @@
 # @astrale-os/comment-ui
 
 **The renderer for [`@astrale-os/comment-core`](../comment-core).** Badges, a composer popover,
-a thread popover and a corner panel — one open shadow root, ~1,600 lines of vanilla TypeScript,
-no framework, no build-time CSS, and it never mutates the host page's DOM.
+a thread popover and a corner panel — one open shadow root, ~2,500 lines of vanilla TypeScript
+(~1,900 excluding blanks and comments), no framework, no build-time CSS, and it never mutates
+the host page's DOM.
 
 The entire public surface is **two functions, one method and a handful of CSS custom
 properties**:

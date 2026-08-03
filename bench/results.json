@@ -1,12 +1,528 @@
 {
-  "base": "http://127.0.0.1:4271",
-  "ranAt": "2026-08-03T01:13:04.143Z",
+  "base": "http://127.0.0.1:4272",
+  "ranAt": "2026-08-03T04:54:36.981Z",
   "results": [
+    {
+      "name": "static",
+      "page": "/pages/basic.html",
+      "url": "http://127.0.0.1:4272/pages/basic.html",
+      "id": "e5xDzDbjT3Ab",
+      "baseline": {
+        "domId": "intro",
+        "key": "P|Anchoring is a scoring problem, not a lookup: the engine stores several selectors per thre",
+        "path": "html>body:nth-child(2)>main:nth-child(2)>p:nth-child(4)",
+        "rect": {
+          "height": 51,
+          "left": 248,
+          "top": 504,
+          "width": 944
+        },
+        "tag": "P",
+        "text": "Anchoring is a scoring problem, not a lookup: the engine stores several selectors per thre"
+      },
+      "checks": [
+        {
+          "label": "placed",
+          "expect": {
+            "status": "anchored",
+            "same": true,
+            "tracks": true,
+            "minConfidence": 0.99
+          },
+          "fails": [],
+          "ok": true,
+          "probe": {
+            "badge": {
+              "anchorAttr": "anchored",
+              "approximate": false,
+              "borderStyle": "solid",
+              "center": {
+                "x": 1152,
+                "y": 499
+              },
+              "hidden": false,
+              "label": "comment (1)",
+              "marks": [],
+              "opacity": 1,
+              "statusAttr": "open"
+            },
+            "badgeOffset": {
+              "dx": -40,
+              "dy": -5
+            },
+            "comments": 1,
+            "confidence": 1,
+            "dockRect": {
+              "height": 51,
+              "left": 248,
+              "top": 504,
+              "width": 944
+            },
+            "element": {
+              "domId": "intro",
+              "key": "P|Anchoring is a scoring problem, not a lookup: the engine stores several selectors per thre",
+              "path": "html>body:nth-child(2)>main:nth-child(2)>p:nth-child(4)",
+              "rect": {
+                "height": 51,
+                "left": 248,
+                "top": 504,
+                "width": 944
+              },
+              "tag": "P",
+              "text": "Anchoring is a scoring problem, not a lookup: the engine stores several selectors per thre"
+            },
+            "found": true,
+            "id": "e5xDzDbjT3Ab",
+            "isOrphaned": false,
+            "isResolved": false,
+            "pageKey": "http://127.0.0.1:4272/pages/basic.html",
+            "panel": {
+              "counts": {
+                "open": 1,
+                "resolved": 0,
+                "unanchored": 0
+              },
+              "listed": true,
+              "section": "open"
+            },
+            "status": "anchored",
+            "threads": 1,
+            "via": "attr"
+          }
+        },
+        {
+          "label": "trace @ placement",
+          "trace": {
+            "accepted": {
+              "confidence": 1,
+              "via": "attr"
+            },
+            "attempts": [
+              {
+                "accepted": true,
+                "best": 1,
+                "candidates": 1,
+                "selector": "attr"
+              }
+            ],
+            "totalMs": 0.10000002384185792
+          },
+          "ok": true,
+          "fails": []
+        },
+        {
+          "label": "after reload",
+          "expect": {
+            "status": "anchored",
+            "same": true,
+            "tracks": true,
+            "minConfidence": 0.99,
+            "panelSection": "open"
+          },
+          "fails": [],
+          "ok": true,
+          "probe": {
+            "badge": {
+              "anchorAttr": "anchored",
+              "approximate": false,
+              "borderStyle": "solid",
+              "center": {
+                "x": 1175,
+                "y": 460
+              },
+              "hidden": false,
+              "label": "comment (2)",
+              "marks": [],
+              "opacity": 1,
+              "statusAttr": "open"
+            },
+            "badgeOffset": {
+              "dx": -17,
+              "dy": -5
+            },
+            "comments": 2,
+            "confidence": 1,
+            "dockRect": {
+              "height": 51,
+              "left": 248,
+              "top": 465,
+              "width": 944
+            },
+            "element": {
+              "domId": "intro",
+              "key": "P|Anchoring is a scoring problem, not a lookup: the engine stores several selectors per thre",
+              "path": "html>body:nth-child(2)>main:nth-child(2)>p:nth-child(4)",
+              "rect": {
+                "height": 51,
+                "left": 248,
+                "top": 465,
+                "width": 944
+              },
+              "tag": "P",
+              "text": "Anchoring is a scoring problem, not a lookup: the engine stores several selectors per thre"
+            },
+            "found": true,
+            "id": "e5xDzDbjT3Ab",
+            "isOrphaned": false,
+            "isResolved": false,
+            "pageKey": "http://127.0.0.1:4272/pages/basic.html",
+            "panel": {
+              "counts": {
+                "open": 1,
+                "resolved": 0,
+                "unanchored": 0
+              },
+              "listed": true,
+              "section": "open"
+            },
+            "status": "anchored",
+            "threads": 1,
+            "via": "attr"
+          }
+        },
+        {
+          "label": "trace @ reload",
+          "trace": {
+            "accepted": {
+              "confidence": 1,
+              "via": "attr"
+            },
+            "attempts": [
+              {
+                "accepted": true,
+                "best": 1,
+                "candidates": 1,
+                "selector": "attr"
+              }
+            ],
+            "totalMs": 0
+          },
+          "ok": true,
+          "fails": []
+        },
+        {
+          "label": "scrolled to bottom",
+          "expect": {
+            "status": "anchored",
+            "same": true
+          },
+          "fails": [],
+          "ok": true,
+          "probe": {
+            "badge": {
+              "anchorAttr": "anchored",
+              "approximate": false,
+              "borderStyle": "solid",
+              "center": {
+                "x": 1175,
+                "y": 78
+              },
+              "hidden": false,
+              "label": "comment (2)",
+              "marks": [],
+              "opacity": 1,
+              "statusAttr": "open"
+            },
+            "badgeOffset": {
+              "dx": -17,
+              "dy": -5
+            },
+            "comments": 2,
+            "confidence": 1,
+            "dockRect": {
+              "height": 51,
+              "left": 248,
+              "top": 465,
+              "width": 944
+            },
+            "element": {
+              "domId": "intro",
+              "key": "P|Anchoring is a scoring problem, not a lookup: the engine stores several selectors per thre",
+              "path": "html>body:nth-child(2)>main:nth-child(2)>p:nth-child(4)",
+              "rect": {
+                "height": 51,
+                "left": 248,
+                "top": 83,
+                "width": 944
+              },
+              "tag": "P",
+              "text": "Anchoring is a scoring problem, not a lookup: the engine stores several selectors per thre"
+            },
+            "found": true,
+            "id": "e5xDzDbjT3Ab",
+            "isOrphaned": false,
+            "isResolved": false,
+            "pageKey": "http://127.0.0.1:4272/pages/basic.html",
+            "panel": {
+              "counts": {
+                "open": 1,
+                "resolved": 0,
+                "unanchored": 0
+              },
+              "listed": true,
+              "section": "open"
+            },
+            "status": "anchored",
+            "threads": 1,
+            "via": "attr"
+          }
+        },
+        {
+          "label": "scrolled back",
+          "expect": {
+            "status": "anchored",
+            "same": true,
+            "tracks": true
+          },
+          "fails": [],
+          "ok": true,
+          "probe": {
+            "badge": {
+              "anchorAttr": "anchored",
+              "approximate": false,
+              "borderStyle": "solid",
+              "center": {
+                "x": 1175,
+                "y": 460
+              },
+              "hidden": false,
+              "label": "comment (2)",
+              "marks": [],
+              "opacity": 1,
+              "statusAttr": "open"
+            },
+            "badgeOffset": {
+              "dx": -17,
+              "dy": -5
+            },
+            "comments": 2,
+            "confidence": 1,
+            "dockRect": {
+              "height": 51,
+              "left": 248,
+              "top": 465,
+              "width": 944
+            },
+            "element": {
+              "domId": "intro",
+              "key": "P|Anchoring is a scoring problem, not a lookup: the engine stores several selectors per thre",
+              "path": "html>body:nth-child(2)>main:nth-child(2)>p:nth-child(4)",
+              "rect": {
+                "height": 51,
+                "left": 248,
+                "top": 465,
+                "width": 944
+              },
+              "tag": "P",
+              "text": "Anchoring is a scoring problem, not a lookup: the engine stores several selectors per thre"
+            },
+            "found": true,
+            "id": "e5xDzDbjT3Ab",
+            "isOrphaned": false,
+            "isResolved": false,
+            "pageKey": "http://127.0.0.1:4272/pages/basic.html",
+            "panel": {
+              "counts": {
+                "open": 1,
+                "resolved": 0,
+                "unanchored": 0
+              },
+              "listed": true,
+              "section": "open"
+            },
+            "status": "anchored",
+            "threads": 1,
+            "via": "attr"
+          }
+        }
+      ],
+      "error": null,
+      "ms": 5097
+    },
+    {
+      "name": "ambiguous",
+      "page": "/pages/basic.html",
+      "url": "http://127.0.0.1:4272/pages/basic.html",
+      "id": "Ln4aQIsJ9abS",
+      "baseline": {
+        "domId": null,
+        "key": "P|Identical siblings — the fingerprint has to break the tie.",
+        "path": "html>body:nth-child(2)>main:nth-child(2)>div:nth-child(11)>div:nth-child(2)>p:nth-child(2)",
+        "rect": {
+          "height": 77,
+          "left": 503,
+          "top": 671,
+          "width": 196
+        },
+        "tag": "P",
+        "text": "Identical siblings — the fingerprint has to break the tie."
+      },
+      "checks": [
+        {
+          "label": "placed on card \"Two\"",
+          "expect": {
+            "status": "anchored",
+            "same": true,
+            "tracks": true
+          },
+          "fails": [],
+          "ok": true,
+          "probe": {
+            "badge": {
+              "anchorAttr": "anchored",
+              "approximate": false,
+              "borderStyle": "solid",
+              "center": {
+                "x": 659,
+                "y": 666
+              },
+              "hidden": false,
+              "label": "comment (1)",
+              "marks": [],
+              "opacity": 1,
+              "statusAttr": "open"
+            },
+            "badgeOffset": {
+              "dx": -40,
+              "dy": -5
+            },
+            "comments": 1,
+            "confidence": 1,
+            "dockRect": {
+              "height": 77,
+              "left": 503,
+              "top": 1092,
+              "width": 196
+            },
+            "element": {
+              "domId": null,
+              "key": "P|Identical siblings — the fingerprint has to break the tie.",
+              "path": "html>body:nth-child(2)>main:nth-child(2)>div:nth-child(11)>div:nth-child(2)>p:nth-child(2)",
+              "rect": {
+                "height": 77,
+                "left": 503,
+                "top": 671,
+                "width": 196
+              },
+              "tag": "P",
+              "text": "Identical siblings — the fingerprint has to break the tie."
+            },
+            "found": true,
+            "id": "Ln4aQIsJ9abS",
+            "isOrphaned": false,
+            "isResolved": false,
+            "pageKey": "http://127.0.0.1:4272/pages/basic.html",
+            "panel": {
+              "counts": {
+                "open": 1,
+                "resolved": 0,
+                "unanchored": 0
+              },
+              "listed": true,
+              "section": "open"
+            },
+            "status": "anchored",
+            "threads": 1,
+            "via": "css"
+          }
+        },
+        {
+          "label": "after reload",
+          "expect": {
+            "status": "anchored",
+            "same": true,
+            "tracks": true
+          },
+          "fails": [],
+          "ok": true,
+          "probe": {
+            "badge": {
+              "anchorAttr": "anchored",
+              "approximate": false,
+              "borderStyle": "solid",
+              "center": {
+                "x": 682,
+                "y": 665
+              },
+              "hidden": false,
+              "label": "comment (1)",
+              "marks": [],
+              "opacity": 1,
+              "statusAttr": "open"
+            },
+            "badgeOffset": {
+              "dx": -17,
+              "dy": -5
+            },
+            "comments": 1,
+            "confidence": 1,
+            "dockRect": {
+              "height": 77,
+              "left": 503,
+              "top": 1052,
+              "width": 196
+            },
+            "element": {
+              "domId": null,
+              "key": "P|Identical siblings — the fingerprint has to break the tie.",
+              "path": "html>body:nth-child(2)>main:nth-child(2)>div:nth-child(11)>div:nth-child(2)>p:nth-child(2)",
+              "rect": {
+                "height": 77,
+                "left": 503,
+                "top": 670,
+                "width": 196
+              },
+              "tag": "P",
+              "text": "Identical siblings — the fingerprint has to break the tie."
+            },
+            "found": true,
+            "id": "Ln4aQIsJ9abS",
+            "isOrphaned": false,
+            "isResolved": false,
+            "pageKey": "http://127.0.0.1:4272/pages/basic.html",
+            "panel": {
+              "counts": {
+                "open": 1,
+                "resolved": 0,
+                "unanchored": 0
+              },
+              "listed": true,
+              "section": "open"
+            },
+            "status": "anchored",
+            "threads": 1,
+            "via": "css"
+          }
+        },
+        {
+          "label": "trace @ reload",
+          "trace": {
+            "accepted": {
+              "confidence": 1,
+              "via": "css"
+            },
+            "attempts": [
+              {
+                "accepted": true,
+                "best": 1,
+                "candidates": 1,
+                "selector": "css"
+              }
+            ],
+            "totalMs": 0.10000002384185792
+          },
+          "ok": true,
+          "fails": []
+        }
+      ],
+      "error": null,
+      "ms": 2417
+    },
     {
       "name": "reorder",
       "page": "/pages/reorder.html",
-      "url": "http://127.0.0.1:4271/pages/reorder.html",
-      "id": "2cKmZ2RMlW1m",
+      "url": "http://127.0.0.1:4272/pages/reorder.html",
+      "id": "aTAzxpExqbv2",
       "baseline": {
         "domId": null,
         "key": "LI|Kiwi — furry, sliced in half, eaten with a teaspoon",
@@ -80,10 +596,10 @@
               "text": "Kiwi — furry, sliced in half, eaten with a teaspoon"
             },
             "found": true,
-            "id": "2cKmZ2RMlW1m",
+            "id": "aTAzxpExqbv2",
             "isOrphaned": false,
             "isResolved": false,
-            "pageKey": "http://127.0.0.1:4271/pages/reorder.html",
+            "pageKey": "http://127.0.0.1:4272/pages/reorder.html",
             "panel": {
               "counts": {
                 "open": 1,
@@ -168,10 +684,10 @@
               "text": "Kiwi — furry, sliced in half, eaten with a teaspoon"
             },
             "found": true,
-            "id": "2cKmZ2RMlW1m",
+            "id": "aTAzxpExqbv2",
             "isOrphaned": false,
             "isResolved": false,
-            "pageKey": "http://127.0.0.1:4271/pages/reorder.html",
+            "pageKey": "http://127.0.0.1:4272/pages/reorder.html",
             "panel": {
               "counts": {
                 "open": 1,
@@ -211,7 +727,7 @@
               "borderStyle": "solid",
               "center": {
                 "x": 1175,
-                "y": 730
+                "y": 611
               },
               "hidden": false,
               "label": "comment (2)",
@@ -228,27 +744,27 @@
             "dockRect": {
               "height": 52,
               "left": 288,
-              "top": 1007,
+              "top": 888,
               "width": 904
             },
             "element": {
               "domId": null,
               "key": "LI|Kiwi — furry, sliced in half, eaten with a teaspoon",
-              "path": "html>body:nth-child(2)>main:nth-child(2)>ul:nth-child(4)>li:nth-child(5)",
+              "path": "html>body:nth-child(2)>main:nth-child(2)>ul:nth-child(4)>li:nth-child(3)",
               "rect": {
                 "height": 52,
                 "left": 288,
-                "top": 735,
+                "top": 616,
                 "width": 904
               },
               "tag": "LI",
               "text": "Kiwi — furry, sliced in half, eaten with a teaspoon"
             },
             "found": true,
-            "id": "2cKmZ2RMlW1m",
+            "id": "aTAzxpExqbv2",
             "isOrphaned": false,
             "isResolved": false,
-            "pageKey": "http://127.0.0.1:4271/pages/reorder.html",
+            "pageKey": "http://127.0.0.1:4272/pages/reorder.html",
             "panel": {
               "counts": {
                 "open": 1,
@@ -260,15 +776,15 @@
             },
             "status": "anchored",
             "threads": 1,
-            "via": "fingerprint-scan"
+            "via": "css"
           }
         },
         {
           "label": "DOM path across the shuffle",
           "note": {
             "placed": "html>body:nth-child(2)>main:nth-child(2)>ul:nth-child(4)>li:nth-child(3)",
-            "shuffled": "html>body:nth-child(2)>main:nth-child(2)>ul:nth-child(4)>li:nth-child(5)",
-            "moved": true
+            "shuffled": "html>body:nth-child(2)>main:nth-child(2)>ul:nth-child(4)>li:nth-child(3)",
+            "moved": false
           },
           "ok": true,
           "fails": []
@@ -278,29 +794,17 @@
           "trace": {
             "accepted": {
               "confidence": 0.999,
-              "via": "fingerprint-scan"
+              "via": "css"
             },
             "attempts": [
               {
-                "accepted": false,
-                "best": 0.773,
-                "candidates": 1,
-                "selector": "css"
-              },
-              {
-                "accepted": false,
-                "best": 0.773,
-                "candidates": 1,
-                "selector": "nthPath"
-              },
-              {
                 "accepted": true,
                 "best": 0.999,
-                "candidates": 13,
-                "selector": "fingerprint-scan"
+                "candidates": 1,
+                "selector": "css"
               }
             ],
-            "totalMs": 0.3999999761581421
+            "totalMs": 0.19999992847442627
           },
           "ok": true,
           "fails": []
@@ -317,10 +821,10 @@
             },
             "matches": {
               "@0.62": {
-                "confidence": 0.773,
+                "confidence": 0.999,
                 "element": {
                   "domId": null,
-                  "key": "LI|Apricot — ripens in July, bruises if you look at it",
+                  "key": "LI|Kiwi — furry, sliced in half, eaten with a teaspoon",
                   "path": "html>body:nth-child(2)>main:nth-child(2)>ul:nth-child(4)>li:nth-child(3)",
                   "rect": {
                     "height": 52,
@@ -329,7 +833,7 @@
                     "width": 904
                   },
                   "tag": "LI",
-                  "text": "Apricot — ripens in July, bruises if you look at it"
+                  "text": "Kiwi — furry, sliced in half, eaten with a teaspoon"
                 },
                 "via": "css"
               },
@@ -338,34 +842,34 @@
                 "element": {
                   "domId": null,
                   "key": "LI|Kiwi — furry, sliced in half, eaten with a teaspoon",
-                  "path": "html>body:nth-child(2)>main:nth-child(2)>ul:nth-child(4)>li:nth-child(5)",
+                  "path": "html>body:nth-child(2)>main:nth-child(2)>ul:nth-child(4)>li:nth-child(3)",
                   "rect": {
                     "height": 52,
                     "left": 288,
-                    "top": 735,
+                    "top": 616,
                     "width": 904
                   },
                   "tag": "LI",
                   "text": "Kiwi — furry, sliced in half, eaten with a teaspoon"
                 },
-                "via": "fingerprint-scan"
+                "via": "css"
               },
               "@0.9": {
                 "confidence": 0.999,
                 "element": {
                   "domId": null,
                   "key": "LI|Kiwi — furry, sliced in half, eaten with a teaspoon",
-                  "path": "html>body:nth-child(2)>main:nth-child(2)>ul:nth-child(4)>li:nth-child(5)",
+                  "path": "html>body:nth-child(2)>main:nth-child(2)>ul:nth-child(4)>li:nth-child(3)",
                   "rect": {
                     "height": 52,
                     "left": 288,
-                    "top": 735,
+                    "top": 616,
                     "width": 904
                   },
                   "tag": "LI",
                   "text": "Kiwi — furry, sliced in half, eaten with a teaspoon"
                 },
-                "via": "fingerprint-scan"
+                "via": "css"
               }
             },
             "mode": "element",
@@ -442,10 +946,10 @@
               "text": "Kiwi — furry, sliced in half, eaten with a teaspoon"
             },
             "found": true,
-            "id": "2cKmZ2RMlW1m",
+            "id": "aTAzxpExqbv2",
             "isOrphaned": false,
             "isResolved": false,
-            "pageKey": "http://127.0.0.1:4271/pages/reorder.html",
+            "pageKey": "http://127.0.0.1:4272/pages/reorder.html",
             "panel": {
               "counts": {
                 "open": 1,
@@ -519,10 +1023,10 @@
               "text": "Kiwi — furry, sliced in half, eaten with a teaspoon"
             },
             "found": true,
-            "id": "2cKmZ2RMlW1m",
+            "id": "aTAzxpExqbv2",
             "isOrphaned": false,
             "isResolved": false,
-            "pageKey": "http://127.0.0.1:4271/pages/reorder.html",
+            "pageKey": "http://127.0.0.1:4272/pages/reorder.html",
             "panel": {
               "counts": {
                 "open": 1,
@@ -580,10 +1084,10 @@
             },
             "element": null,
             "found": true,
-            "id": "2cKmZ2RMlW1m",
+            "id": "aTAzxpExqbv2",
             "isOrphaned": true,
             "isResolved": false,
-            "pageKey": "http://127.0.0.1:4271/pages/reorder.html",
+            "pageKey": "http://127.0.0.1:4272/pages/reorder.html",
             "panel": {
               "counts": {
                 "open": 0,
@@ -711,10 +1215,10 @@
               "text": "Kiwi — furry, sliced in half, eaten with a teaspoon"
             },
             "found": true,
-            "id": "2cKmZ2RMlW1m",
+            "id": "aTAzxpExqbv2",
             "isOrphaned": false,
             "isResolved": false,
-            "pageKey": "http://127.0.0.1:4271/pages/reorder.html",
+            "pageKey": "http://127.0.0.1:4272/pages/reorder.html",
             "panel": {
               "counts": {
                 "open": 1,
@@ -744,7 +1248,7 @@
                 "selector": "css"
               }
             ],
-            "totalMs": 0.10000002384185792
+            "totalMs": 0.20000004768371585
           },
           "ok": true,
           "fails": []
@@ -799,10 +1303,10 @@
               "text": "Kiwi — furry, sliced in half, eaten with a teaspoon"
             },
             "found": true,
-            "id": "2cKmZ2RMlW1m",
+            "id": "aTAzxpExqbv2",
             "isOrphaned": false,
             "isResolved": false,
-            "pageKey": "http://127.0.0.1:4271/pages/reorder.html",
+            "pageKey": "http://127.0.0.1:4272/pages/reorder.html",
             "panel": {
               "counts": {
                 "open": 1,
@@ -819,7 +1323,2250 @@
         }
       ],
       "error": null,
-      "ms": 6840
+      "ms": 6955
+    },
+    {
+      "name": "popover",
+      "page": "/pages/popover.html",
+      "url": "http://127.0.0.1:4272/pages/popover.html",
+      "id": "GKZ5PNwwraOV",
+      "baseline": {
+        "domId": null,
+        "key": "LI|Only show threads I authored",
+        "path": "html>body:nth-child(2)>div:nth-child(4)>ul:nth-child(2)>li:nth-child(2)",
+        "rect": {
+          "height": 52,
+          "left": 57,
+          "top": 905,
+          "width": 1366
+        },
+        "tag": "LI",
+        "text": "Only show threads I authored"
+      },
+      "checks": [
+        {
+          "label": "perturbation: open portalled popover",
+          "note": {
+            "selector": "#toggle-portal",
+            "how": "cdp-click"
+          },
+          "ok": true,
+          "fails": []
+        },
+        {
+          "label": "placed inside the open popover",
+          "expect": {
+            "status": "anchored",
+            "same": true,
+            "tracks": true,
+            "minConfidence": 0.9
+          },
+          "fails": [],
+          "ok": true,
+          "probe": {
+            "badge": {
+              "anchorAttr": "anchored",
+              "approximate": false,
+              "borderStyle": "solid",
+              "center": {
+                "x": 1383,
+                "y": 900
+              },
+              "hidden": false,
+              "label": "comment (1)",
+              "marks": [],
+              "opacity": 1,
+              "statusAttr": "open"
+            },
+            "badgeOffset": {
+              "dx": -40,
+              "dy": -5
+            },
+            "comments": 1,
+            "confidence": 0.999,
+            "dockRect": {
+              "height": 52,
+              "left": 57,
+              "top": 905,
+              "width": 1366
+            },
+            "element": {
+              "domId": null,
+              "key": "LI|Only show threads I authored",
+              "path": "html>body:nth-child(2)>div:nth-child(4)>ul:nth-child(2)>li:nth-child(2)",
+              "rect": {
+                "height": 52,
+                "left": 57,
+                "top": 905,
+                "width": 1366
+              },
+              "tag": "LI",
+              "text": "Only show threads I authored"
+            },
+            "found": true,
+            "id": "GKZ5PNwwraOV",
+            "isOrphaned": false,
+            "isResolved": false,
+            "pageKey": "http://127.0.0.1:4272/pages/popover.html",
+            "panel": {
+              "counts": {
+                "open": 1,
+                "resolved": 0,
+                "unanchored": 0
+              },
+              "listed": true,
+              "section": "open"
+            },
+            "status": "anchored",
+            "threads": 1,
+            "via": "css"
+          }
+        },
+        {
+          "label": "trace @ placement",
+          "trace": {
+            "accepted": {
+              "confidence": 0.999,
+              "via": "css"
+            },
+            "attempts": [
+              {
+                "accepted": true,
+                "best": 0.999,
+                "candidates": 1,
+                "selector": "css"
+              }
+            ],
+            "totalMs": 0.10000002384185792
+          },
+          "ok": true,
+          "fails": []
+        },
+        {
+          "label": "perturbation: close the popover (content unmounts)",
+          "note": {
+            "selector": "#toggle-portal",
+            "how": "cdp-click"
+          },
+          "ok": true,
+          "fails": []
+        },
+        {
+          "label": "orphaned while closed",
+          "expect": {
+            "status": "orphaned",
+            "docked": true,
+            "panelSection": "unanchored"
+          },
+          "fails": [],
+          "ok": true,
+          "probe": {
+            "badge": {
+              "anchorAttr": "orphaned",
+              "approximate": false,
+              "borderStyle": "dashed",
+              "center": {
+                "x": 1403,
+                "y": 931
+              },
+              "hidden": false,
+              "label": "comment (2)",
+              "marks": ["orphaned"],
+              "opacity": 0.55,
+              "statusAttr": "open"
+            },
+            "comments": 2,
+            "confidence": 0,
+            "dockRect": {
+              "height": 52,
+              "left": 57,
+              "top": 945,
+              "width": 1366
+            },
+            "element": null,
+            "found": true,
+            "id": "GKZ5PNwwraOV",
+            "isOrphaned": true,
+            "isResolved": false,
+            "pageKey": "http://127.0.0.1:4272/pages/popover.html",
+            "panel": {
+              "counts": {
+                "open": 0,
+                "resolved": 0,
+                "unanchored": 1
+              },
+              "listed": true,
+              "section": "unanchored"
+            },
+            "status": "orphaned",
+            "threads": 1,
+            "via": null
+          }
+        },
+        {
+          "label": "orphaning wrote nothing to the store",
+          "note": {
+            "equal": true,
+            "bytes": 1504
+          },
+          "ok": true,
+          "fails": []
+        },
+        {
+          "label": "perturbation: reopen the popover (brand new nodes)",
+          "note": {
+            "selector": "#toggle-portal",
+            "how": "cdp-click"
+          },
+          "ok": true,
+          "fails": []
+        },
+        {
+          "label": "re-anchored on reopen",
+          "expect": {
+            "status": "anchored",
+            "same": true,
+            "tracks": true
+          },
+          "fails": [],
+          "ok": true,
+          "probe": {
+            "badge": {
+              "anchorAttr": "anchored",
+              "approximate": false,
+              "borderStyle": "solid",
+              "center": {
+                "x": 1406,
+                "y": 747
+              },
+              "hidden": false,
+              "label": "comment (2)",
+              "marks": [],
+              "opacity": 1,
+              "statusAttr": "open"
+            },
+            "badgeOffset": {
+              "dx": -17,
+              "dy": -5
+            },
+            "comments": 2,
+            "confidence": 0.999,
+            "dockRect": {
+              "height": 52,
+              "left": 57,
+              "top": 947,
+              "width": 1366
+            },
+            "element": {
+              "domId": null,
+              "key": "LI|Only show threads I authored",
+              "path": "html>body:nth-child(2)>div:nth-child(4)>ul:nth-child(2)>li:nth-child(2)",
+              "rect": {
+                "height": 52,
+                "left": 57,
+                "top": 752,
+                "width": 1366
+              },
+              "tag": "LI",
+              "text": "Only show threads I authored"
+            },
+            "found": true,
+            "id": "GKZ5PNwwraOV",
+            "isOrphaned": false,
+            "isResolved": false,
+            "pageKey": "http://127.0.0.1:4272/pages/popover.html",
+            "panel": {
+              "counts": {
+                "open": 1,
+                "resolved": 0,
+                "unanchored": 0
+              },
+              "listed": true,
+              "section": "open"
+            },
+            "status": "anchored",
+            "threads": 1,
+            "via": "css"
+          }
+        },
+        {
+          "label": "DOM path across the unmount",
+          "note": {
+            "placed": "html>body:nth-child(2)>div:nth-child(4)>ul:nth-child(2)>li:nth-child(2)",
+            "reopened": "html>body:nth-child(2)>div:nth-child(4)>ul:nth-child(2)>li:nth-child(2)"
+          },
+          "ok": true,
+          "fails": []
+        },
+        {
+          "label": "trace @ reopen",
+          "trace": {
+            "accepted": {
+              "confidence": 0.999,
+              "via": "css"
+            },
+            "attempts": [
+              {
+                "accepted": true,
+                "best": 0.999,
+                "candidates": 1,
+                "selector": "css"
+              }
+            ],
+            "totalMs": 0.19999992847442627
+          },
+          "ok": true,
+          "fails": []
+        },
+        {
+          "label": "perturbation: re-render the open popover in place",
+          "note": {
+            "selector": "#churn",
+            "how": "cdp-click"
+          },
+          "ok": true,
+          "fails": []
+        },
+        {
+          "label": "after in-place re-render",
+          "expect": {
+            "status": "anchored",
+            "same": true,
+            "tracks": true
+          },
+          "fails": [],
+          "ok": true,
+          "probe": {
+            "badge": {
+              "anchorAttr": "anchored",
+              "approximate": false,
+              "borderStyle": "solid",
+              "center": {
+                "x": 1406,
+                "y": 747
+              },
+              "hidden": false,
+              "label": "comment (2)",
+              "marks": [],
+              "opacity": 1,
+              "statusAttr": "open"
+            },
+            "badgeOffset": {
+              "dx": -17,
+              "dy": -5
+            },
+            "comments": 2,
+            "confidence": 0.999,
+            "dockRect": {
+              "height": 52,
+              "left": 57,
+              "top": 947,
+              "width": 1366
+            },
+            "element": {
+              "domId": null,
+              "key": "LI|Only show threads I authored",
+              "path": "html>body:nth-child(2)>div:nth-child(4)>ul:nth-child(2)>li:nth-child(2)",
+              "rect": {
+                "height": 52,
+                "left": 57,
+                "top": 752,
+                "width": 1366
+              },
+              "tag": "LI",
+              "text": "Only show threads I authored"
+            },
+            "found": true,
+            "id": "GKZ5PNwwraOV",
+            "isOrphaned": false,
+            "isResolved": false,
+            "pageKey": "http://127.0.0.1:4272/pages/popover.html",
+            "panel": {
+              "counts": {
+                "open": 1,
+                "resolved": 0,
+                "unanchored": 0
+              },
+              "listed": true,
+              "section": "open"
+            },
+            "status": "anchored",
+            "threads": 1,
+            "via": "css"
+          }
+        },
+        {
+          "label": "perturbation: close before reload",
+          "note": {
+            "selector": "#toggle-portal",
+            "how": "cdp-click"
+          },
+          "ok": true,
+          "fails": []
+        },
+        {
+          "label": "after reload, popover closed — record survives",
+          "expect": {
+            "status": "orphaned",
+            "panelSection": "unanchored"
+          },
+          "fails": [],
+          "ok": true,
+          "probe": {
+            "badge": null,
+            "comments": 2,
+            "confidence": 0,
+            "dockRect": null,
+            "element": null,
+            "found": true,
+            "id": "GKZ5PNwwraOV",
+            "isOrphaned": true,
+            "isResolved": false,
+            "pageKey": "http://127.0.0.1:4272/pages/popover.html",
+            "panel": {
+              "counts": {
+                "open": 0,
+                "resolved": 0,
+                "unanchored": 1
+              },
+              "listed": true,
+              "section": "unanchored"
+            },
+            "status": "orphaned",
+            "threads": 1,
+            "via": null
+          }
+        },
+        {
+          "label": "after reload, popover closed — badge docks (PLAN §3.3)",
+          "expect": {
+            "docked": true
+          },
+          "fails": ["orphan has no docked badge", "orphan kept no dock rect"],
+          "ok": false,
+          "probe": {
+            "badge": null,
+            "comments": 2,
+            "confidence": 0,
+            "dockRect": null,
+            "element": null,
+            "found": true,
+            "id": "GKZ5PNwwraOV",
+            "isOrphaned": true,
+            "isResolved": false,
+            "pageKey": "http://127.0.0.1:4272/pages/popover.html",
+            "panel": {
+              "counts": {
+                "open": 0,
+                "resolved": 0,
+                "unanchored": 1
+              },
+              "listed": true,
+              "section": "unanchored"
+            },
+            "status": "orphaned",
+            "threads": 1,
+            "via": null
+          }
+        },
+        {
+          "label": "perturbation: open the popover after the reload",
+          "note": {
+            "selector": "#toggle-portal",
+            "how": "cdp-click"
+          },
+          "ok": true,
+          "fails": []
+        },
+        {
+          "label": "re-anchored after reload + reopen",
+          "expect": {
+            "status": "anchored",
+            "same": true,
+            "tracks": true
+          },
+          "fails": [],
+          "ok": true,
+          "probe": {
+            "badge": {
+              "anchorAttr": "anchored",
+              "approximate": false,
+              "borderStyle": "solid",
+              "center": {
+                "x": 1406,
+                "y": 881
+              },
+              "hidden": false,
+              "label": "comment (2)",
+              "marks": [],
+              "opacity": 1,
+              "statusAttr": "open"
+            },
+            "badgeOffset": {
+              "dx": -17,
+              "dy": -5
+            },
+            "comments": 2,
+            "confidence": 0.999,
+            "dockRect": {
+              "height": 52,
+              "left": 57,
+              "top": 886,
+              "width": 1366
+            },
+            "element": {
+              "domId": null,
+              "key": "LI|Only show threads I authored",
+              "path": "html>body:nth-child(2)>div:nth-child(4)>ul:nth-child(2)>li:nth-child(2)",
+              "rect": {
+                "height": 52,
+                "left": 57,
+                "top": 886,
+                "width": 1366
+              },
+              "tag": "LI",
+              "text": "Only show threads I authored"
+            },
+            "found": true,
+            "id": "GKZ5PNwwraOV",
+            "isOrphaned": false,
+            "isResolved": false,
+            "pageKey": "http://127.0.0.1:4272/pages/popover.html",
+            "panel": {
+              "counts": {
+                "open": 1,
+                "resolved": 0,
+                "unanchored": 0
+              },
+              "listed": true,
+              "section": "open"
+            },
+            "status": "anchored",
+            "threads": 1,
+            "via": "css"
+          }
+        },
+        {
+          "label": "trace @ reopen after reload",
+          "trace": {
+            "accepted": {
+              "confidence": 0.999,
+              "via": "css"
+            },
+            "attempts": [
+              {
+                "accepted": true,
+                "best": 0.999,
+                "candidates": 1,
+                "selector": "css"
+              }
+            ],
+            "totalMs": 0.09999990463256836
+          },
+          "ok": true,
+          "fails": []
+        },
+        {
+          "label": "perturbation: close portal, open the inline popover",
+          "note": {
+            "selector": "#toggle-portal",
+            "how": "cdp-click"
+          },
+          "ok": true,
+          "fails": []
+        },
+        {
+          "label": "perturbation: open inline popover",
+          "note": {
+            "selector": "#toggle-inline",
+            "how": "cdp-click"
+          },
+          "ok": true,
+          "fails": []
+        },
+        {
+          "label": "inline popover open",
+          "note": {
+            "open": true
+          },
+          "ok": true,
+          "fails": []
+        }
+      ],
+      "error": null,
+      "ms": 7306
+    },
+    {
+      "name": "infinite-scroll",
+      "page": "/pages/infinite-scroll.html",
+      "url": "http://127.0.0.1:4272/pages/infinite-scroll.html",
+      "id": "LWH8kvgkz5aH",
+      "baseline": {
+        "domId": null,
+        "key": "ARTICLE|Post #2The 1974 pressing has a wider stereo image than every reissue since. Fight me. (pos",
+        "path": "html>body:nth-child(2)>main:nth-child(2)>div:nth-child(4)>article:nth-child(2)",
+        "rect": {
+          "height": 134,
+          "left": 248,
+          "top": 644,
+          "width": 944
+        },
+        "tag": "ARTICLE",
+        "text": "Post #2The 1974 pressing has a wider stereo image than every reissue since. Fight me. (pos"
+      },
+      "checks": [
+        {
+          "label": "trigger key needs focus off the checkbox",
+          "note": {
+            "was": "INPUT[type=checkbox]"
+          },
+          "ok": true,
+          "fails": []
+        },
+        {
+          "label": "target",
+          "note": {
+            "path": "html>body:nth-child(2)>main:nth-child(2)>div:nth-child(4)>article:nth-child(2)",
+            "selector": "#feed > article:nth-child(2)"
+          },
+          "ok": true,
+          "fails": []
+        },
+        {
+          "label": "placed on post #2",
+          "expect": {
+            "status": "anchored",
+            "same": true,
+            "tracks": true
+          },
+          "fails": [],
+          "ok": true,
+          "probe": {
+            "badge": {
+              "anchorAttr": "anchored",
+              "approximate": false,
+              "borderStyle": "solid",
+              "center": {
+                "x": 1152,
+                "y": 639
+              },
+              "hidden": false,
+              "label": "comment (1)",
+              "marks": [],
+              "opacity": 1,
+              "statusAttr": "open"
+            },
+            "badgeOffset": {
+              "dx": -40,
+              "dy": -5
+            },
+            "comments": 1,
+            "confidence": 1,
+            "dockRect": {
+              "height": 134,
+              "left": 248,
+              "top": 769,
+              "width": 944
+            },
+            "element": {
+              "domId": null,
+              "key": "ARTICLE|Post #2The 1974 pressing has a wider stereo image than every reissue since. Fight me. (pos",
+              "path": "html>body:nth-child(2)>main:nth-child(2)>div:nth-child(4)>article:nth-child(2)",
+              "rect": {
+                "height": 134,
+                "left": 248,
+                "top": 644,
+                "width": 944
+              },
+              "tag": "ARTICLE",
+              "text": "Post #2The 1974 pressing has a wider stereo image than every reissue since. Fight me. (pos"
+            },
+            "found": true,
+            "id": "LWH8kvgkz5aH",
+            "isOrphaned": false,
+            "isResolved": false,
+            "pageKey": "http://127.0.0.1:4272/pages/infinite-scroll.html",
+            "panel": {
+              "counts": {
+                "open": 1,
+                "resolved": 0,
+                "unanchored": 0
+              },
+              "listed": true,
+              "section": "open"
+            },
+            "status": "anchored",
+            "threads": 1,
+            "via": "css"
+          }
+        },
+        {
+          "label": "trace @ placement",
+          "trace": {
+            "accepted": {
+              "confidence": 1,
+              "via": "css"
+            },
+            "attempts": [
+              {
+                "accepted": true,
+                "best": 1,
+                "candidates": 1,
+                "selector": "css"
+              }
+            ],
+            "totalMs": 0.10000002384185792
+          },
+          "ok": true,
+          "fails": []
+        },
+        {
+          "label": "after reload",
+          "expect": {
+            "status": "anchored",
+            "same": true,
+            "tracks": true
+          },
+          "fails": [],
+          "ok": true,
+          "probe": {
+            "badge": {
+              "anchorAttr": "anchored",
+              "approximate": false,
+              "borderStyle": "solid",
+              "center": {
+                "x": 1175,
+                "y": 640
+              },
+              "hidden": false,
+              "label": "comment (2)",
+              "marks": [],
+              "opacity": 1,
+              "statusAttr": "open"
+            },
+            "badgeOffset": {
+              "dx": -17,
+              "dy": -5
+            },
+            "comments": 2,
+            "confidence": 1,
+            "dockRect": {
+              "height": 134,
+              "left": 248,
+              "top": 730,
+              "width": 944
+            },
+            "element": {
+              "domId": null,
+              "key": "ARTICLE|Post #2The 1974 pressing has a wider stereo image than every reissue since. Fight me. (pos",
+              "path": "html>body:nth-child(2)>main:nth-child(2)>div:nth-child(4)>article:nth-child(2)",
+              "rect": {
+                "height": 134,
+                "left": 248,
+                "top": 645,
+                "width": 944
+              },
+              "tag": "ARTICLE",
+              "text": "Post #2The 1974 pressing has a wider stereo image than every reissue since. Fight me. (pos"
+            },
+            "found": true,
+            "id": "LWH8kvgkz5aH",
+            "isOrphaned": false,
+            "isResolved": false,
+            "pageKey": "http://127.0.0.1:4272/pages/infinite-scroll.html",
+            "panel": {
+              "counts": {
+                "open": 1,
+                "resolved": 0,
+                "unanchored": 0
+              },
+              "listed": true,
+              "section": "open"
+            },
+            "status": "anchored",
+            "threads": 1,
+            "via": "css"
+          }
+        },
+        {
+          "label": "scrolled the post off-screen",
+          "expect": {
+            "status": "anchored",
+            "same": true,
+            "badgeHidden": true,
+            "panelSection": "open"
+          },
+          "fails": [],
+          "ok": true,
+          "probe": {
+            "badge": {
+              "anchorAttr": "anchored",
+              "approximate": false,
+              "borderStyle": "solid",
+              "center": {
+                "x": 0,
+                "y": 0
+              },
+              "hidden": true,
+              "label": "comment (2)",
+              "marks": [],
+              "opacity": 1,
+              "statusAttr": "open"
+            },
+            "badgeOffset": {
+              "dx": -1192,
+              "dy": 815
+            },
+            "comments": 2,
+            "confidence": 1,
+            "dockRect": {
+              "height": 134,
+              "left": 248,
+              "top": 730,
+              "width": 944
+            },
+            "element": {
+              "domId": null,
+              "key": "ARTICLE|Post #2The 1974 pressing has a wider stereo image than every reissue since. Fight me. (pos",
+              "path": "html>body:nth-child(2)>main:nth-child(2)>div:nth-child(4)>article:nth-child(2)",
+              "rect": {
+                "height": 134,
+                "left": 248,
+                "top": -815,
+                "width": 944
+              },
+              "tag": "ARTICLE",
+              "text": "Post #2The 1974 pressing has a wider stereo image than every reissue since. Fight me. (pos"
+            },
+            "found": true,
+            "id": "LWH8kvgkz5aH",
+            "isOrphaned": false,
+            "isResolved": false,
+            "pageKey": "http://127.0.0.1:4272/pages/infinite-scroll.html",
+            "panel": {
+              "counts": {
+                "open": 1,
+                "resolved": 0,
+                "unanchored": 0
+              },
+              "listed": true,
+              "section": "open"
+            },
+            "status": "anchored",
+            "threads": 1,
+            "via": "css"
+          }
+        },
+        {
+          "label": "scrolled back",
+          "expect": {
+            "status": "anchored",
+            "same": true,
+            "tracks": true,
+            "badgeHidden": false
+          },
+          "fails": [],
+          "ok": true,
+          "probe": {
+            "badge": {
+              "anchorAttr": "anchored",
+              "approximate": false,
+              "borderStyle": "solid",
+              "center": {
+                "x": 1175,
+                "y": 378
+              },
+              "hidden": false,
+              "label": "comment (2)",
+              "marks": [],
+              "opacity": 1,
+              "statusAttr": "open"
+            },
+            "badgeOffset": {
+              "dx": -17,
+              "dy": -5
+            },
+            "comments": 2,
+            "confidence": 1,
+            "dockRect": {
+              "height": 134,
+              "left": 248,
+              "top": 730,
+              "width": 944
+            },
+            "element": {
+              "domId": null,
+              "key": "ARTICLE|Post #2The 1974 pressing has a wider stereo image than every reissue since. Fight me. (pos",
+              "path": "html>body:nth-child(2)>main:nth-child(2)>div:nth-child(4)>article:nth-child(2)",
+              "rect": {
+                "height": 134,
+                "left": 248,
+                "top": 383,
+                "width": 944
+              },
+              "tag": "ARTICLE",
+              "text": "Post #2The 1974 pressing has a wider stereo image than every reissue since. Fight me. (pos"
+            },
+            "found": true,
+            "id": "LWH8kvgkz5aH",
+            "isOrphaned": false,
+            "isResolved": false,
+            "pageKey": "http://127.0.0.1:4272/pages/infinite-scroll.html",
+            "panel": {
+              "counts": {
+                "open": 1,
+                "resolved": 0,
+                "unanchored": 0
+              },
+              "listed": true,
+              "section": "open"
+            },
+            "status": "anchored",
+            "threads": 1,
+            "via": "css"
+          }
+        },
+        {
+          "label": "perturbation: Load 10 more",
+          "note": {
+            "selector": "#more",
+            "how": "cdp-click"
+          },
+          "ok": true,
+          "fails": []
+        },
+        {
+          "label": "after 10 more posts",
+          "expect": {
+            "status": "anchored",
+            "same": true,
+            "tracks": true
+          },
+          "fails": [],
+          "ok": true,
+          "probe": {
+            "badge": {
+              "anchorAttr": "anchored",
+              "approximate": false,
+              "borderStyle": "solid",
+              "center": {
+                "x": 1175,
+                "y": 634
+              },
+              "hidden": false,
+              "label": "comment (2)",
+              "marks": [],
+              "opacity": 1,
+              "statusAttr": "open"
+            },
+            "badgeOffset": {
+              "dx": -17,
+              "dy": -5
+            },
+            "comments": 2,
+            "confidence": 1,
+            "dockRect": {
+              "height": 134,
+              "left": 248,
+              "top": 769,
+              "width": 944
+            },
+            "element": {
+              "domId": null,
+              "key": "ARTICLE|Post #2The 1974 pressing has a wider stereo image than every reissue since. Fight me. (pos",
+              "path": "html>body:nth-child(2)>main:nth-child(2)>div:nth-child(4)>article:nth-child(2)",
+              "rect": {
+                "height": 134,
+                "left": 248,
+                "top": 639,
+                "width": 944
+              },
+              "tag": "ARTICLE",
+              "text": "Post #2The 1974 pressing has a wider stereo image than every reissue since. Fight me. (pos"
+            },
+            "found": true,
+            "id": "LWH8kvgkz5aH",
+            "isOrphaned": false,
+            "isResolved": false,
+            "pageKey": "http://127.0.0.1:4272/pages/infinite-scroll.html",
+            "panel": {
+              "counts": {
+                "open": 1,
+                "resolved": 0,
+                "unanchored": 0
+              },
+              "listed": true,
+              "section": "open"
+            },
+            "status": "anchored",
+            "threads": 1,
+            "via": "css"
+          }
+        },
+        {
+          "label": "perturbation: Trim to the last 10",
+          "note": {
+            "selector": "#trim",
+            "how": "cdp-click"
+          },
+          "ok": true,
+          "fails": []
+        },
+        {
+          "label": "after the post is recycled away",
+          "expect": {
+            "status": "orphaned",
+            "docked": true
+          },
+          "fails": [
+            "status=anchored",
+            "MIS-ANCHOR: badge sits on \"Post #14The 1974 pressing has a wider stereo image than \" — expected \"Post #2The 1974 pressing has a wider stereo image than e\"",
+            "badge data-anchor=anchored",
+            "docked badge is not dimmed (opacity 1)",
+            "docked badge border solid",
+            "docked badge has no orphan glyph"
+          ],
+          "ok": false,
+          "probe": {
+            "badge": {
+              "anchorAttr": "anchored",
+              "approximate": false,
+              "borderStyle": "solid",
+              "center": {
+                "x": 1175,
+                "y": 635
+              },
+              "hidden": false,
+              "label": "comment (2)",
+              "marks": [],
+              "opacity": 1,
+              "statusAttr": "open"
+            },
+            "badgeOffset": {
+              "dx": -17,
+              "dy": -5
+            },
+            "comments": 2,
+            "confidence": 0.946,
+            "dockRect": {
+              "height": 134,
+              "left": 248,
+              "top": 809,
+              "width": 944
+            },
+            "element": {
+              "domId": null,
+              "key": "ARTICLE|Post #14The 1974 pressing has a wider stereo image than every reissue since. Fight me. (po",
+              "path": "html>body:nth-child(2)>main:nth-child(2)>div:nth-child(4)>article:nth-child(2)",
+              "rect": {
+                "height": 134,
+                "left": 248,
+                "top": 640,
+                "width": 944
+              },
+              "tag": "ARTICLE",
+              "text": "Post #14The 1974 pressing has a wider stereo image than every reissue since. Fight me. (po"
+            },
+            "found": true,
+            "id": "LWH8kvgkz5aH",
+            "isOrphaned": false,
+            "isResolved": false,
+            "pageKey": "http://127.0.0.1:4272/pages/infinite-scroll.html",
+            "panel": {
+              "counts": {
+                "open": 1,
+                "resolved": 0,
+                "unanchored": 0
+              },
+              "listed": true,
+              "section": "open"
+            },
+            "status": "anchored",
+            "threads": 1,
+            "via": "css"
+          }
+        },
+        {
+          "label": "trace @ trim",
+          "trace": {
+            "accepted": {
+              "confidence": 0.946,
+              "via": "css"
+            },
+            "attempts": [
+              {
+                "accepted": true,
+                "best": 0.946,
+                "candidates": 1,
+                "selector": "css"
+              }
+            ],
+            "totalMs": 0.2999999523162842
+          },
+          "ok": true,
+          "fails": []
+        },
+        {
+          "label": "stored anchor re-resolved after trim",
+          "resolve": {
+            "fingerprint": {
+              "attrs": {},
+              "id": null,
+              "stableClasses": ["card"],
+              "tag": "article",
+              "textDigest": "post #2the 1974 pressing has a wider stereo image than every reissue since. fight me. (pos"
+            },
+            "matches": {
+              "@0.62": {
+                "confidence": 0.946,
+                "element": {
+                  "domId": null,
+                  "key": "ARTICLE|Post #14The 1974 pressing has a wider stereo image than every reissue since. Fight me. (po",
+                  "path": "html>body:nth-child(2)>main:nth-child(2)>div:nth-child(4)>article:nth-child(2)",
+                  "rect": {
+                    "height": 134,
+                    "left": 248,
+                    "top": 640,
+                    "width": 944
+                  },
+                  "tag": "ARTICLE",
+                  "text": "Post #14The 1974 pressing has a wider stereo image than every reissue since. Fight me. (po"
+                },
+                "via": "css"
+              },
+              "@0.85": {
+                "confidence": 0.946,
+                "element": {
+                  "domId": null,
+                  "key": "ARTICLE|Post #14The 1974 pressing has a wider stereo image than every reissue since. Fight me. (po",
+                  "path": "html>body:nth-child(2)>main:nth-child(2)>div:nth-child(4)>article:nth-child(2)",
+                  "rect": {
+                    "height": 134,
+                    "left": 248,
+                    "top": 640,
+                    "width": 944
+                  },
+                  "tag": "ARTICLE",
+                  "text": "Post #14The 1974 pressing has a wider stereo image than every reissue since. Fight me. (po"
+                },
+                "via": "css"
+              },
+              "@0.9": {
+                "confidence": 0.946,
+                "element": {
+                  "domId": null,
+                  "key": "ARTICLE|Post #14The 1974 pressing has a wider stereo image than every reissue since. Fight me. (po",
+                  "path": "html>body:nth-child(2)>main:nth-child(2)>div:nth-child(4)>article:nth-child(2)",
+                  "rect": {
+                    "height": 134,
+                    "left": 248,
+                    "top": 640,
+                    "width": 944
+                  },
+                  "tag": "ARTICLE",
+                  "text": "Post #14The 1974 pressing has a wider stereo image than every reissue since. Fight me. (po"
+                },
+                "via": "css"
+              }
+            },
+            "mode": "element",
+            "selectors": [
+              {
+                "type": "css",
+                "value": "article:nth-of-type(2)"
+              },
+              {
+                "type": "nthPath",
+                "value": "html > body:nth-child(2) > main:nth-child(2) > div:nth-child(4) > article:nth-child(2)"
+              }
+            ]
+          },
+          "ok": true,
+          "fails": []
+        },
+        {
+          "label": "perturbation: Restore every post",
+          "note": {
+            "selector": "#restore",
+            "how": "cdp-click"
+          },
+          "ok": true,
+          "fails": []
+        },
+        {
+          "label": "after restore",
+          "expect": {
+            "status": "anchored",
+            "same": true,
+            "tracks": true
+          },
+          "fails": [],
+          "ok": true,
+          "probe": {
+            "badge": {
+              "anchorAttr": "anchored",
+              "approximate": false,
+              "borderStyle": "solid",
+              "center": {
+                "x": 1175,
+                "y": 634
+              },
+              "hidden": false,
+              "label": "comment (2)",
+              "marks": [],
+              "opacity": 1,
+              "statusAttr": "open"
+            },
+            "badgeOffset": {
+              "dx": -17,
+              "dy": -5
+            },
+            "comments": 2,
+            "confidence": 1,
+            "dockRect": {
+              "height": 134,
+              "left": 248,
+              "top": 811,
+              "width": 944
+            },
+            "element": {
+              "domId": null,
+              "key": "ARTICLE|Post #2The 1974 pressing has a wider stereo image than every reissue since. Fight me. (pos",
+              "path": "html>body:nth-child(2)>main:nth-child(2)>div:nth-child(4)>article:nth-child(2)",
+              "rect": {
+                "height": 134,
+                "left": 248,
+                "top": 639,
+                "width": 944
+              },
+              "tag": "ARTICLE",
+              "text": "Post #2The 1974 pressing has a wider stereo image than every reissue since. Fight me. (pos"
+            },
+            "found": true,
+            "id": "LWH8kvgkz5aH",
+            "isOrphaned": false,
+            "isResolved": false,
+            "pageKey": "http://127.0.0.1:4272/pages/infinite-scroll.html",
+            "panel": {
+              "counts": {
+                "open": 1,
+                "resolved": 0,
+                "unanchored": 0
+              },
+              "listed": true,
+              "section": "open"
+            },
+            "status": "anchored",
+            "threads": 1,
+            "via": "css"
+          }
+        },
+        {
+          "label": "trace @ restore",
+          "trace": {
+            "accepted": {
+              "confidence": 1,
+              "via": "css"
+            },
+            "attempts": [
+              {
+                "accepted": true,
+                "best": 1,
+                "candidates": 1,
+                "selector": "css"
+              }
+            ],
+            "totalMs": 0.2999999523162842
+          },
+          "ok": true,
+          "fails": []
+        }
+      ],
+      "error": null,
+      "ms": 6426
+    },
+    {
+      "name": "spa",
+      "page": "/pages/spa.html",
+      "url": "http://127.0.0.1:4272/pages/spa.html",
+      "id": "ZvIi4xgKba31",
+      "baseline": {
+        "domId": null,
+        "key": "LI|Re: the orphan dock — Wednesday",
+        "path": "html>body:nth-child(2)>main:nth-child(2)>section:nth-child(4)>ul:nth-child(2)>li:nth-child(2)",
+        "rect": {
+          "height": 52,
+          "left": 288,
+          "top": 826,
+          "width": 904
+        },
+        "tag": "LI",
+        "text": "Re: the orphan dock — Wednesday"
+      },
+      "checks": [
+        {
+          "label": "perturbation: route → inbox",
+          "note": {
+            "selector": "[data-route=\"inbox\"]",
+            "how": "cdp-click"
+          },
+          "ok": true,
+          "fails": []
+        },
+        {
+          "label": "placed on the inbox route",
+          "expect": {
+            "status": "anchored",
+            "same": true,
+            "tracks": true,
+            "threads": 1
+          },
+          "fails": [],
+          "ok": true,
+          "probe": {
+            "badge": {
+              "anchorAttr": "anchored",
+              "approximate": false,
+              "borderStyle": "solid",
+              "center": {
+                "x": 1152,
+                "y": 821
+              },
+              "hidden": false,
+              "label": "comment (1)",
+              "marks": [],
+              "opacity": 1,
+              "statusAttr": "open"
+            },
+            "badgeOffset": {
+              "dx": -40,
+              "dy": -5
+            },
+            "comments": 1,
+            "confidence": 0.999,
+            "dockRect": {
+              "height": 52,
+              "left": 288,
+              "top": 826,
+              "width": 904
+            },
+            "element": {
+              "domId": null,
+              "key": "LI|Re: the orphan dock — Wednesday",
+              "path": "html>body:nth-child(2)>main:nth-child(2)>section:nth-child(4)>ul:nth-child(2)>li:nth-child(2)",
+              "rect": {
+                "height": 52,
+                "left": 288,
+                "top": 826,
+                "width": 904
+              },
+              "tag": "LI",
+              "text": "Re: the orphan dock — Wednesday"
+            },
+            "found": true,
+            "id": "ZvIi4xgKba31",
+            "isOrphaned": false,
+            "isResolved": false,
+            "pageKey": "http://127.0.0.1:4272/pages/spa.html?route=inbox",
+            "panel": {
+              "counts": {
+                "open": 1,
+                "resolved": 0,
+                "unanchored": 0
+              },
+              "listed": true,
+              "section": "open"
+            },
+            "status": "anchored",
+            "threads": 1,
+            "via": "css"
+          }
+        },
+        {
+          "label": "perturbation: route → settings",
+          "note": {
+            "selector": "[data-route=\"settings\"]",
+            "how": "cdp-click"
+          },
+          "ok": true,
+          "fails": []
+        },
+        {
+          "label": "gone on another route",
+          "expect": {
+            "absent": true,
+            "threads": 0
+          },
+          "fails": [],
+          "ok": true,
+          "probe": {
+            "found": false,
+            "pageKey": "http://127.0.0.1:4272/pages/spa.html?route=settings",
+            "threads": 0
+          }
+        },
+        {
+          "label": "leaving the route deletes nothing",
+          "note": {
+            "pageKeyChanged": true,
+            "storeUnchanged": true,
+            "recordStillStored": true
+          },
+          "ok": true,
+          "fails": []
+        },
+        {
+          "label": "perturbation: route → inbox",
+          "note": {
+            "selector": "[data-route=\"inbox\"]",
+            "how": "cdp-click"
+          },
+          "ok": true,
+          "fails": []
+        },
+        {
+          "label": "back on the inbox route",
+          "expect": {
+            "status": "anchored",
+            "same": true,
+            "tracks": true,
+            "threads": 1
+          },
+          "fails": [],
+          "ok": true,
+          "probe": {
+            "badge": {
+              "anchorAttr": "anchored",
+              "approximate": false,
+              "borderStyle": "solid",
+              "center": {
+                "x": 1175,
+                "y": 727
+              },
+              "hidden": false,
+              "label": "comment (2)",
+              "marks": [],
+              "opacity": 1,
+              "statusAttr": "open"
+            },
+            "badgeOffset": {
+              "dx": -17,
+              "dy": -5
+            },
+            "comments": 2,
+            "confidence": 0.999,
+            "dockRect": {
+              "height": 52,
+              "left": 288,
+              "top": 848,
+              "width": 904
+            },
+            "element": {
+              "domId": null,
+              "key": "LI|Re: the orphan dock — Wednesday",
+              "path": "html>body:nth-child(2)>main:nth-child(2)>section:nth-child(4)>ul:nth-child(2)>li:nth-child(2)",
+              "rect": {
+                "height": 52,
+                "left": 288,
+                "top": 732,
+                "width": 904
+              },
+              "tag": "LI",
+              "text": "Re: the orphan dock — Wednesday"
+            },
+            "found": true,
+            "id": "ZvIi4xgKba31",
+            "isOrphaned": false,
+            "isResolved": false,
+            "pageKey": "http://127.0.0.1:4272/pages/spa.html?route=inbox",
+            "panel": {
+              "counts": {
+                "open": 1,
+                "resolved": 0,
+                "unanchored": 0
+              },
+              "listed": true,
+              "section": "open"
+            },
+            "status": "anchored",
+            "threads": 1,
+            "via": "css"
+          }
+        },
+        {
+          "label": "browser Back → settings",
+          "expect": {
+            "absent": true,
+            "threads": 0
+          },
+          "fails": [],
+          "ok": true,
+          "probe": {
+            "found": false,
+            "pageKey": "http://127.0.0.1:4272/pages/spa.html?route=settings",
+            "threads": 0
+          }
+        },
+        {
+          "label": "browser Forward → inbox",
+          "expect": {
+            "status": "anchored",
+            "same": true,
+            "tracks": true
+          },
+          "fails": [],
+          "ok": true,
+          "probe": {
+            "badge": {
+              "anchorAttr": "anchored",
+              "approximate": false,
+              "borderStyle": "solid",
+              "center": {
+                "x": 1175,
+                "y": 727
+              },
+              "hidden": false,
+              "label": "comment (2)",
+              "marks": [],
+              "opacity": 1,
+              "statusAttr": "open"
+            },
+            "badgeOffset": {
+              "dx": -17,
+              "dy": -5
+            },
+            "comments": 2,
+            "confidence": 0.999,
+            "dockRect": {
+              "height": 52,
+              "left": 288,
+              "top": 848,
+              "width": 904
+            },
+            "element": {
+              "domId": null,
+              "key": "LI|Re: the orphan dock — Wednesday",
+              "path": "html>body:nth-child(2)>main:nth-child(2)>section:nth-child(4)>ul:nth-child(2)>li:nth-child(2)",
+              "rect": {
+                "height": 52,
+                "left": 288,
+                "top": 732,
+                "width": 904
+              },
+              "tag": "LI",
+              "text": "Re: the orphan dock — Wednesday"
+            },
+            "found": true,
+            "id": "ZvIi4xgKba31",
+            "isOrphaned": false,
+            "isResolved": false,
+            "pageKey": "http://127.0.0.1:4272/pages/spa.html?route=inbox",
+            "panel": {
+              "counts": {
+                "open": 1,
+                "resolved": 0,
+                "unanchored": 0
+              },
+              "listed": true,
+              "section": "open"
+            },
+            "status": "anchored",
+            "threads": 1,
+            "via": "css"
+          }
+        },
+        {
+          "label": "hard reload on ?route=inbox",
+          "expect": {
+            "status": "anchored",
+            "same": true,
+            "tracks": true
+          },
+          "fails": [],
+          "ok": true,
+          "probe": {
+            "badge": {
+              "anchorAttr": "anchored",
+              "approximate": false,
+              "borderStyle": "solid",
+              "center": {
+                "x": 1175,
+                "y": 727
+              },
+              "hidden": false,
+              "label": "comment (2)",
+              "marks": [],
+              "opacity": 1,
+              "statusAttr": "open"
+            },
+            "badgeOffset": {
+              "dx": -17,
+              "dy": -5
+            },
+            "comments": 2,
+            "confidence": 0.999,
+            "dockRect": {
+              "height": 52,
+              "left": 288,
+              "top": 748,
+              "width": 904
+            },
+            "element": {
+              "domId": null,
+              "key": "LI|Re: the orphan dock — Wednesday",
+              "path": "html>body:nth-child(2)>main:nth-child(2)>section:nth-child(4)>ul:nth-child(2)>li:nth-child(2)",
+              "rect": {
+                "height": 52,
+                "left": 288,
+                "top": 732,
+                "width": 904
+              },
+              "tag": "LI",
+              "text": "Re: the orphan dock — Wednesday"
+            },
+            "found": true,
+            "id": "ZvIi4xgKba31",
+            "isOrphaned": false,
+            "isResolved": false,
+            "pageKey": "http://127.0.0.1:4272/pages/spa.html?route=inbox",
+            "panel": {
+              "counts": {
+                "open": 1,
+                "resolved": 0,
+                "unanchored": 0
+              },
+              "listed": true,
+              "section": "open"
+            },
+            "status": "anchored",
+            "threads": 1,
+            "via": "css"
+          }
+        },
+        {
+          "label": "trace @ reload",
+          "trace": {
+            "accepted": {
+              "confidence": 0.999,
+              "via": "css"
+            },
+            "attempts": [
+              {
+                "accepted": true,
+                "best": 0.999,
+                "candidates": 1,
+                "selector": "css"
+              }
+            ],
+            "totalMs": 0.10000002384185792
+          },
+          "ok": true,
+          "fails": []
+        }
+      ],
+      "error": null,
+      "ms": 7066
+    },
+    {
+      "name": "attribute-churn",
+      "page": "/pages/attribute-churn.html",
+      "url": "http://127.0.0.1:4272/pages/attribute-churn.html",
+      "id": "lsAEm2VVEKJQ",
+      "baseline": {
+        "domId": ":r01:",
+        "key": "P|A fingerprint records the tag, the role, the depth and the neighbours — not the class list",
+        "path": "html>body:nth-child(2)>main:nth-child(2)>section:nth-child(4)>p:nth-child(2)",
+        "rect": {
+          "height": 52,
+          "left": 248,
+          "top": 825,
+          "width": 944
+        },
+        "tag": "P",
+        "text": "A fingerprint records the tag, the role, the depth and the neighbours — not the class list"
+      },
+      "checks": [
+        {
+          "label": "placed",
+          "expect": {
+            "status": "anchored",
+            "same": true,
+            "tracks": true
+          },
+          "fails": [],
+          "ok": true,
+          "probe": {
+            "badge": {
+              "anchorAttr": "anchored",
+              "approximate": false,
+              "borderStyle": "solid",
+              "center": {
+                "x": 1152,
+                "y": 820
+              },
+              "hidden": false,
+              "label": "comment (1)",
+              "marks": [],
+              "opacity": 1,
+              "statusAttr": "open"
+            },
+            "badgeOffset": {
+              "dx": -40,
+              "dy": -5
+            },
+            "comments": 1,
+            "confidence": 1,
+            "dockRect": {
+              "height": 52,
+              "left": 248,
+              "top": 825,
+              "width": 944
+            },
+            "element": {
+              "domId": ":r01:",
+              "key": "P|A fingerprint records the tag, the role, the depth and the neighbours — not the class list",
+              "path": "html>body:nth-child(2)>main:nth-child(2)>section:nth-child(4)>p:nth-child(2)",
+              "rect": {
+                "height": 52,
+                "left": 248,
+                "top": 825,
+                "width": 944
+              },
+              "tag": "P",
+              "text": "A fingerprint records the tag, the role, the depth and the neighbours — not the class list"
+            },
+            "found": true,
+            "id": "lsAEm2VVEKJQ",
+            "isOrphaned": false,
+            "isResolved": false,
+            "pageKey": "http://127.0.0.1:4272/pages/attribute-churn.html",
+            "panel": {
+              "counts": {
+                "open": 1,
+                "resolved": 0,
+                "unanchored": 0
+              },
+              "listed": true,
+              "section": "open"
+            },
+            "status": "anchored",
+            "threads": 1,
+            "via": "attr"
+          }
+        },
+        {
+          "label": "trace @ placement",
+          "trace": {
+            "accepted": {
+              "confidence": 1,
+              "via": "attr"
+            },
+            "attempts": [
+              {
+                "accepted": true,
+                "best": 1,
+                "candidates": 1,
+                "selector": "attr"
+              }
+            ],
+            "totalMs": 0.20000004768371585
+          },
+          "ok": true,
+          "fails": []
+        },
+        {
+          "label": "after reload (classes re-hashed on every render)",
+          "expect": {
+            "status": "anchored",
+            "same": true,
+            "tracks": true
+          },
+          "fails": [],
+          "ok": true,
+          "probe": {
+            "badge": {
+              "anchorAttr": "anchored",
+              "approximate": false,
+              "borderStyle": "solid",
+              "center": {
+                "x": 1175,
+                "y": 781
+              },
+              "hidden": false,
+              "label": "comment (2)",
+              "marks": [],
+              "opacity": 1,
+              "statusAttr": "open"
+            },
+            "badgeOffset": {
+              "dx": -17,
+              "dy": -5
+            },
+            "comments": 2,
+            "confidence": 1,
+            "dockRect": {
+              "height": 52,
+              "left": 248,
+              "top": 786,
+              "width": 944
+            },
+            "element": {
+              "domId": ":r01:",
+              "key": "P|A fingerprint records the tag, the role, the depth and the neighbours — not the class list",
+              "path": "html>body:nth-child(2)>main:nth-child(2)>section:nth-child(4)>p:nth-child(2)",
+              "rect": {
+                "height": 52,
+                "left": 248,
+                "top": 786,
+                "width": 944
+              },
+              "tag": "P",
+              "text": "A fingerprint records the tag, the role, the depth and the neighbours — not the class list"
+            },
+            "found": true,
+            "id": "lsAEm2VVEKJQ",
+            "isOrphaned": false,
+            "isResolved": false,
+            "pageKey": "http://127.0.0.1:4272/pages/attribute-churn.html",
+            "panel": {
+              "counts": {
+                "open": 1,
+                "resolved": 0,
+                "unanchored": 0
+              },
+              "listed": true,
+              "section": "open"
+            },
+            "status": "anchored",
+            "threads": 1,
+            "via": "attr"
+          }
+        },
+        {
+          "label": "trace @ reload",
+          "trace": {
+            "accepted": {
+              "confidence": 1,
+              "via": "attr"
+            },
+            "attempts": [
+              {
+                "accepted": true,
+                "best": 1,
+                "candidates": 1,
+                "selector": "attr"
+              }
+            ],
+            "totalMs": 0.10000002384185792
+          },
+          "ok": true,
+          "fails": []
+        },
+        {
+          "label": "perturbation: Churn hashed classes",
+          "note": {
+            "selector": "#churn-classes",
+            "how": "cdp-click"
+          },
+          "ok": true,
+          "fails": []
+        },
+        {
+          "label": "after class churn",
+          "expect": {
+            "status": "anchored",
+            "same": true,
+            "tracks": true
+          },
+          "fails": [],
+          "ok": true,
+          "probe": {
+            "badge": {
+              "anchorAttr": "anchored",
+              "approximate": false,
+              "borderStyle": "solid",
+              "center": {
+                "x": 1175,
+                "y": 660
+              },
+              "hidden": false,
+              "label": "comment (2)",
+              "marks": [],
+              "opacity": 1,
+              "statusAttr": "open"
+            },
+            "badgeOffset": {
+              "dx": -17,
+              "dy": -5
+            },
+            "comments": 2,
+            "confidence": 1,
+            "dockRect": {
+              "height": 52,
+              "left": 248,
+              "top": 825,
+              "width": 944
+            },
+            "element": {
+              "domId": ":r01:",
+              "key": "P|A fingerprint records the tag, the role, the depth and the neighbours — not the class list",
+              "path": "html>body:nth-child(2)>main:nth-child(2)>section:nth-child(4)>p:nth-child(2)",
+              "rect": {
+                "height": 52,
+                "left": 248,
+                "top": 665,
+                "width": 944
+              },
+              "tag": "P",
+              "text": "A fingerprint records the tag, the role, the depth and the neighbours — not the class list"
+            },
+            "found": true,
+            "id": "lsAEm2VVEKJQ",
+            "isOrphaned": false,
+            "isResolved": false,
+            "pageKey": "http://127.0.0.1:4272/pages/attribute-churn.html",
+            "panel": {
+              "counts": {
+                "open": 1,
+                "resolved": 0,
+                "unanchored": 0
+              },
+              "listed": true,
+              "section": "open"
+            },
+            "status": "anchored",
+            "threads": 1,
+            "via": "attr"
+          }
+        },
+        {
+          "label": "trace @ class churn",
+          "trace": {
+            "accepted": {
+              "confidence": 1,
+              "via": "attr"
+            },
+            "attempts": [
+              {
+                "accepted": true,
+                "best": 1,
+                "candidates": 1,
+                "selector": "attr"
+              }
+            ],
+            "totalMs": 0.19999992847442627
+          },
+          "ok": true,
+          "fails": []
+        },
+        {
+          "label": "perturbation: Churn ids and data attributes too",
+          "note": {
+            "selector": "#churn-all",
+            "how": "cdp-click"
+          },
+          "ok": true,
+          "fails": []
+        },
+        {
+          "label": "after id + data-* churn",
+          "expect": {
+            "status": "anchored",
+            "same": true
+          },
+          "fails": ["status=orphaned", "no anchored element"],
+          "ok": false,
+          "probe": {
+            "badge": {
+              "anchorAttr": "orphaned",
+              "approximate": false,
+              "borderStyle": "dashed",
+              "center": {
+                "x": 1172,
+                "y": 621
+              },
+              "hidden": false,
+              "label": "comment (2)",
+              "marks": ["orphaned"],
+              "opacity": 0.55,
+              "statusAttr": "open"
+            },
+            "comments": 2,
+            "confidence": 0,
+            "dockRect": {
+              "height": 52,
+              "left": 248,
+              "top": 825,
+              "width": 944
+            },
+            "element": null,
+            "found": true,
+            "id": "lsAEm2VVEKJQ",
+            "isOrphaned": true,
+            "isResolved": false,
+            "pageKey": "http://127.0.0.1:4272/pages/attribute-churn.html",
+            "panel": {
+              "counts": {
+                "open": 0,
+                "resolved": 0,
+                "unanchored": 1
+              },
+              "listed": true,
+              "section": "unanchored"
+            },
+            "status": "orphaned",
+            "threads": 1,
+            "via": null
+          }
+        },
+        {
+          "label": "trace @ id churn",
+          "trace": {
+            "accepted": null,
+            "attempts": [
+              {
+                "accepted": false,
+                "best": 0,
+                "candidates": 0,
+                "selector": "attr"
+              },
+              {
+                "accepted": false,
+                "best": 0.575,
+                "candidates": 1,
+                "selector": "css"
+              },
+              {
+                "accepted": false,
+                "best": 0.575,
+                "candidates": 1,
+                "selector": "nthPath"
+              },
+              {
+                "accepted": false,
+                "best": 0.575,
+                "candidates": 5,
+                "selector": "fingerprint-scan"
+              }
+            ],
+            "totalMs": 0.3999999761581421
+          },
+          "ok": true,
+          "fails": []
+        },
+        {
+          "label": "stored anchor re-resolved after id churn",
+          "resolve": {
+            "fingerprint": {
+              "attrs": {
+                "aria-describedby": "desc-0-1",
+                "data-reactid": "1",
+                "data-testid": "row-0-1"
+              },
+              "id": ":r01:",
+              "stableClasses": ["card"],
+              "tag": "p",
+              "textDigest": "a fingerprint records the tag, the role, the depth and the neighbours — not the class list"
+            },
+            "matches": {
+              "@0.62": null,
+              "@0.85": null,
+              "@0.9": null
+            },
+            "mode": "element",
+            "selectors": [
+              {
+                "type": "attr",
+                "value": null
+              },
+              {
+                "type": "css",
+                "value": "p:nth-of-type(2)"
+              },
+              {
+                "type": "nthPath",
+                "value": "html > body:nth-child(2) > main:nth-child(2) > section:nth-child(4) > p:nth-child(2)"
+              }
+            ]
+          },
+          "ok": true,
+          "fails": []
+        },
+        {
+          "label": "perturbation: Reset to the original markup",
+          "note": {
+            "selector": "#reset",
+            "how": "cdp-click"
+          },
+          "ok": true,
+          "fails": []
+        },
+        {
+          "label": "after reset",
+          "expect": {
+            "status": "anchored",
+            "same": true,
+            "tracks": true
+          },
+          "fails": [],
+          "ok": true,
+          "probe": {
+            "badge": {
+              "anchorAttr": "anchored",
+              "approximate": false,
+              "borderStyle": "solid",
+              "center": {
+                "x": 1175,
+                "y": 660
+              },
+              "hidden": false,
+              "label": "comment (2)",
+              "marks": [],
+              "opacity": 1,
+              "statusAttr": "open"
+            },
+            "badgeOffset": {
+              "dx": -17,
+              "dy": -5
+            },
+            "comments": 2,
+            "confidence": 1,
+            "dockRect": {
+              "height": 52,
+              "left": 248,
+              "top": 886,
+              "width": 944
+            },
+            "element": {
+              "domId": ":r01:",
+              "key": "P|A fingerprint records the tag, the role, the depth and the neighbours — not the class list",
+              "path": "html>body:nth-child(2)>main:nth-child(2)>section:nth-child(4)>p:nth-child(2)",
+              "rect": {
+                "height": 52,
+                "left": 248,
+                "top": 665,
+                "width": 944
+              },
+              "tag": "P",
+              "text": "A fingerprint records the tag, the role, the depth and the neighbours — not the class list"
+            },
+            "found": true,
+            "id": "lsAEm2VVEKJQ",
+            "isOrphaned": false,
+            "isResolved": false,
+            "pageKey": "http://127.0.0.1:4272/pages/attribute-churn.html",
+            "panel": {
+              "counts": {
+                "open": 1,
+                "resolved": 0,
+                "unanchored": 0
+              },
+              "listed": true,
+              "section": "open"
+            },
+            "status": "anchored",
+            "threads": 1,
+            "via": "attr"
+          }
+        },
+        {
+          "label": "perturbation: Rewrite the text too",
+          "note": {
+            "selector": "#retext",
+            "how": "cdp-click"
+          },
+          "ok": true,
+          "fails": []
+        },
+        {
+          "label": "after the text is rewritten",
+          "expect": {
+            "allowDifferent": true
+          },
+          "fails": [],
+          "ok": true,
+          "probe": {
+            "badge": {
+              "anchorAttr": "anchored",
+              "approximate": false,
+              "borderStyle": "solid",
+              "center": {
+                "x": 1175,
+                "y": 659
+              },
+              "hidden": false,
+              "label": "comment (2)",
+              "marks": [],
+              "opacity": 1,
+              "statusAttr": "open"
+            },
+            "badgeOffset": {
+              "dx": -17,
+              "dy": -5
+            },
+            "comments": 2,
+            "confidence": 0.988,
+            "dockRect": {
+              "height": 52,
+              "left": 248,
+              "top": 886,
+              "width": 944
+            },
+            "element": {
+              "domId": ":r01:",
+              "key": "P|A fingerprint records the tag, the role, the depth and the neighbours — not the class list",
+              "path": "html>body:nth-child(2)>main:nth-child(2)>section:nth-child(4)>p:nth-child(2)",
+              "rect": {
+                "height": 52,
+                "left": 248,
+                "top": 664,
+                "width": 944
+              },
+              "tag": "P",
+              "text": "A fingerprint records the tag, the role, the depth and the neighbours — not the class list"
+            },
+            "found": true,
+            "id": "lsAEm2VVEKJQ",
+            "isOrphaned": false,
+            "isResolved": false,
+            "pageKey": "http://127.0.0.1:4272/pages/attribute-churn.html",
+            "panel": {
+              "counts": {
+                "open": 1,
+                "resolved": 0,
+                "unanchored": 0
+              },
+              "listed": true,
+              "section": "open"
+            },
+            "status": "anchored",
+            "threads": 1,
+            "via": "attr"
+          }
+        },
+        {
+          "label": "trace @ retext",
+          "trace": {
+            "accepted": {
+              "confidence": 0.988,
+              "via": "attr"
+            },
+            "attempts": [
+              {
+                "accepted": true,
+                "best": 0.988,
+                "candidates": 1,
+                "selector": "attr"
+              }
+            ],
+            "totalMs": 0.10000002384185792
+          },
+          "ok": true,
+          "fails": []
+        }
+      ],
+      "error": null,
+      "ms": 5672
     }
   ]
 }

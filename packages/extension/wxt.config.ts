@@ -4,7 +4,7 @@ export default defineConfig({
   manifest: {
     name: 'exp-spec',
     description: 'Anchored comment threads + browser copilot (internal)',
-    // `tabs` is what makes `tabForPageKey` work: `tabs.query({})` only returns `url` for tabs
+    // `tabs` is what makes `tabsForPageKey` work: `tabs.query({})` only returns `url` for tabs
     // the extension may see, and the tool transport routes by the RUN's page rather than by
     // whatever tab happens to be focused.
     permissions: ['storage', 'alarms', 'unlimitedStorage', 'tabs'],

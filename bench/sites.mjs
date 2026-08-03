@@ -28,6 +28,7 @@ import {
   open,
   placeComment,
   reload,
+  scrollIntoView,
   setViewport,
   shot,
   sleep,
@@ -38,27 +39,59 @@ const CORE = readFileSync(resolve(VENDOR, 'comment-core.iife.js'), 'utf8')
 const UI = readFileSync(resolve(VENDOR, 'comment-ui.iife.js'), 'utf8')
 const NAMESPACE = 'exp-spec-bench'
 
+/**
+ * Prepended to every site's `pick` snippet.
+ *
+ * Real sites are not the demo: they wrap prose in generated containers (Parsoid `<section
+ * id="mwAQ">`, MDN's `.content-section`) whose own selectors are as volatile as the thing we are
+ * trying to locate. So the bench does not hand-write a site selector — it picks the element by
+ * its *content*, then derives a positional `:nth-child` path to click it. The path is the
+ * bench's own pointer for the CDP click; the engine never sees it, and what gets measured is
+ * whatever anchor `captureTarget` decides to store for that element.
+ */
+const PICK_PRELUDE = String.raw`
+const pathOf = (el) => {
+  const parts = []
+  for (let n = el; n && n.nodeType === 1 && n !== document.body; n = n.parentElement) {
+    const p = n.parentElement
+    if (!p) break
+    parts.unshift(n.tagName.toLowerCase() + ':nth-child(' + ([...p.children].indexOf(n) + 1) + ')')
+  }
+  return 'body > ' + parts.join(' > ')
+}
+const describe = (el) => ({ selector: pathOf(el), tag: el.tagName, text: norm(el.textContent).slice(0, 80) })
+`
+
 const SITES = [
   {
     name: 'wikipedia',
     url: 'https://en.wikipedia.org/wiki/Anchor',
-    // A body paragraph deep in the article: no id, no data-*, plenty of text.
-    target: `
+    // A body paragraph deep in the article: no id, no data-*, plenty of prose. Parsoid nests
+    // every paragraph inside a generated <section id="mwXX">, so ':scope > p' finds nothing —
+    // the 2026 markup, not the 2015 one the old selector assumed.
+    pick: `
       const root = document.querySelector('#mw-content-text .mw-parser-output')
-      const p = [...root.querySelectorAll(':scope > p')].filter((n) => n.textContent.trim().length > 240)[1]
-      const index = [...p.parentElement.children].indexOf(p) + 1
-      return { selector: '#mw-content-text .mw-parser-output > *:nth-child(' + index + ')' }
+      if (!root) return { selector: null, why: 'no .mw-parser-output' }
+      const p = [...root.querySelectorAll('p')].filter((n) => n.textContent.trim().length > 240)[1]
+      return p ? describe(p) : { selector: null, why: 'no long paragraph' }
     `,
   },
   {
     name: 'mdn',
     url: 'https://developer.mozilla.org/en-US/docs/Web/API/MutationObserver',
-    target: `
-      const root = document.querySelector('.section-content') || document.querySelector('article')
-      const p = [...root.querySelectorAll('p')].filter((n) => n.textContent.trim().length > 120)[0]
-      const index = [...p.parentElement.children].indexOf(p) + 1
-      const parent = p.parentElement.className.split(' ')[0]
-      return { selector: '.' + parent + ' > *:nth-child(' + index + ')' }
+    // The hardest kind of real-world target: a paragraph with **no id, no class, no data-***,
+    // so the stored fingerprint is text + structure only. `.section-content` is gone from MDN's
+    // 2026 DOM; `.extra` (the baseline widget) is skipped so the target is documentation prose;
+    // link-free is required because a CDP click at a paragraph's centre otherwise lands on an
+    // inline <a> and the engine would (correctly) anchor the link, which is a much easier case.
+    pick: `
+      const p = [...document.querySelectorAll('article p, main p')].filter(
+        (n) =>
+          n.textContent.trim().length > 100 &&
+          !n.closest('.extra') &&
+          n.querySelectorAll('a').length === 0,
+      )[0]
+      return p ? describe(p) : { selector: null, why: 'no link-free paragraph' }
     `,
   },
 ]
@@ -128,8 +161,12 @@ for (const site of SITES) {
       `  csp: inline <script> ${first.csp.inlineScriptRuns ? 'ALLOWED' : 'BLOCKED'} · engine booted on ${first.booted.pageKey}\n`,
     )
 
-    const target = evalPage(site.target)
+    const target = evalPage(`${PICK_PRELUDE}\n${site.pick}`)
     run.steps.target = target
+    if (!target.selector) throw new Error(`no target on ${site.name}: ${String(target.why)}`)
+    // A CDP click whose target centre is outside the viewport reports success and does nothing.
+    scrollIntoView(target.selector)
+    await sleep(400)
     const placed = await placeComment({ selector: target.selector, body: 'bench: real-site smoke' })
     run.steps.placed = {
       id: placed.id,

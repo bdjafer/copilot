@@ -115,6 +115,38 @@ describe('§4.6.5 the observer loop', () => {
     expect(h.engine.getThreadView(id)!.anchoring.status).toBe('anchored')
   })
 
+  /**
+   * Regression: happy-dom ≤20.11.1 holds a `MutationObserver`'s report callback in a `WeakRef`
+   * that nothing else references, so a collection between two mutations silently unsubscribes
+   * the observer and every record after it is dropped. That made the scoped-cheap-retry test
+   * above fail roughly one run in six inside a parallel full-workspace run and pass alone.
+   * `createTestPage` now pins the callback; this forces the collection that used to break it.
+   */
+  test('the observer survives a garbage collection (happy-dom WeakRef listener)', async () => {
+    const collect = (globalThis as { gc?: () => void }).gc
+    const h = await scene(PAGE, { anchoring: { rescanIdle: false } })
+    const id = await h.seed('#a')
+    await h.page.mutate((doc) => doc.querySelector('#a')!.remove())
+    expect(h.engine.getThreadView(id)!.anchoring.status).toBe('orphaned')
+
+    expect(typeof collect).toBe('function') // vitest.config.ts passes --expose-gc
+    for (let i = 0; i < 3; i++) {
+      collect?.()
+      await new Promise<void>((resolve) => setTimeout(resolve, 0))
+    }
+
+    await h.page.mutate((doc) => {
+      const late = doc.createElement('article')
+      late.id = 'a'
+      late.setAttribute('data-testid', 'a')
+      late.textContent = 'alpha text'
+      doc.body.append(late)
+    })
+    // Only the observer-driven pass carries the added subtree as `scope`, so this asserts the
+    // records really were delivered — an unscoped fallback pass would leave it orphaned.
+    expect(h.engine.getThreadView(id)!.anchoring.status).toBe('anchored')
+  })
+
   test('inspect().anchoring reports batches, lastBatchMs and the pending count', async () => {
     const h = await scene()
     await h.seed('#a')

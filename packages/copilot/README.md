@@ -32,13 +32,14 @@ great deal in a worker that is about to be killed anyway.
 ## Install
 
 ```sh
-npm i @astrale-os/browser-copilot ai
+npm i @astrale-os/browser-copilot
 npm i @ai-sdk/anthropic zod   # your provider + your schema library
 ```
 
-Runtime dependencies: `ai` (v6+) and `nanoid`. Provider packages, schema libraries (any
+Runtime dependencies: `ai` (v7) and `nanoid`, plus the types-only `@standard-schema/spec` —
+three, installed for you. Provider packages, schema libraries (any
 [Standard Schema](https://standardschema.dev) implementation — zod v4, valibot, arktype) and
-messaging are yours: they are peer-optional and never imported by this package.
+messaging are yours: this package never imports them, and never declares them.
 
 | Subpath | Contents | DOM |
 |---|---|---|
@@ -297,6 +298,10 @@ each.
 | Visible failure after 3 dead attempts | `run:error` with `willRetry: false` | 3 lines |
 | "Which threads are busy?" after a restart | `list({ state, idPrefix })` | 3 lines |
 | Offscreen-document escape hatch | `RunStore.claim` | ~10 lines |
+
+The snippets below are **host** code and use the ambient `chrome.*` namespace, which this package
+neither imports nor types — add `@types/chrome` (or wxt's `wxt/browser`) on your side to compile
+them. Nothing in `src/` touches a browser API.
 
 ```ts
 /* --- 1. keepalive: two events bracket every ping the host needs --- */

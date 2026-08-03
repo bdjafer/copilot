@@ -1,11 +1,34 @@
 {
   "name": "@astrale-os/comment-core",
   "version": "0.0.0",
+  "description": "Persistent, re-anchorable comment threads on any element of any HTML page: flat replies, resolve/reopen, robust to a dynamic DOM. Headless — no framework, no server, no renderer.",
+  "keywords": [
+    "anchoring",
+    "annotations",
+    "comments",
+    "dom",
+    "headless",
+    "selector",
+    "shadow-dom",
+    "typescript",
+    "web-annotation"
+  ],
+  "homepage": "https://github.com/astrale-os/exp-spec/tree/main/packages/comment-core#readme",
+  "bugs": {
+    "url": "https://github.com/astrale-os/exp-spec/issues"
+  },
   "license": "Apache-2.0",
   "author": "Astrale",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/astrale-os/exp-spec.git",
+    "directory": "packages/comment-core"
+  },
   "files": [
     "dist",
-    "src"
+    "src",
+    "README.md",
+    "LICENSE"
   ],
   "type": "module",
   "sideEffects": false,
@@ -59,5 +82,8 @@
     "happy-dom": {
       "optional": true
     }
+  },
+  "engines": {
+    "node": ">=22"
   }
 }

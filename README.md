@@ -81,9 +81,10 @@ returns nothing.
 
 1. **One shared `KeyValueAdapter`, three disjoint key ranges.** `exp-spec:*` (threads and
    comments, owned by `comment-core`), `runs:*` (run records and leases, owned by the copilot),
-   `exp-spec:host:*` (pending-dispatch set, thread→run index, observe cursors, unread — owned by
-   the bridge). Each store filters `watch` to its own prefix, so the three ranges never wake
-   each other.
+   `exp-spec:host:*` (pending-dispatch set, observe cursors, unread, failed, settings — owned by
+   the bridge; there is deliberately **no** thread→run index — the run store already holds that
+   mapping durably, see `packages/extension/src/keys.ts`). Each store filters `watch` to its own
+   prefix, so the three ranges never wake each other.
 2. **`observeStore`** — the service worker learns about `thread:create` / `thread:reply` by
    diffing the same store, with a *durable* cursor. `chrome.storage.onChanged` wakes a dormant
    worker, so the write that caused the wake happened before the worker existed; an in-memory

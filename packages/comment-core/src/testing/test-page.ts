@@ -67,8 +67,64 @@ async function settleDom(): Promise<void> {
   await new Promise<void>((resolve) => setTimeout(resolve, 0))
 }
 
+/**
+ * happy-dom (through 20.11.1) keeps a `MutationObserver`'s report callback in a `WeakRef` that
+ * nothing else holds: `MutationObserverListener` stores `new WeakRef((record) => this.report(record))`
+ * and that arrow is unreachable the moment the constructor returns. Any GC between two mutations
+ * therefore **silently unsubscribes the observer** — `Node[reportMutation]` derefs to `undefined`
+ * and drops the record, and `takeRecords()` returns nothing either, so there is no way to notice
+ * after the fact. Reproduced directly under `--expose-gc`: one `gc()` between two `append()`s
+ * costs the second record.
+ *
+ * That turns every observer-driven assertion into a coin flip decided by heap pressure somewhere
+ * else in the process — which is exactly how it surfaced: green in isolation, red once inside a
+ * parallel full-workspace run, because the fixture's deterministic tail (`flush()` below) then
+ * runs an unscoped pass and the scoped cheap retry for added subtrees never happens.
+ *
+ * So: pin the callback with a strong-ref stand-in the moment an observer is armed. Idempotent,
+ * and a no-op wherever listeners are not `WeakRef`-based (a fixed happy-dom, a real browser).
+ */
+const MUTATION_LISTENERS = 'Symbol(mutationListeners)'
+const pinnedPrototypes = new WeakSet<object>()
+
+function pinMutationListeners(target: object): void {
+  for (const symbol of Object.getOwnPropertySymbols(target)) {
+    if (symbol.toString() !== MUTATION_LISTENERS) continue
+    const listeners = (target as Record<symbol, unknown>)[symbol]
+    if (!Array.isArray(listeners)) continue
+    for (const listener of listeners as Array<{ callback?: unknown }>) {
+      const ref = listener.callback
+      if (!(ref instanceof WeakRef)) continue
+      const callback: unknown = ref.deref()
+      if (typeof callback === 'function') listener.callback = { deref: () => callback }
+    }
+  }
+}
+
+type ObserverPrototype = {
+  observe(target: Node, options?: MutationObserverInit): void
+}
+
+function pinMutationObserver(doc: Document): void {
+  const constructors = [
+    (doc.defaultView as { MutationObserver?: typeof MutationObserver } | null)?.MutationObserver,
+    (globalThis as { MutationObserver?: typeof MutationObserver }).MutationObserver,
+  ]
+  for (const Ctor of constructors) {
+    const proto = Ctor?.prototype as ObserverPrototype | undefined
+    if (!proto || typeof proto.observe !== 'function' || pinnedPrototypes.has(proto)) continue
+    pinnedPrototypes.add(proto)
+    const observe = proto.observe
+    proto.observe = function (this: MutationObserver, target, observeOptions): void {
+      observe.call(this, target, observeOptions)
+      pinMutationListeners(target)
+    }
+  }
+}
+
 export function createTestPage(html: string, options?: { url?: string }): TestPage {
   const doc = ambientDocument()
+  pinMutationObserver(doc)
   if (options?.url) setUrl(doc, options.url)
   doc.body.innerHTML = html
 

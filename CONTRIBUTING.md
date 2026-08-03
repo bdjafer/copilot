@@ -62,8 +62,11 @@ Three kinds, three notations:
 Adding a runtime dependency to `comment-core` or `browser-copilot` is a decision, not a
 detail — both are meant to be publishable and consumable standalone. `comment-core` currently
 ships three (`@medv/finder`, `approx-string-match`, `nanoid`) plus vendored Hypothesis
-anchoring; `browser-copilot` ships two (`ai`, `nanoid`). Provider packages, schema libraries and
-messaging stay peer-optional and are never imported.
+anchoring; `browser-copilot` ships three (`ai`, `nanoid`, and the types-only
+`@standard-schema/spec`). Provider packages (`@ai-sdk/*`), schema libraries (`zod`, valibot,
+arktype) and messaging are the consumer's own dependency: this repo never declares them in a
+published package's `dependencies` and never imports them from `src/`. `zod` appears in
+`packages/copilot/devDependencies` because the tests use it as a Standard Schema fixture.
 
 ---
 
@@ -120,6 +123,22 @@ A rule the conformance suite cannot observe is a rule that will regress. That is
 instance, `DomainOptions.onError` exists at all: it is the only channel through which the
 "unknown record version is skipped, never rewritten" rule can be asserted from a headless
 domain.
+
+### Two shared resources a test must not fight over
+
+`pnpm test` runs every package's suite **concurrently**, and two suites already learned this the
+hard way. Both rules are load-bearing, not stylistic:
+
+1. **A test that runs a Vite build must pass `build: { emptyOutDir: false }`.** Three suites
+   build into `packages/comment-core/dist` — `comment-core`'s bundle DoD, `comment-ui`'s bundle
+   DoD and `apps/demo`'s global setup — and the `BUILD_TARGET=iife` pass empties `dist/` by
+   default. One wipe makes another package's `existsSync` assertion fail on file-system timing
+   alone. The cost is stale hashed chunks in `dist/` after a test run; only `pnpm build` empties
+   it, which is why CI builds *after* it tests.
+2. **Never assume happy-dom delivered a `MutationObserver` record.** happy-dom holds the
+   observer's report callback in a `WeakRef` nothing else references, so a GC silently
+   unsubscribes it (`createTestPage` pins it — see `comment-core/src/testing/test-page.ts`).
+   Anything that drives the DOM outside `createTestPage` inherits the hazard.
 
 ### Comments in code
 

@@ -54,13 +54,20 @@ beforeAll(async () => {
   const { build } = await import('vite')
   process.env.BUILD_TARGET = 'iife'
   try {
-    await build({ root: packageRoot, logLevel: 'error' })
+    // `emptyOutDir: false` on both passes, for the reason `comment-ui`'s bundle DoD spells out:
+    // the `BUILD_TARGET=iife` pass empties `dist/` by default, and this test is not the only
+    // thing looking at that directory. `apps/demo`'s global setup builds this package into the
+    // same `dist/` and then imports `dist/index.js`; `comment-ui`'s bundle DoD builds it too;
+    // and `pnpm -r test` runs all three suites concurrently. A wipe here therefore makes an
+    // unrelated package's assertion fail on file-system timing alone — and it deletes the
+    // `dist/types/` tree `publishConfig.exports` names, after the build that produced it.
+    await build({ root: packageRoot, logLevel: 'error', build: { emptyOutDir: false } })
   } finally {
     delete process.env.BUILD_TARGET
   }
   // The ESM pass writes into the same `dist/`; run it here too so the §1.1 entry-point table
   // is covered by the same gate.
-  await build({ root: packageRoot, logLevel: 'error' })
+  await build({ root: packageRoot, logLevel: 'error', build: { emptyOutDir: false } })
 
   // A `<script src>` tag evaluates the file in the page's global scope, where the bundle's
   // top-level `var Comments = …` becomes the global. `new Function` reproduces that shape

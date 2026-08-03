@@ -1,11 +1,35 @@
 {
   "name": "@astrale-os/browser-copilot",
   "version": "0.0.0",
+  "description": "A generic browser LLM agent runtime: trigger/listen, host-registered typed tools, and a durable run queue that survives service-worker death. DOM-free.",
+  "keywords": [
+    "agent",
+    "ai-sdk",
+    "browser",
+    "durable-queue",
+    "extension",
+    "llm",
+    "mv3",
+    "service-worker",
+    "tool-calling",
+    "typescript"
+  ],
+  "homepage": "https://github.com/astrale-os/exp-spec/tree/main/packages/copilot#readme",
+  "bugs": {
+    "url": "https://github.com/astrale-os/exp-spec/issues"
+  },
   "license": "Apache-2.0",
   "author": "Astrale",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/astrale-os/exp-spec.git",
+    "directory": "packages/copilot"
+  },
   "files": [
     "dist",
-    "src"
+    "src",
+    "README.md",
+    "LICENSE"
   ],
   "type": "module",
   "sideEffects": false,
@@ -33,15 +57,17 @@
     "test:watch": "vitest"
   },
   "dependencies": {
-    "@ai-sdk/anthropic": "^4.0.25",
     "@standard-schema/spec": "^1.1.0",
     "ai": "^7.0.44",
-    "nanoid": "^6.0.0",
-    "zod": "^4.4.3"
+    "nanoid": "^6.0.0"
   },
   "devDependencies": {
     "happy-dom": "^20.11.1",
     "vite": "^8.2.0",
-    "vitest": "^4.1.10"
+    "vitest": "^4.1.10",
+    "zod": "^4.4.3"
+  },
+  "engines": {
+    "node": ">=22"
   }
 }

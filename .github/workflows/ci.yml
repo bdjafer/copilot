@@ -1,0 +1,43 @@
+name: ci
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  gate:
+    name: lint · typecheck · test · build
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+
+      # No `version:` — the action reads it from the root `packageManager` field, so the
+      # workflow can never drift from the pnpm the repo actually pins.
+      - uses: pnpm/action-setup@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+
+      - run: pnpm install --frozen-lockfile
+
+      # oxlint / tsgo / vitest — never eslint, prettier or tsc.
+      - run: pnpm lint
+      - run: pnpm typecheck
+      - run: pnpm test
+
+      # Build LAST, and that order matters: the bundle DoD tests build into each package's own
+      # `dist/` with `emptyOutDir: false` (so concurrent suites cannot wipe a directory another
+      # one is reading), which can leave stale hashed chunks behind. Only `pnpm build` empties
+      # `dist/` first, so the artifact a publish would pack is the one produced here.
+      - run: pnpm build
