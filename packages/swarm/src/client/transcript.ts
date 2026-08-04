@@ -51,6 +51,13 @@ interface AttemptView {
   /** The ring dropped entries the server had sent — `hasOlder` must stay true afterwards. */
   trimmed: boolean
   serverHasOlder: boolean
+  /**
+   * A turn boundary was seen that produced no entry, so the next delta MUST start a new one
+   * (§6.2, §13's two-head row). Only a turn *this* head sent has a prompt to render, and without
+   * this flag `appendText` coalesced the last delta of turn N with the first delta of turn N+1
+   * into a single entry carrying turn N's timestamp.
+   */
+  turnBreak: boolean
   visible: number
   following: boolean
   lagged: boolean
@@ -113,6 +120,7 @@ export function createHandleRegistry(options: HandleRegistryOptions): HandleRegi
       entries: [],
       trimmed: false,
       serverHasOlder: false,
+      turnBreak: false,
       visible: TRANSCRIPT_WINDOW,
       following: true,
       lagged: false,
@@ -179,7 +187,9 @@ export function createHandleRegistry(options: HandleRegistryOptions): HandleRegi
     at: number,
   ): void => {
     const last = view.entries[view.entries.length - 1]
-    if (last !== undefined && last.k === kind) {
+    const coalesce = last !== undefined && last.k === kind && !view.turnBreak
+    view.turnBreak = false
+    if (coalesce && last !== undefined && last.k === kind) {
       view.entries[view.entries.length - 1] =
         kind === 'text'
           ? { k: 'text', text: last.text + text, at: last.at }
@@ -252,6 +262,7 @@ export function createHandleRegistry(options: HandleRegistryOptions): HandleRegi
       if (!view) return
       view.entries = [...snapshot.entries]
       view.trimmed = false
+      view.turnBreak = false
       view.serverHasOlder = snapshot.hasOlder
       trim(view)
       view.lagged = false
@@ -315,8 +326,13 @@ export function createHandleRegistry(options: HandleRegistryOptions): HandleRegi
           break
         case 'att.turn_boundary': {
           if (event.edge !== 'start') break
+          /* The boundary is real whether or not this head can render it: the wire carries no
+           * prompt text, so a turn another head sent has no honest `{k:'user'}` entry — but it
+           * still ends the previous turn's paragraph. */
+          view.turnBreak = true
           const prompt = options.turnPrompt(event.turnId)
           if (prompt === undefined) break
+          view.turnBreak = false
           view.entries.push({
             k: 'user',
             turnId: event.turnId,

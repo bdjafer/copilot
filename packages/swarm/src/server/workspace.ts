@@ -110,7 +110,7 @@ export class WorkspaceGuard {
     }
     const resolved = realpathOrRefuse(requested, workspaceId)
     assertInside(root, resolved, workspaceId)
-    assertNoEscapingSymlink(root, requested, workspaceId)
+    assertNoEscapingSymlink(root, root, requested, workspaceId)
     assertGitRepository(root, workspaceId)
     return { registration, root, path: resolved }
   }
@@ -125,12 +125,54 @@ export class WorkspaceGuard {
     if (registration === null) {
       throw new SwarmError('workspace_denied', `workspace '${workspaceId}' is not registered`)
     }
-    const root = realpathOrRefuse(registration.root, workspaceId)
-    const resolved = realpathOrRefuse(path, workspaceId)
-    assertInside(root, resolved, workspaceId)
-    assertNoEscapingSymlink(root, path, workspaceId)
-    return resolved
+    return assertPathInsideRoot(registration.root, path, workspaceId)
   }
+
+  /**
+   * The same algorithm against **any** of a set of roots, for the one path S6 cannot express as a
+   * single registration: a per-attempt worktree lives under `$SWARM_HOME/worktrees` (§7.2), not
+   * under the repository it was cut from, while an `in-place` attempt runs in the registered root
+   * itself. Both are legitimate; anything else is not, and "anything else" is what a verifier
+   * `cwd` becomes the moment a symlink is planted (§8.1, §13).
+   */
+  assertInsideAny(roots: readonly string[], path: string): string {
+    const failures: string[] = []
+    for (const root of roots) {
+      try {
+        return assertPathInsideRoot(root, path, 'workspace')
+      } catch (error) {
+        failures.push(error instanceof Error ? error.message : String(error))
+      }
+    }
+    throw new SwarmError('workspace_denied', `'${path}' is inside no allowed root`, {
+      details: { path, roots, failures },
+    })
+  }
+}
+
+/**
+ * §7.3's algorithm as a free function: `realpath`; equal to the root or prefixed by `root + sep`;
+ * no component a symlink that escapes. Run on **every** use, never once at registration — a
+ * symlink planted after registration is exactly the attack it exists for, and the agent can plant
+ * one.
+ */
+export function assertPathInsideRoot(root: string, path: string, label = 'workspace'): string {
+  const resolvedRoot = realpathOrRefuse(root, label)
+  const resolved = realpathOrRefuse(path, label)
+  assertInside(resolvedRoot, resolved, label)
+  /* The component walk runs over the path **as written**, from the root **as written**. Walking a
+   * realpath would be vacuous — it has no symlinks left in it — and walking a written path from a
+   * resolved root produces a `..` chain through the platform's own links (`/var` → `/private/var`
+   * on Darwin), which is not an escape and must not be reported as one. */
+  const writtenRoot = resolve(root)
+  const written = resolve(path)
+  assertNoEscapingSymlink(
+    resolvedRoot,
+    written.startsWith(writtenRoot) ? writtenRoot : resolvedRoot,
+    written,
+    label,
+  )
+  return resolved
 }
 
 function realpathOrRefuse(path: string, workspaceId: string): string {
@@ -157,10 +199,16 @@ function assertInside(root: string, resolved: string, workspaceId: string): void
  * the root. The realpath prefix test above already catches the common case; this catches the one
  * where the final realpath lands back inside the root by way of a component that did not.
  */
-function assertNoEscapingSymlink(root: string, requested: string, workspaceId: string): void {
-  const rel = relative(root, resolve(requested))
-  if (rel.length === 0) return
-  let cursor = root
+function assertNoEscapingSymlink(
+  root: string,
+  base: string,
+  requested: string,
+  workspaceId: string,
+): void {
+  const rel = relative(base, resolve(requested))
+  /* Nothing below the base to walk — the prefix test above is the whole check in that case. */
+  if (rel.length === 0 || rel.startsWith('..')) return
+  let cursor = base
   for (const part of rel.split(sep)) {
     if (part.length === 0 || part === '.') continue
     cursor = join(cursor, part)

@@ -24,12 +24,20 @@
  */
 
 import { createHash } from 'node:crypto'
+import { mkdirSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { ulid } from 'ulid'
 
 import type { LogRecord, ReadTx, SwarmStore, WriteTx } from '../log/types.ts'
 import type { SwarmEvent } from '../protocol/events.ts'
 import type { StreamName } from '../protocol/frames.ts'
+import type { IntentArgs } from '../protocol/intents.ts'
+import type {
+  AttemptSnapshot,
+  DelegationSnapshot,
+  FleetSnapshot,
+  ServerSnapshot,
+} from '../protocol/snapshots.ts'
 import type {
   ActorRef,
   AttemptId,
@@ -53,6 +61,7 @@ import type {
   ReasoningEffort,
   ReconcileReport,
   RetractReport,
+  TranscriptEntry,
   TurnDirective,
   TurnId,
   TurnRecord,
@@ -65,20 +74,42 @@ import type {
   ExecutorEvent,
   ExecutorInstance,
   ExecutorSessionHandle,
+  KillOutcomeReport,
 } from './executor/types.ts'
 import type { AttemptRuntime, DelegationMeta } from './projections.ts'
 import type { ReconcileEvidence } from './reconcile.ts'
+import type { JudgeSession } from './review.ts'
 import type { AdmissionCandidate, AdmissionState } from './scheduler.ts'
+import type { ReviewRunner } from './verifier.ts'
+import type { WorkspaceGuard } from './workspace.ts'
 
-import { addSpend, classifyBudget, classifyClockGap, emptySpendCounters } from '../domain/budget.ts'
-import { CHANNEL_TIMEOUTS, LEASES, SERVER_POLICY } from '../domain/constants.ts'
+import {
+  addSpend,
+  classifyBudget,
+  classifyClockGap,
+  emptySpendCounters,
+  turnBudgetBreached,
+} from '../domain/budget.ts'
+import {
+  CHANNEL_RECONNECT,
+  CHANNEL_TIMEOUTS,
+  LEASES,
+  SERVER_POLICY,
+  SERVER_RETENTION,
+} from '../domain/constants.ts'
 import {
   effectiveTurnConfig,
   modeAllowsConfig,
   reconciliationTarget,
   validateTurnDirective,
 } from '../domain/directive.ts'
-import { delegationLease, sessionLease, worktreeLease } from '../domain/leases.ts'
+import {
+  delegationLease,
+  homeLease,
+  leaseStatus,
+  sessionLease,
+  worktreeLease,
+} from '../domain/leases.ts'
 import { channelMachine, delegationMachine, deliveryMachine } from '../domain/machines.ts'
 import { bucketOf, rollupDelegationState } from '../domain/rollup.ts'
 import { SwarmError, swarmErrorFromWire } from '../errors.ts'
@@ -97,10 +128,18 @@ import {
   turnVM,
 } from './projections.ts'
 import { decideReconciliation, digestPresentInTail } from './reconcile.ts'
+import { createReviewRunner } from './review.ts'
 import { admissionDecision, orderCandidates, withAdmitted } from './scheduler.ts'
-import { createVerifier, hasMachineCheckableCriterion, verdictOf } from './verifier.ts'
 import {
+  createVerifier,
+  hasMachineCheckableCriterion,
+  verdictOf,
+  writeEvidenceBundle,
+} from './verifier.ts'
+import {
+  assertPathInsideRoot,
   baseHasMoved,
+  runGit,
   createWorktree,
   diffAgainstBase,
   headRevision,
@@ -110,7 +149,6 @@ import {
   removeWorktree,
   resolveBaseRevision,
   scrubbedEnv,
-  WorkspaceGuard,
 } from './workspace.ts'
 
 /* ------------------------------------------------------------------------------------ types */
@@ -150,6 +188,10 @@ interface LiveAttempt extends AttemptRuntime {
   toolInputs: Map<string, string>
   turnStartedAt: number
   dispatching: boolean
+  /** When the last interrupt was written, or `null` — C9's clock and C11's guard. */
+  interruptAt: number | null
+  /** `true` while `reconnectChannel` owns the ladder, so two disconnects cannot race it (C13). */
+  reconnecting: boolean
 }
 
 export interface SwarmEngineOptions {
@@ -167,6 +209,26 @@ export interface SwarmEngineOptions {
   readonly sleep?: (ms: number) => Promise<void>
   /** `false` in tests: the scheduler is then driven by explicit `tick()` calls. */
   readonly autoTick?: boolean
+  /**
+   * The only source of `SpendCounters.estUsd`. **There is no default** and none is invented: the
+   * spec names no price table and no provider surface carries one, so a hard-coded rate would be
+   * a number the user could not audit driving a cap that stops their work. Absent, `maxSpendUsd`
+   * and `caps.hardSpendUsd` raise `notice{kind:'capability-absent'}` instead of silently reading
+   * as "never breached" (S8).
+   */
+  readonly estimateTurnCostUsd?: (input: {
+    readonly provider: string
+    readonly model: string
+    readonly inputTokens: number
+    readonly outputTokens: number
+  }) => number
+  /** §8.2's judge. Absent ⇒ a `review` criterion is `error` ⇒ `indeterminate`, never `fail`. */
+  readonly review?: ReviewRunner
+}
+
+/** The durable row behind `dispatchPausedFleet` (§3.5). One record, one field, one reason. */
+interface ServerFlags {
+  readonly dispatchPausedFleet: boolean
 }
 
 const serverStream: StreamName = 'server'
@@ -189,13 +251,33 @@ export class SwarmEngine {
   private readonly live = new Map<AttemptId, LiveAttempt>()
   private readonly notices: NoticeVM[] = []
   private readonly instances = new Map<InstanceKey, ExecutorInstance>()
+  /**
+   * A **cache of a durable row**, never the source of truth (§3.5's write ordering, Q16). A
+   * fleet pause that lived only in memory came back running after a restart — the one moment at
+   * which the user has already decided the fleet must not run.
+   */
   private dispatchPausedFleet = false
   private lastSample: { wall: number; mono: number }
+  private healthCache: HealthVM | null = null
   private ticking = false
   private timer: ReturnType<typeof setInterval> | null = null
   private closed = false
   /** X16: no mutating intent is accepted while a wake-up reconciliation is running. */
   private reconciling: Promise<void> | null = null
+  /**
+   * §2.5 rule 3: a reconnect re-sends every in-flight `req` with the same key **while the first
+   * may still be executing**, and the durable cache is only written after. Two `cancel`s, two
+   * `verify`s, two dispatched turns. This map collapses the resend onto the one execution.
+   */
+  private readonly inFlight = new Map<string, Promise<IntentResult<unknown>>>()
+  /** §7.4's three fabricated metrics, counted where they actually happen. */
+  private readonly observed = {
+    leaseConflicts: 0,
+    logWriteMs: 0,
+    executorEvents: {} as Record<string, number>,
+  }
+  /** Raised once: a spend cap with nothing to price a turn is a gate that does not gate (S8). */
+  private spendOracleWarned = false
   readonly startedAt: number
 
   readonly now: () => number
@@ -245,18 +327,57 @@ export class SwarmEngine {
         evidenceRoot: options.layout.evidenceDir,
         now: this.now,
         ids: this.ids,
-        assertWorkspace: (cwd) => cwd,
+        /* §8.1 and §13's second door: the allowlist is re-run on **every** verifier run, against
+         * the resolved path. A worktree the agent symlinked out of would otherwise run acceptance
+         * commands — agent-influenced code — anywhere on disk. */
+        assertWorkspace: (cwd) => this.assertRunnableCwd(cwd),
+        /* §8.2's judge, on its own session and its own read-only clone. Injected rather than
+         * built here so the isolation stays the property under test. */
+        review:
+          options.review ??
+          createReviewRunner({
+            evidenceRoot: options.layout.evidenceDir,
+            ids: this.ids,
+            openJudge: (input) => this.openJudgeSession(input),
+          }),
       })
+    /* Q16 and §3.5: rehydrated before the first tick, so a restart cannot un-pause a fleet. */
+    this.dispatchPausedFleet =
+      this.store.read((tx) => tx.getRecord<ServerFlags>('server_flags', 'dispatch')?.value)
+        ?.dispatchPausedFleet ?? false
     if (options.autoTick !== false) {
       this.timer = setInterval(() => {
         void this.tick()
         this.sampleClock()
+        this.renewLeases()
+        this.applyRetention()
       }, 1_000)
       this.timer.unref?.()
     }
   }
 
+  /** §7.4's counters, read by `/metrics`. */
+  metrics(): {
+    readonly leaseConflicts: number
+    readonly logWriteMs: number
+    readonly executorEvents: Readonly<Record<string, number>>
+  } {
+    return this.observed
+  }
+
   /* ------------------------------------------------------------------------- small helpers */
+
+  /**
+   * The two places a swarm-spawned child may legitimately run: a per-attempt worktree under
+   * `$SWARM_HOME/worktrees` (§7.2) or a registered root, for `in-place`. Re-resolved on every
+   * call, which is the whole of S6 — never once at registration.
+   */
+  assertRunnableCwd(cwd: string): string {
+    return this.guard.assertInsideAny(
+      [this.layout.worktreesDir, ...this.guard.list().map((row) => row.root)],
+      cwd,
+    )
+  }
 
   serverActor(reason: string): ActorRef {
     return { kind: 'server', reason }
@@ -362,6 +483,8 @@ export class SwarmEngine {
         toolInputs: new Map(),
         turnStartedAt: this.now(),
         dispatching: false,
+        interruptAt: null,
+        reconnecting: false,
       }
       this.live.set(attemptId, state)
     }
@@ -392,7 +515,17 @@ export class SwarmEngine {
         .map((attemptId) => this.attemptMeta(tx, attemptId)?.phase)
         .filter((phase): phase is DelegationState => phase !== undefined)
       next = rollupDelegationState(phases) ?? previous
-    } else if (!delegationMachine.isTerminal(previous) && record.attempts.length > 0) {
+    } else if (
+      !delegationMachine.isTerminal(previous) &&
+      /* **`queued` is never rolled up.** A delegation with no live attempts and every past attempt
+       * terminal is normally finished — but `queued` means work is *pending*: it is where D1 starts
+       * and, decisively, where D19 lands a reopen (`retry`, or a late follow-up `sendTurn`), which
+       * clears `verdict` in the same transaction. Rolling that back to `succeeded` on the next
+       * refresh would restore the state and leave the verdict cleared, breaking §3.1's
+       * "`verdict` is set iff `state === 'succeeded'`" — and it would silently swallow the reopen. */
+      previous !== 'queued' &&
+      record.attempts.length > 0
+    ) {
       const terminals = record.attempts
         .map((attemptId) => this.attemptMeta(tx, attemptId)?.terminal)
         .filter((state): state is DelegationState => state !== undefined && state !== null)
@@ -472,6 +605,165 @@ export class SwarmEngine {
     return next
   }
 
+  /* --------------------------------------------------------------- C9/C11 the interrupt window */
+
+  /**
+   * **C9 → C11.** `interrupt_issued` fires the moment swarm writes a `cancel` or a `softInterrupt`;
+   * three seconds later, if deltas are *still* arriving and no `turn_done` has been seen, the
+   * interrupt **merged into the turn** and the channel returns to `streaming` (C11).
+   *
+   * The guard is deliberately "did the stream keep producing", not "did time pass": jcode never
+   * translates `soft_interrupt_injected` (§5.4 #10), so landing is unobservable, and three seconds
+   * of *silence* is a turn that ended where swarm could not see it — a different fact, and one
+   * C10/C12 already describe. Reporting it as a merge would invent an observation.
+   */
+  private issueInterrupt(attemptId: AttemptId, actor: ActorRef): void {
+    const issuedAt = this.now()
+    this.commitPlain('interrupt_issued', (tx) => {
+      const attempt = readAttempt(tx, attemptId)
+      if (attempt !== null) this.moveChannel(tx, attempt, 'interrupt_issued', actor)
+    })
+    const runtime = this.runtimeOf(attemptId)
+    runtime.interruptAt = issuedAt
+    void this.sleep(CHANNEL_TIMEOUTS.interruptMergeMs).then(() => {
+      if (this.closed) return
+      const live = this.live.get(attemptId)
+      /* A later interrupt, a `turn_done` or a disconnect all clear the stamp; this timer then
+       * belongs to a window that has already closed. */
+      if (live === undefined || live.interruptAt !== issuedAt) return
+      if (live.lastEventAt <= issuedAt) return
+      live.interruptAt = null
+      this.commitPlain('interrupt_merged', (tx) => {
+        const attempt = readAttempt(tx, attemptId)
+        if (attempt === null) return
+        this.moveChannel(
+          tx,
+          attempt,
+          'interrupt_merged',
+          this.serverActor('interrupt merged into the turn'),
+        )
+      })
+    })
+  }
+
+  /* -------------------------------------------------------------- C13/C14 the reconnect ladder */
+
+  /**
+   * **C13 → C2, or C13 → C3 → … → C14.** The supervised reconnect: 500 ms ×2 capped at 30 s, eight
+   * tries (§3.3 C13). Exhaustion reaches `closed` (C14) and releases the writer lease, because a
+   * channel that can never be reattached is a lease that would otherwise be held forever by a
+   * session nobody can reach — and `close()` is the only release there is (§5.4 #9).
+   *
+   * The shadow of model/effort is **invalidated** on every reattach (§4.2): the session may have
+   * been re-created, and a shadow that survives a reconnect is how the next turn skips the
+   * `setModel` it needed.
+   */
+  async reconnectChannel(attemptId: AttemptId): Promise<'reattached' | 'exhausted' | 'skipped'> {
+    const runtime = this.live.get(attemptId)
+    if (runtime === undefined || runtime.reconnecting) return 'skipped'
+    const setup = this.store.read((tx) => {
+      const attempt = readAttempt(tx, attemptId)
+      if (attempt === null || attempt.channel !== 'disconnected') return null
+      if (attempt.outcome !== 'open' && attempt.outcome !== 'interrupted') return null
+      return { sessionId: attempt.executor.sessionId, delegationId: attempt.delegationId }
+    })
+    const instance = runtime.instance
+    if (setup === null || instance === null || setup.sessionId === null) return 'skipped'
+
+    runtime.reconnecting = true
+    try {
+      for (let tries = 0; tries < CHANNEL_RECONNECT.maxTries; tries++) {
+        if (this.closed) return 'skipped'
+        await this.sleep(
+          Math.min(
+            CHANNEL_RECONNECT.capMs,
+            CHANNEL_RECONNECT.baseMs * CHANNEL_RECONNECT.factor ** tries,
+          ),
+        )
+        this.commitPlain('channel_reconnect', (tx) => {
+          const attempt = readAttempt(tx, attemptId)
+          if (attempt === null) return
+          this.moveChannel(tx, attempt, 'reconnect', this.serverActor('channel supervisor'))
+          const meta = this.attemptMeta(tx, attemptId)
+          if (meta !== null) {
+            this.putAttemptMeta(tx, attemptId, { ...meta, reconnectTries: tries + 1 })
+          }
+        })
+
+        let session: ExecutorSessionHandle
+        try {
+          session = await instance.openSession(setup.sessionId)
+        } catch {
+          /* C3: a socket error or the 10 s attach deadline. The ladder keeps its budget. */
+          this.commitPlain('channel_attach_failed', (tx) => {
+            const attempt = readAttempt(tx, attemptId)
+            if (attempt !== null) {
+              this.moveChannel(tx, attempt, 'attach_failed', this.serverActor('channel supervisor'))
+            }
+          })
+          continue
+        }
+
+        const fence = this.store.commit((tx) => {
+          const lease = tx.acquireLease(
+            sessionLease(session.sessionId),
+            attemptId,
+            LEASES.sessionTtlMs,
+          )
+          if (lease === null) return null
+          const attempt = readAttempt(tx, attemptId)
+          if (attempt !== null) {
+            /* C2: `attached`, writer lease held with a NEW fence — the old one is now stale, which
+             * is exactly what `stale_fence` refuses for a writer that did not notice the handover. */
+            this.moveChannel(tx, attempt, 'attached', this.serverActor('channel supervisor'))
+          }
+          return { key: lease.key, token: lease.token }
+        }).value
+        if (fence === null) {
+          await session.close('lease held by another writer').catch(() => undefined)
+          continue
+        }
+
+        runtime.session = session
+        runtime.fence = fence
+        /* §4.2: the shadow is invalidated on reconnect, forcing a re-assert before the next send. */
+        runtime.shadow = { model: null, effort: undefined }
+        void this.pump(attemptId, session)
+        void this.dispatchQueue(attemptId)
+        return 'reattached'
+      }
+
+      /* C14: the budget is spent. `closed` is the only honest terminal for a channel that cannot
+       * be reached again, and it is where the lease goes back. */
+      this.commitPlain('channel_reconnect_exhausted', (tx) => {
+        const attempt = readAttempt(tx, attemptId)
+        if (attempt === null) return
+        this.moveChannel(
+          tx,
+          attempt,
+          'reconnect_exhausted',
+          this.serverActor('reconnect budget exhausted'),
+        )
+        tx.releaseLease(sessionLease(setup.sessionId ?? ''), attemptId)
+      })
+      runtime.session = null
+      runtime.fence = null
+      this.notice({
+        kind: 'capability-absent',
+        severity: 'error',
+        title: 'The executor channel could not be reattached',
+        detail: `${CHANNEL_RECONNECT.maxTries} reconnect attempts failed; the attempt is interrupted and its writer lease is released (C14).`,
+        delegationId: setup.delegationId,
+        attemptId,
+        actions: [{ intent: 'retry', label: 'Retry the delegation' }],
+        dismissible: false,
+      })
+      return 'exhausted'
+    } finally {
+      runtime.reconnecting = false
+    }
+  }
+
   private moveDelivery(
     tx: WriteTx,
     turn: TurnRecord,
@@ -495,9 +787,13 @@ export class SwarmEngine {
       deliveryDetail: { ...turn.deliveryDetail, ...options?.detail },
     }
     this.putTurn(tx, next)
+    const delegationId = this.delegationOfTurn(tx, next)
+    /* An attempt that is gone leaves no stream to emit on. `delegation:` — the empty id — is not a
+     * routable `StreamName`, and a head subscribing to it gets `stream_unknown`. */
+    if (delegationId === '') return next
     this.emit(
       tx,
-      delegationStream(this.delegationOfTurn(tx, next)),
+      delegationStream(delegationId),
       {
         k: 'deleg.turn_delivery',
         turnId: next.id,
@@ -516,23 +812,57 @@ export class SwarmEngine {
 
   /* ------------------------------------------------------------------------- notices + health */
 
-  notice(notice: Omit<NoticeVM, 'id' | 'at'>): NoticeVM {
+  /**
+   * `tx` is passed by every caller that is **already inside** a transaction. The store is a single
+   * writer and does not nest, so a notice raised from within an intent must ride that intent's
+   * transaction — which is also the right semantics: the notice and the state change it describes
+   * become durable together, or neither does.
+   */
+  notice(notice: Omit<NoticeVM, 'id' | 'at'>, tx?: WriteTx): NoticeVM {
     const full: NoticeVM = { ...notice, id: `notice_${this.ids()}`, at: this.now() }
     this.notices.push(full)
     if (this.notices.length > 200) this.notices.shift()
-    this.commitPlain('notice', (tx) => {
+    const write = (target: WriteTx): void => {
       this.emit(
-        tx,
+        target,
         serverStream,
         { k: 'server.notice', notice: full },
         this.serverActor(notice.kind),
       )
-    })
+    }
+    if (tx === undefined) this.commitPlain('notice', write)
+    else write(tx)
     return full
   }
 
   listNotices(): readonly NoticeVM[] {
     return this.notices
+  }
+
+  /**
+   * The most recent `HealthVM`, or a truthful placeholder before the first probe. `snapshot()` is
+   * synchronous by contract — cursor and state are read in **one** transaction (§2.3) — and a
+   * health probe is a `ping` on a socket, so the snapshot serves the last observation and
+   * `lastDoctorAt` says how old it is. Inventing `ok:true` for a never-probed executor is the one
+   * thing [F5] forbids.
+   */
+  lastHealth(): HealthVM {
+    return (
+      this.healthCache ?? {
+        server: { ok: true, version: this.options.version, uptimeMs: this.now() - this.startedAt },
+        executor: {
+          ok: false,
+          adapterId: this.adapter.id,
+          versions: {},
+          blocked: null,
+          fix: null,
+        },
+        instances: [],
+        routes: [],
+        approvalsAvailable: false,
+        lastDoctorAt: 0,
+      }
+    )
   }
 
   async health(): Promise<HealthVM> {
@@ -567,7 +897,7 @@ export class SwarmEngine {
         /* a dead instance contributes no routes; `instances[].ok` already says so */
       }
     }
-    return {
+    const health: HealthVM = {
       server: { ok: true, version: this.options.version, uptimeMs: this.now() - this.startedAt },
       executor: {
         ok: report.ok,
@@ -582,6 +912,8 @@ export class SwarmEngine {
       approvalsAvailable: false,
       lastDoctorAt: this.now(),
     }
+    this.healthCache = health
+    return health
   }
 
   /* ---------------------------------------------------------------------------- snapshots */
@@ -590,23 +922,57 @@ export class SwarmEngine {
     return this.store.snapshot(stream, (tx) => this.materialize(tx, stream))
   }
 
+  /**
+   * `snap.state`, in the **declared** shape of `protocol/snapshots.ts` — one per stream family.
+   *
+   * The rule those four shapes follow is what makes replay and snapshot converge: a snapshot
+   * carries exactly the state that stream's events mutate. So `fleet` carries whole
+   * `DelegationVM`s (because `fleet.delegation_created`/`_summary` do), `server` carries the last
+   * health observation plus notices and confirmations, and `attempt:*` carries the transcript
+   * **rebuilt from the durable log** — the only source that is authoritative after a restart
+   * (§5.4 #2), never `tail()`, which is pinned to prompt-digest matching alone ([F8]).
+   */
   private materialize(tx: ReadTx, stream: StreamName): unknown {
-    if (stream === 'fleet') return fleetVM(tx, this.projectionContext(tx))
+    if (stream === 'fleet') {
+      const context = this.projectionContext(tx)
+      const fleet = fleetVM(tx, context)
+      const delegations = tx
+        .listRecords<DelegationRecord>('delegation')
+        .map((stored) => delegationVM(tx, stored.value, context))
+      return {
+        delegations,
+        concurrency: fleet.concurrency,
+        dispatchPaused: fleet.dispatchPaused,
+        spend: fleet.spend,
+      } satisfies FleetSnapshot
+    }
     if (stream === 'server') {
       return {
-        version: this.options.version,
-        bootId: this.options.bootId,
+        health: this.lastHealth(),
         notices: this.notices,
         confirmations: this.confirmations.list(),
-      }
+      } satisfies ServerSnapshot
     }
     if (stream.startsWith('delegation:')) {
       const record = readDelegation(tx, stream.slice('delegation:'.length))
-      return record === null ? null : delegationVM(tx, record, this.projectionContext(tx))
+      if (record === null) return null
+      return {
+        delegation: delegationVM(tx, record, this.projectionContext(tx)),
+      } satisfies DelegationSnapshot
     }
     const attemptId = stream.slice('attempt:'.length)
     const attempt = readAttempt(tx, attemptId)
-    return attempt === null ? null : attemptVM(tx, attempt, this.projectionContext(tx))
+    if (attempt === null) return null
+    const replayed = replayTranscript(tx, attemptId, TRANSCRIPT_SNAPSHOT_LIMIT)
+    return {
+      attemptId,
+      entries: replayed.entries,
+      hasOlder: replayed.hasOlder,
+      diff:
+        attempt.workspace.worktree === null
+          ? null
+          : diffAgainstBase(attempt.workspace.worktree, attempt.workspace.baseRevision, attemptId),
+    } satisfies AttemptSnapshot
   }
 
   /* ------------------------------------------------------------------------ intent boundary */
@@ -626,6 +992,26 @@ export class SwarmEngine {
     const cached = this.store.read((tx) => tx.getIdempotent(ctx.tokenId, ctx.idempotencyKey))
     if (cached !== null) return deserializeResult(cached.response)
 
+    /* §2.5 rule 3's other half. The durable cache is written **after** the intent runs, so a
+     * reconnect resend — which is specified to arrive with the same key while the original may
+     * still be in flight — missed the cache and ran the intent a second time. For `cancel`,
+     * `retract`, `verify`, `killSwitch` and `sendTurn` that is a double side effect. */
+    const key = `${ctx.tokenId}\u0000${ctx.idempotencyKey}`
+    const running = this.inFlight.get(key)
+    if (running !== undefined) return running
+
+    const execution = this.execute(intent, args, ctx).finally(() => {
+      this.inFlight.delete(key)
+    })
+    this.inFlight.set(key, execution)
+    return execution
+  }
+
+  private async execute(
+    intent: string,
+    args: unknown,
+    ctx: IntentContext,
+  ): Promise<IntentResult<unknown>> {
     let result: IntentResult<unknown>
     try {
       result = { ok: true, value: await this.run(intent, args, ctx), version: 0 }
@@ -642,6 +1028,10 @@ export class SwarmEngine {
       : { ok: false, error: result.error }
     this.store.commit((tx) => {
       tx.putIdempotent(ctx.tokenId, ctx.idempotencyKey, serializeResult(stored))
+      /* The 24 h TTL of §2.5 rule 3, enforced where the cache is written — nothing else ever
+       * looked at `createdAt`, so the cache grew forever and a key was answered from it for the
+       * life of the database, which is not idempotency but a permanent refusal to re-run. */
+      tx.pruneIdempotent(SERVER_POLICY.idempotencyTtlMs)
     })
     return stored
   }
@@ -651,75 +1041,131 @@ export class SwarmEngine {
     return this.store.read((tx) => readDelegation(tx, value)?.version ?? 0)
   }
 
-  private async run(intent: string, args: unknown, ctx: IntentContext): Promise<unknown> {
+  /**
+   * The intent table, read **exactly** as `protocol/intents.ts` declares `IntentArgs`.
+   *
+   * That module is the shared contract, and its rule is the one this switch follows: *`args`
+   * mirrors the §6.3 method signature, with the receiver's id hoisted to a named field and
+   * `idempotencyKey`/`expectedVersion` removed* — both ride on the envelope (§2.2). A server that
+   * invented a nesting the client core does not send would fail on frame 2 of every session, and
+   * the two stages are written separately, which is precisely why the shape is declared once.
+   */
+  private async run<K extends keyof IntentArgs>(
+    intent: K | string,
+    args: unknown,
+    ctx: IntentContext,
+  ): Promise<unknown> {
     const a = (args ?? {}) as Record<string, unknown>
     switch (intent) {
-      case 'createDelegation':
-        return this.createDelegation(a as unknown as CreateDelegationInput, ctx)
-      case 'sendTurn':
-        return this.sendTurn(a.delegationId as DelegationId, a.directive as TurnDirective, ctx)
+      case 'createDelegation': {
+        const input = a as unknown as IntentArgs['createDelegation']
+        return this.createDelegation(
+          {
+            idempotencyKey: ctx.idempotencyKey,
+            spec: input.spec,
+            ...(input.delegationId === undefined ? {} : { delegationId: input.delegationId }),
+            ...(input.title === undefined ? {} : { title: input.title }),
+            ...(input.priority === undefined ? {} : { priority: input.priority }),
+          },
+          ctx,
+        )
+      }
+      case 'sendTurn': {
+        const input = a as unknown as IntentArgs['sendTurn']
+        return this.sendTurn(input.delegationId, input.directive, ctx)
+      }
       case 'retract':
-        return this.retract(a.turnId as TurnId, ctx)
-      case 'cancel':
+        return this.retract((a as unknown as IntentArgs['retract']).turnId, ctx)
+      case 'cancel': {
+        const input = a as unknown as IntentArgs['cancel']
         return this.cancel(
-          a.delegationId as DelegationId,
-          a.options as { scope: 'turn' | 'delegation' | 'hard'; attemptId?: AttemptId },
+          input.delegationId,
+          {
+            scope: input.scope,
+            ...(input.attemptId === undefined ? {} : { attemptId: input.attemptId }),
+          },
           ctx,
         )
-      case 'retry':
+      }
+      case 'retry': {
+        const input = a as unknown as IntentArgs['retry']
         return this.retry(
-          a.delegationId as DelegationId,
-          (a.options ?? {}) as { parallel?: 1 | 2 | 3 },
+          input.delegationId,
+          {
+            ...(input.spec === undefined ? {} : { spec: input.spec }),
+            ...(input.parallel === undefined ? {} : { parallel: input.parallel }),
+            ...(input.injectPriorFailure === undefined
+              ? {}
+              : { injectPriorFailure: input.injectPriorFailure }),
+          },
           ctx,
         )
-      case 'branch':
-        return this.branch(a.attemptId as AttemptId, (a.options ?? {}) as { title?: string }, ctx)
-      case 'verify':
+      }
+      case 'branch': {
+        const input = a as unknown as IntentArgs['branch']
+        return this.branch(
+          input.attemptId,
+          input.title === undefined ? {} : { title: input.title },
+          ctx,
+        )
+      }
+      case 'verify': {
+        const input = a as unknown as IntentArgs['verify']
         return this.verify(
-          a.delegationId as DelegationId,
-          (a.options ?? {}) as { attemptId?: AttemptId },
+          input.delegationId,
+          input.attemptId === undefined ? {} : { attemptId: input.attemptId },
           ctx,
         )
-      case 'accept':
+      }
+      case 'accept': {
+        const input = a as unknown as IntentArgs['accept']
         return this.accept(
-          a.delegationId as DelegationId,
-          a.options as { note: string; attemptId?: AttemptId },
+          input.delegationId,
+          {
+            note: input.note,
+            ...(input.attemptId === undefined ? {} : { attemptId: input.attemptId }),
+          },
           ctx,
         )
-      case 'land':
-        return this.land(a.delegationId as DelegationId, a.options as LandOptions, ctx)
+      }
+      case 'land': {
+        const { delegationId, ...options } = a as unknown as IntentArgs['land']
+        return this.land(delegationId, options as LandOptions, ctx)
+      }
       case 'discard':
-        return this.discard(a.attemptId as AttemptId, ctx)
-      case 'archive':
+        return this.discard((a as unknown as IntentArgs['discard']).attemptId, ctx)
+      case 'archive': {
+        const input = a as unknown as IntentArgs['archive']
         return this.archive(
-          a.delegationId as DelegationId,
-          (a.options ?? {}) as { abandon?: boolean },
+          input.delegationId,
+          input.abandon === undefined ? {} : { abandon: input.abandon },
           ctx,
         )
+      }
       case 'reconcile':
-        return this.reconcile(a.delegationId as DelegationId, ctx)
-      case 'pauseDispatch':
-        return this.pauseDispatch(
-          a.scope as { fleet: true } | { delegationId: DelegationId },
-          a.paused === true,
-          ctx,
-        )
-      case 'killSwitch':
-        return this.killSwitch((a.options ?? {}) as { killInstances?: boolean }, ctx)
-      case 'updateDefaults':
-        return this.updateDefaults(
-          a.delegationId as DelegationId,
-          a.patch as DelegationDefaultsPatch,
-          ctx,
-        )
+        return this.reconcile((a as unknown as IntentArgs['reconcile']).delegationId, ctx)
+      case 'pauseDispatch': {
+        const input = a as unknown as IntentArgs['pauseDispatch']
+        return this.pauseDispatch(input.scope, input.paused === true, ctx)
+      }
+      case 'killSwitch': {
+        const input = a as unknown as IntentArgs['killSwitch']
+        return this.killSwitch({ killInstances: input.killInstances === true }, ctx)
+      }
+      case 'updateDefaults': {
+        const input = a as unknown as IntentArgs['updateDefaults']
+        return this.updateDefaults(input.delegationId, input.patch, ctx)
+      }
       case 'confirm':
-        this.confirmations.confirm(a.requestId as string, ctx.tokenId)
+        this.confirmations.confirm((a as unknown as IntentArgs['confirm']).requestId, ctx.tokenId)
         return null
-      case 'deny':
-        this.confirmations.deny(a.requestId as string, a.reason as string | undefined)
+      case 'deny': {
+        const input = a as unknown as IntentArgs['deny']
+        this.confirmations.deny(input.requestId, input.reason)
         return null
+      }
       default:
-        throw new SwarmError('invalid_spec', `unknown intent '${intent}'`)
+        throw new SwarmError('invalid_spec', `unknown intent '${String(intent)}'`)
     }
   }
 
@@ -881,6 +1327,16 @@ export class SwarmEngine {
             verdict: null,
             version: delegation.version + 1,
           })
+          /* D19 is D19 whichever intent fires it: a reopen starts a new admission epoch, or the
+           * scheduler finds every slot already spent and never provisions attempt N+1. */
+          const meta = readMeta(tx, delegationId)
+          if (meta !== null) {
+            tx.putRecord('delegation_meta', delegationId, 1, {
+              ...meta,
+              openedInEpoch: 0,
+              epochQueuedAt: this.now(),
+            } satisfies DelegationMeta)
+          }
           this.emitSummary(tx, delegationId, ctx.actor)
         }
       }
@@ -1066,6 +1522,24 @@ export class SwarmEngine {
     const delegation = this.store.read((tx) => this.requireDelegation(tx, attempt.delegationId))
     const mode = turn.effective.deliveryMode
 
+    /* §3.4 rule 2: an expired lease **blocks new submissions**, and while a turn streams it marks
+     * the holder `suspect` rather than releasing. Asserted here because "blocks new submissions"
+     * has exactly one place it can be true. */
+    try {
+      this.assertWriterLease(attempt.id, session.sessionId, attempt.channel === 'streaming')
+    } catch (error) {
+      this.commitPlain('turn_refused', (tx) => {
+        const fresh = readTurn(tx, turn.id)
+        if (fresh !== null) {
+          this.moveDelivery(tx, fresh, 'refused_preflight', actor, {
+            detail: { reason: SwarmError.is(error) ? error.code : String(error) },
+          })
+        }
+        this.dequeue(tx, attempt.id, turn.id)
+      })
+      return
+    }
+
     /* §4.3.2, non-sticky: an omitted field reconciles the session back to the DELEGATION default,
      * not to the previous override — a turn with `effort:'max'` followed by a turn without one
      * issues `setReasoningEffort(delegationDefault)` before its send (Q4). */
@@ -1114,7 +1588,15 @@ export class SwarmEngine {
       return
     }
 
-    /* The config decisions are now known; re-persist the record carrying them, then send. */
+    const contextOnly = mode === 'context-only'
+    const interruptMode = mode === 'next-safe-point' || mode === 'interrupt'
+
+    /* The config decisions are now known; re-persist the record carrying them, then send.
+     *
+     * C4 (`idle → submitting`) belongs to `submit()` alone. An interrupt is written *into* a turn
+     * that is already in flight — that is what the mode is for — so moving the channel here would
+     * park it in `submitting` and every later interrupt on the same session would find a channel
+     * that is not `idle` and never dispatch. Interrupts take C9 instead, below. */
     this.commitPlain('turn_config', (tx) => {
       const fresh = readTurn(tx, turn.id)
       if (fresh === null) return
@@ -1125,13 +1607,13 @@ export class SwarmEngine {
           executorVersions: attempt.executor.versions,
         },
       })
+      if (interruptMode) return
       const live = readAttempt(tx, attempt.id)
       if (live !== null) this.moveChannel(tx, live, 'submit', actor)
     })
 
-    const contextOnly = mode === 'context-only'
     try {
-      if (mode === 'next-safe-point' || mode === 'interrupt') {
+      if (interruptMode) {
         await session.interrupt(
           mode === 'interrupt' ? 'urgent' : 'soft',
           turn.directive.text,
@@ -1142,6 +1624,9 @@ export class SwarmEngine {
           if (fresh !== null) this.moveDelivery(tx, fresh, 'written', actor)
           this.dequeue(tx, attempt.id, turn.id)
         })
+        /* C9, and the landing stays `'unconfirmed'` forever: `soft_interrupt_injected` is not
+         * translated by the bridge, so swarm can say it *wrote* the interrupt and nothing more. */
+        this.issueInterrupt(attempt.id, actor)
         return
       }
 
@@ -1150,6 +1635,18 @@ export class SwarmEngine {
         if (fresh !== null) this.moveDelivery(tx, fresh, 'written', actor)
       })
       runtime.turnStartedAt = this.now()
+      /* §4.2's `budget` row: "none — swarm timer + `cancel(sessionId)`". The wall half of a
+       * `TurnBudget` has no executor primitive behind it, so the timer is swarm's own. */
+      this.armTurnDeadline(attempt.id, attempt.delegationId, turn)
+
+      /* §4.2's `structured` row. `runStructured` is **native and truly per-turn**, and calling
+       * `submit` for a directive carrying `structured` recorded a `schemaDigest`, advertised the
+       * `structured` capability in `hello_ok`, and then sent a plain message — a schema the user
+       * asked for, acknowledged, and silently dropped. */
+      if (turn.directive.structured !== undefined) {
+        await this.submitStructured(attempt, turn, session, fence, actor)
+        return
+      }
 
       const receipt = await session.submit(
         {
@@ -1183,19 +1680,22 @@ export class SwarmEngine {
           this.moveDelivery(tx, fresh, 'accept_timeout', actor, {
             detail: { reason: 'no message_accepted inside acceptTimeoutMs' },
           })
-          this.notice({
-            kind: 'delivery-unknown',
-            severity: 'warn',
-            title: 'Delivery could not be confirmed',
-            detail:
-              'No message_accepted arrived inside acceptTimeoutMs. Reconcile before resending — ' +
-              'sendMessage has no idempotency key, so a resend cannot be deduplicated.',
-            delegationId: attempt.delegationId,
-            attemptId: attempt.id,
-            turnId: turn.id,
-            actions: [{ intent: 'reconcile', label: 'Reconcile' }],
-            dismissible: false,
-          })
+          this.notice(
+            {
+              kind: 'delivery-unknown',
+              severity: 'warn',
+              title: 'Delivery could not be confirmed',
+              detail:
+                'No message_accepted arrived inside acceptTimeoutMs. Reconcile before resending — ' +
+                'sendMessage has no idempotency key, so a resend cannot be deduplicated.',
+              delegationId: attempt.delegationId,
+              attemptId: attempt.id,
+              turnId: turn.id,
+              actions: [{ intent: 'reconcile', label: 'Reconcile' }],
+              dismissible: false,
+            },
+            tx,
+          )
         }
         const live = readAttempt(tx, attempt.id)
         if (live !== null && contextOnly) this.moveChannel(tx, live, 'turn_done', actor)
@@ -1214,6 +1714,129 @@ export class SwarmEngine {
         this.dequeue(tx, attempt.id, turn.id)
       })
     }
+  }
+
+  /**
+   * §4.2's `structured` row, in full: native `runStructured`, `maxRetries + 1` turns against the
+   * budget, `StructuredOutputError ⇒ structuredFailed`, and every attempt stored as evidence.
+   *
+   * The delivery walk is V4 → V6 → V7 rather than a special case, because that is what actually
+   * happened: `runStructured` runs real turns underneath, and a delivery machine that skipped them
+   * would leave the transcript describing a turn nobody can find.
+   */
+  private async submitStructured(
+    attempt: AttemptRecord,
+    turn: TurnRecord,
+    session: ExecutorSessionHandle,
+    fence: Fence,
+    actor: ActorRef,
+  ): Promise<void> {
+    const schema = turn.directive.structured?.schema
+    const maxRetries = turn.effective.structured?.maxRetries ?? 2
+    const result = await session.structured<unknown>(
+      {
+        text: turn.directive.text,
+        ...(turn.directive.images === undefined
+          ? {}
+          : {
+              images: turn.directive.images.map(
+                (image) => [image.mediaType, image.base64] as const,
+              ),
+            }),
+      },
+      schema,
+      maxRetries,
+      fence,
+    )
+
+    /* The attempts are the evidence §4.2 asks for, valid or not. */
+    const evidenceRef = join(this.layout.evidenceDir, attempt.id, 'structured')
+    try {
+      mkdirSync(evidenceRef, { recursive: true, mode: 0o700 })
+      writeFileSync(
+        join(evidenceRef, `${turn.id}.jsonl`),
+        `${result.raw.map((row) => JSON.stringify({ raw: row })).join('\n')}\n`,
+        { mode: 0o600 },
+      )
+    } catch {
+      /* Evidence that cannot be written is a disk problem; the turn still has to end honestly. */
+    }
+
+    this.commitPlain('structured_result', (tx) => {
+      const accepted = this.moveDelivery(
+        tx,
+        this.requireTurn(tx, turn.id),
+        'message_accepted',
+        actor,
+        {
+          detail: { ackAtMs: this.now() },
+        },
+      )
+      if (accepted === null) return
+      const running = this.moveDelivery(tx, accepted, 'first_stream_event', actor)
+      if (running === null) return
+      const ended = result.failed
+        ? this.moveDelivery(tx, running, 'turn_done', actor, {
+            detail: { reason: `structuredFailed: ${result.error?.code ?? 'invalid'}` },
+          })
+        : this.moveDelivery(tx, running, 'turn_done', actor)
+      if (ended !== null) this.putTurn(tx, { ...ended, endedAt: this.now() })
+      /* C5 → C7 → C8, for the same reason the delivery walks V4 → V6 → V7: `runStructured` ran
+       * real turns underneath, and a channel that jumped from `submitting` to `idle` would leave
+       * every later turn on this session waiting for a state the machine cannot reach. */
+      for (const trigger of ['message_accepted', 'first_stream_event', 'turn_done'] as const) {
+        const live = readAttempt(tx, attempt.id)
+        if (live !== null) this.moveChannel(tx, live, trigger, actor)
+      }
+      this.dequeue(tx, attempt.id, turn.id)
+    })
+
+    if (result.failed) {
+      this.notice({
+        kind: 'capability-absent',
+        severity: 'warn',
+        title: 'The structured answer did not validate',
+        detail: `${result.attempts} attempt(s) failed the schema; every response is stored as evidence.`,
+        delegationId: attempt.delegationId,
+        attemptId: attempt.id,
+        turnId: turn.id,
+        actions: [],
+        dismissible: true,
+      })
+    }
+    await this.afterTurn(attempt.id, attempt.delegationId)
+  }
+
+  /**
+   * §4.2's `budget` row: the wall half of a `TurnBudget` is a **swarm timer** plus
+   * `cancel(sessionId)`, because jcode has no per-turn deadline to delegate it to.
+   */
+  private armTurnDeadline(
+    attemptId: AttemptId,
+    delegationId: DelegationId,
+    turn: TurnRecord,
+  ): void {
+    const wall = turn.effective.budget?.maxWallMs
+    if (wall === undefined || wall <= 0) return
+    void this.sleep(wall).then(() => {
+      if (this.closed) return
+      const still = this.store.read((tx) => readTurn(tx, turn.id))
+      if (still === null) return
+      if (
+        still.delivery !== 'sent' &&
+        still.delivery !== 'accepted' &&
+        still.delivery !== 'running'
+      ) {
+        return
+      }
+      void this.breachTurnBudget(attemptId, delegationId, turn.id).catch(() => undefined)
+    })
+  }
+
+  private requireTurn(tx: ReadTx, id: TurnId): TurnRecord {
+    const turn = readTurn(tx, id)
+    if (turn === null) throw new SwarmError('not_found', `no turn ${id}`)
+    return turn
   }
 
   private dequeue(tx: WriteTx, attemptId: AttemptId, turnId: TurnId): void {
@@ -1246,6 +1869,9 @@ export class SwarmEngine {
   private handleExecutorEvent(attemptId: AttemptId, event: ExecutorEvent): void {
     const runtime = this.runtimeOf(attemptId)
     runtime.lastEventAt = this.now()
+    /* §7.4's `swarm_executor_events_total{kind}`, which used to be a hard-coded 0. */
+    this.observed.executorEvents[event.k] = (this.observed.executorEvents[event.k] ?? 0) + 1
+    const writeStartedAt = this.mono()
     const actor = this.serverActor('executor')
     const stream = attemptStream(attemptId)
 
@@ -1280,7 +1906,13 @@ export class SwarmEngine {
               status: event.k === 'tool_start' ? 'start' : 'exec',
             },
             actor,
-            { delegationId: attempt.delegationId, attemptId },
+            {
+              delegationId: attempt.delegationId,
+              attemptId,
+              /* §5.5 counts tool events **for this turn**; the id is what makes that a filter
+               * rather than a guess about how far back to look. */
+              ...(current === null ? {} : { turnId: current.id }),
+            },
           )
           this.moveChannel(tx, attempt, 'first_stream_event', actor)
           if (current !== null) this.moveDelivery(tx, current, 'first_stream_event', actor)
@@ -1306,10 +1938,38 @@ export class SwarmEngine {
               output: event.output.slice(0, 4096),
             },
             actor,
-            { delegationId: attempt.delegationId, attemptId },
+            {
+              delegationId: attempt.delegationId,
+              attemptId,
+              /* §5.5's clause is "any tool event logged **for this turn**". Without the id on the
+               * record, reconciliation counted the whole `attempt:*` stream and read a *previous*
+               * turn's tool call as evidence that the message under reconciliation had landed. */
+              ...(current === null ? {} : { turnId: current.id }),
+            },
           )
           if (current !== null) {
-            this.putTurn(tx, { ...current, toolCallCount: current.toolCallCount + 1 })
+            const counted = this.putTurn(tx, {
+              ...current,
+              toolCallCount: current.toolCallCount + 1,
+            })
+            /* §3.4's `maxToolCalls` — one of the three dimensions `addSpend` was never given. */
+            const delegation = this.requireDelegation(tx, attempt.delegationId)
+            this.putDelegation(tx, {
+              ...delegation,
+              spend: addSpend(delegation.spend, { toolCalls: 1 }),
+            })
+            if (
+              turnBudgetBreached(counted.effective.budget, {
+                wallMs: this.now() - runtime.turnStartedAt,
+                toolCalls: counted.toolCallCount,
+              })
+            ) {
+              return {
+                kind: 'turn_budget' as const,
+                delegationId: attempt.delegationId,
+                turnId: counted.id,
+              }
+            }
           }
           return null
         }
@@ -1346,6 +2006,16 @@ export class SwarmEngine {
             spend: addSpend(delegation.spend, {
               inputTokens: event.input,
               outputTokens: event.output,
+              /* `estUsd` has exactly one source and no default (§3.4). Absent, it stays 0 and
+               * `assertSpendMeasurable` says so out loud rather than letting `maxSpendUsd` read
+               * as "never breached". */
+              estUsd:
+                this.options.estimateTurnCostUsd?.({
+                  provider: delegation.spec.model.provider,
+                  model: delegation.spec.model.model,
+                  inputTokens: event.input,
+                  outputTokens: event.output,
+                }) ?? 0,
             }),
           })
           return null
@@ -1355,6 +2025,9 @@ export class SwarmEngine {
           return null
         }
         case 'turn_done': {
+          /* C10 wins over C11: an interrupt followed by a `turn_done` did not merge, whatever the
+           * merge timer would have concluded three seconds later. */
+          runtime.interruptAt = null
           const live = this.moveChannel(tx, attempt, 'turn_done', actor)
           if (current !== null) {
             const ended = this.moveDelivery(tx, current, 'turn_done', actor)
@@ -1387,6 +2060,7 @@ export class SwarmEngine {
         case 'closed': {
           /* C12 / V8 / D18: a disconnect is honest about what it cost — the turn becomes
            * `unknown`, the attempt is annotated `interrupted`, and the delegation waits. */
+          runtime.interruptAt = null
           this.moveChannel(tx, attempt, 'socket_closed', actor)
           if (current !== null && (current.delivery === 'running' || current.delivery === 'sent')) {
             this.moveDelivery(
@@ -1476,19 +2150,138 @@ export class SwarmEngine {
       }
     }).value
 
+    this.observed.logWriteMs += Math.max(0, this.mono() - writeStartedAt)
     if (post === null || post === undefined) return
-    if (post.kind === 'turn_end') void this.afterTurn(attemptId, post.delegationId)
-    if (post.kind === 'disconnected') void this.afterDisconnect(attemptId, post.delegationId)
+    /* X7: the follow-up work is started, never awaited — a slow verifier must not stall the drain.
+     * Both are caught: contention on the `delegation:*` reconciliation lease is an expected
+     * outcome (§3.4), and an expected outcome that escapes as an unhandled rejection would take
+     * the server down for the one failure mode it exists to survive. */
+    if (post.kind === 'turn_end') {
+      void this.afterTurn(attemptId, post.delegationId).catch((error: unknown) => {
+        this.noteBackgroundFailure('turn end', post.delegationId, attemptId, error)
+      })
+    }
+    if (post.kind === 'disconnected') {
+      void this.afterDisconnect(attemptId, post.delegationId).catch((error: unknown) => {
+        this.noteBackgroundFailure('disconnect', post.delegationId, attemptId, error)
+      })
+    }
+    if (post.kind === 'turn_budget') {
+      void this.breachTurnBudget(attemptId, post.delegationId, post.turnId).catch(
+        (error: unknown) => {
+          this.noteBackgroundFailure('turn budget', post.delegationId, attemptId, error)
+        },
+      )
+    }
+  }
+
+  /**
+   * §3.4's last sentence: "a `TurnBudget` breach `cancel`s **that turn only** and records
+   * `budget-breach` on it", and §4.2's `budget` row: "none — swarm timer + `cancel(sessionId)`;
+   * `cancel` ends the turn; the session survives".
+   *
+   * `turnBudgetBreached` had no caller at all, so `TurnDirective.budget` was a field the client
+   * could set, the server would persist onto `EffectiveTurnConfig`, and nothing would ever read.
+   */
+  private async breachTurnBudget(
+    attemptId: AttemptId,
+    delegationId: DelegationId,
+    turnId: TurnId,
+  ): Promise<void> {
+    const runtime = this.live.get(attemptId)
+    if (runtime === undefined || runtime.session === null || runtime.fence === null) return
+    const already = this.commitPlain('turn_budget_breach', (tx) => {
+      const turn = readTurn(tx, turnId)
+      if (turn === null || turn.deliveryDetail.reason === 'budget-breach') return true
+      this.putTurn(tx, {
+        ...turn,
+        deliveryDetail: { ...turn.deliveryDetail, reason: 'budget-breach' },
+      })
+      return false
+    })
+    if (already === true) return
+    /* The turn, and only the turn. The session survives, which is what makes this different from
+     * every other stop in §4.3.7. */
+    await runtime.session.interrupt('cancel', null, runtime.fence).catch(() => undefined)
+    this.issueInterrupt(attemptId, this.serverActor('turn budget'))
+    this.notice({
+      kind: 'budget-hard',
+      severity: 'warn',
+      title: 'The turn budget was reached',
+      detail: 'This turn was cancelled; the session and the delegation are untouched (§3.4).',
+      delegationId,
+      attemptId,
+      turnId,
+      actions: [],
+      dismissible: true,
+    })
+  }
+
+  /**
+   * A spend cap swarm cannot measure is a gate that does not gate (S8).
+   *
+   * `SpendCounters.estUsd` has exactly one possible source — an injected price oracle — and this
+   * spec names no price table, so there is nothing honest to default to. What is **not** acceptable
+   * is the previous behaviour: `estUsd` frozen at 0, so `fraction(0, maxSpendUsd)` was 0 and both
+   * `BudgetSpec.maxSpendUsd` and `caps.hardSpendUsd` read as "never breached" while a surface
+   * happily showed a dollar limit. Raised once, non-dismissible.
+   */
+  private assertSpendMeasurable(budget: { readonly maxSpendUsd?: number }): void {
+    if (this.spendOracleWarned) return
+    if (this.options.estimateTurnCostUsd !== undefined) return
+    if (budget.maxSpendUsd === undefined && this.config.caps.hardSpendUsd === null) return
+    this.spendOracleWarned = true
+    this.notice({
+      kind: 'capability-absent',
+      severity: 'warn',
+      title: 'Spend caps are not enforced',
+      detail:
+        'A dollar cap is configured but this server has no way to price a turn, so `estUsd` stays ' +
+        '0 and the cap can never breach. Turn, token, tool-call and wall budgets are unaffected.',
+      actions: [],
+      dismissible: false,
+    })
+  }
+
+  /** A background stage that refused. Surfaced as a notice; never a crash, never silence. */
+  private noteBackgroundFailure(
+    stage: string,
+    delegationId: DelegationId,
+    attemptId: AttemptId,
+    error: unknown,
+  ): void {
+    if (this.closed) return
+    this.notice({
+      kind: 'doctor-blocked',
+      severity: 'warn',
+      title: `Post-${stage} work did not complete`,
+      detail: SwarmError.is(error) ? `${error.code}: ${error.message}` : String(error),
+      delegationId,
+      attemptId,
+      actions: [{ intent: 'reconcile', label: 'Reconcile' }],
+      dismissible: true,
+    })
   }
 
   /* ---------------------------------------------------------------------------- turn end */
 
   private async afterTurn(attemptId: AttemptId, delegationId: DelegationId): Promise<void> {
+    const runtime = this.live.get(attemptId)
+    const elapsedWall = runtime === undefined ? 0 : Math.max(0, this.now() - runtime.turnStartedAt)
     const decision = this.store.commit((tx) => {
       const delegation = this.requireDelegation(tx, delegationId)
       const meta = this.attemptMeta(tx, attemptId)
-      const spend = addSpend(delegation.spend, { turns: 1 })
+      /* `wallMs` grew **only** on a detected sleep gap, and that gap was added to `wallMs` and
+       * `sleptMs` at once — and `budgetFractions` reads `wallMs − sleptMs`. The wall fraction was
+       * therefore pinned at 0 and `maxWallMs` could never breach. It is turn time that spends the
+       * wall budget; a suspend inside a turn is still excluded, because `sleptMs` is subtracted. */
+      const spend = addSpend(delegation.spend, {
+        turns: 1,
+        wallMs: elapsedWall,
+        monotonicMs: elapsedWall,
+      })
       const updated = this.putDelegation(tx, { ...delegation, spend })
+      this.assertSpendMeasurable(updated.spec.budget)
 
       const breach = classifyBudget(spend, updated.spec.budget)
       if (breach.level !== 'none') {
@@ -1561,7 +2354,12 @@ export class SwarmEngine {
         this.putAttempt(tx, { ...attempt, outcome: 'interrupted' })
       }
     })
+    /* §5.5's procedure reattaches **inside** reconciliation, before the `tail(12)` — the tail is
+     * the evidence, and a tail nobody can read is not "no evidence", it is no observation. */
     await this.reconcileDelegation(delegationId, this.serverActor('disconnect'))
+    /* C13 then runs the full ladder for whatever reconciliation could not reattach; a channel it
+     * already restored makes this a no-op. */
+    void this.reconnectChannel(attemptId).catch(() => undefined)
   }
 
   /* ------------------------------------------------------------------------- verification */
@@ -1628,6 +2426,12 @@ export class SwarmEngine {
     const verdict = verdictOf(stamped.results, { reviewIsAuthoritative: authoritative })
     const final: VerificationRun = { ...stamped, verdict }
 
+    /* §8.5's bundle, actually written. Production used to emit `digest(final.runId)` — the sha of
+     * an id string — under the name `manifestDigest`, beside a directory containing only
+     * `run.json` and the criterion output. §13 asks that "its `manifest.json` digests match the
+     * files on disk"; a digest of the run id matches nothing, and matched nothing, checkably. */
+    const bundle = this.writeBundle(setup.attempt, final)
+
     this.commitPlain('verify_result', (tx) => {
       const attempt = readAttempt(tx, attemptId)
       if (attempt === null) return
@@ -1651,12 +2455,13 @@ export class SwarmEngine {
           k: 'deleg.evidence',
           attemptId,
           evidenceRef: final.evidenceRef,
-          manifestDigest: digest(final.runId),
+          manifestDigest: bundle.manifestDigest,
         },
         this.serverActor('verifier'),
         { delegationId: attempt.delegationId, attemptId },
       )
 
+      let forced: DelegationState | undefined
       const canReachVerified =
         hasMachineCheckableCriterion(setup.delegation.spec.acceptance) || authoritative
       if (verdict === 'pass' && canReachVerified) {
@@ -1670,18 +2475,82 @@ export class SwarmEngine {
           version: delegation.version + 1,
         })
       } else {
-        /* D11: a failure with budget remaining, or an indeterminate result, is a question for a
-         * human — never a silent `failed` and never a silent `succeeded`. */
-        this.movePhase(tx, attemptId, 'verification_failed_budget_remaining')
         const delegation = this.requireDelegation(tx, attempt.delegationId)
-        this.putDelegation(tx, {
-          ...delegation,
-          lastNeedsYouReason: verdict === 'fail' ? 'verification-failed' : 'manual-criterion',
-        })
+        const exhausted =
+          verdict === 'fail' &&
+          classifyBudget(delegation.spend, delegation.spec.budget).level === 'hard'
+        if (exhausted) {
+          /* D12 — "criteria failed, budget exhausted". `verification_exhausted` appeared nowhere
+           * outside the state table, so the else-branch always fired D11 and `verifying → failed`
+           * was unreachable regardless of spend: the row was tested in the table and by no path. */
+          this.movePhase(tx, attemptId, 'verification_exhausted')
+          this.endAttempt(tx, attemptId, 'exhausted', 'failed')
+          const ended = this.requireDelegation(tx, attempt.delegationId)
+          this.putDelegation(tx, {
+            ...ended,
+            state: ended.liveAttempts.length === 0 ? 'failed' : ended.state,
+            lastNeedsYouReason: 'budget' as NeedsYouReason,
+            version: ended.version + 1,
+          })
+          /* D22 has already moved this attempt's phase to `queued` (the hard cap fires at the same
+           * turn end), and `refreshDelegationState` deliberately never rolls `queued` up to a
+           * terminal — that guard is what protects a D19 reopen. So D12 names its own terminal. */
+          if (ended.liveAttempts.length === 0) forced = 'failed'
+        } else {
+          /* D11: a failure with budget remaining, or an indeterminate result, is a question for a
+           * human — never a silent `failed` and never a silent `succeeded`. */
+          this.movePhase(tx, attemptId, 'verification_failed_budget_remaining')
+          this.putDelegation(tx, {
+            ...delegation,
+            lastNeedsYouReason: verdict === 'fail' ? 'verification-failed' : 'manual-criterion',
+          })
+        }
       }
-      this.refreshDelegationState(tx, attempt.delegationId, this.serverActor('verifier'))
+      this.refreshDelegationState(tx, attempt.delegationId, this.serverActor('verifier'), forced)
     })
     return final
+  }
+
+  /**
+   * §8.5's bundle, from the durable log — the only source that is authoritative after a restart
+   * (§5.4 #2). `diff.patch`, `transcript.jsonl`, `tools.jsonl`, `cost.json`, `timings.json` and a
+   * `manifest.json` that digests each of them, beside the `run.json` the verifier already wrote.
+   */
+  private writeBundle(
+    attempt: AttemptRecord,
+    run: VerificationRun,
+  ): { readonly manifestDigest: string } {
+    const { transcript, tools } = this.store.read((tx) => {
+      const entries = replayTranscript(tx, attempt.id, TRANSCRIPT_SNAPSHOT_LIMIT)
+      return {
+        transcript: entries.entries,
+        tools: entries.entries.filter((entry) => entry.k === 'tool'),
+      }
+    })
+    const delegation = this.store.read((tx) => readDelegation(tx, attempt.delegationId))
+    const diff =
+      attempt.workspace.worktree === null
+        ? ''
+        : runGit(attempt.workspace.worktree, ['diff', attempt.workspace.baseRevision]).stdout
+    try {
+      return writeEvidenceBundle({
+        evidenceRef: run.evidenceRef,
+        diff,
+        transcript,
+        tools,
+        cost: delegation?.spend ?? emptySpendCounters(),
+        timings: {
+          runId: run.runId,
+          startedAt: run.startedAt,
+          endedAt: run.endedAt,
+          durationMs: Math.max(0, run.endedAt - run.startedAt),
+        },
+        run,
+      })
+    } catch (error) {
+      this.noteBackgroundFailure('evidence', attempt.delegationId, attempt.id, error)
+      return { manifestDigest: '' }
+    }
   }
 
   private endAttempt(
@@ -1711,11 +2580,17 @@ export class SwarmEngine {
     if (runtime?.session !== null && runtime !== undefined) {
       const session = runtime.session
       runtime.session = null
-      /* C15 — `close()` is the ONLY lease release; there is no detach (§5.4 #9). */
+      runtime.fence = null
+      runtime.interruptAt = null
+      /* C15 — `close()` is the ONLY lease release; there is no detach (§5.4 #9). The channel row
+       * moves with it, so `deleg.channel` never leaves a head believing a dead session is idle. */
+      const fresh = readAttempt(tx, attemptId)
+      if (fresh !== null) this.moveChannel(tx, fresh, 'close', this.serverActor('attempt ended'))
       void session?.close('attempt ended')
-      this.store.commit((inner) => {
-        inner.releaseLease(sessionLease(session?.sessionId ?? ''), attemptId)
-      })
+      /* Released in **this** transaction: `endAttempt` already runs inside one, and the store is a
+       * single writer with no nesting — a second `commit` here throws and takes the intent with
+       * it, which is how `accept` and `cancel{scope:'delegation'}` both became `internal`. */
+      if (session !== null) tx.releaseLease(sessionLease(session.sessionId), attemptId)
     }
   }
 
@@ -1745,9 +2620,22 @@ export class SwarmEngine {
       return { turn, attempt, interruptMode, siblings }
     })
 
+    /* §4.3.9's whole point is that no record may misdescribe a delivery. V12 is
+     * `prepared → (deleted)` and nothing else, so `moveDelivery` refused a `sent` non-interrupt
+     * turn and returned it unchanged — while the report still said `restoredTo:'deleted'` and the
+     * turn was dequeued. A refusal is the honest answer; the message is already on the wire. */
+    if (!plan.interruptMode && plan.turn.delivery !== 'prepared') {
+      throw new SwarmError(
+        'invalid_spec',
+        `turn ${turnId} is already \`${plan.turn.delivery}\`; only a prepared turn can be retracted ` +
+          '(interrupt-mode turns are retracted session-wide, §4.3.9)',
+        { details: { turnId, delivery: plan.turn.delivery } },
+      )
+    }
+
     if (plan.interruptMode) {
       const runtime = plan.attempt === null ? undefined : this.live.get(plan.attempt.id)
-      if (runtime?.session != null && runtime.fence !== null) {
+      if (runtime !== undefined && runtime.session !== null && runtime.fence !== null) {
         /* §5.4 #16: the primitive takes only a session id, so this un-delivers EVERY pending
          * interrupt on that session. The report names all of them (§4.3.9). */
         await runtime.session.interrupt('retract', null, runtime.fence)
@@ -1817,8 +2705,10 @@ export class SwarmEngine {
     if (options.scope === 'turn') {
       for (const attemptId of targets) {
         const runtime = this.live.get(attemptId)
-        if (runtime?.session != null && runtime.fence !== null) {
+        if (runtime !== undefined && runtime.session !== null && runtime.fence !== null) {
           await runtime.session.interrupt('cancel', null, runtime.fence)
+          /* C9 — `cancel` is an interrupt like any other; the session survives (§4.3.7). */
+          this.issueInterrupt(attemptId, ctx.actor)
         }
       }
       this.audit(ctx, 'cancel', { delegationId, scope: 'turn' })
@@ -1826,9 +2716,14 @@ export class SwarmEngine {
     }
 
     if (options.scope === 'hard') {
-      for (const instance of this.instances.values()) {
+      /* §4.3.7 scopes this to "the process group swarm created for **that instance**". Iterating
+       * the whole pool took down every other delegation sharing it — one user's hard cancel
+       * killing work they never named, from an intent whose entire contract is a scope. */
+      for (const key of this.instanceKeysOf(delegationId, targets)) {
+        const instance = this.instances.get(key)
+        if (instance === undefined) continue
         try {
-          await instance.hardKill('cancel{scope:hard}')
+          this.notePartialKill(await instance.hardKill('cancel{scope:hard}'), delegationId)
         } catch (error) {
           this.notice({
             kind: 'capability-absent',
@@ -1874,19 +2769,41 @@ export class SwarmEngine {
     return null
   }
 
-  /** D19 — `retry` reopens as attempt *N+1*; `verdict` cleared, `landed` retained (Q2). */
-  private retry(
+  /**
+   * D19 — `retry` reopens as attempt *N+1*; `verdict` cleared, `landed` retained (Q2).
+   *
+   * §6.3 declares `retry(id, o?: {spec?, parallel?, injectPriorFailure?})` returning
+   * `IntentResult<AttemptId[]>`. Two of the three options were dropped on the floor and the return
+   * was the literal `[]` — so A2's "a retry may edit it" had no implementation, and a head that
+   * asked which attempts it had just started got an empty answer every time.
+   */
+  private async retry(
     delegationId: DelegationId,
-    options: { parallel?: 1 | 2 | 3 },
+    options: {
+      spec?: Partial<DelegationSpec>
+      parallel?: 1 | 2 | 3
+      injectPriorFailure?: boolean
+    },
     ctx: IntentContext,
-  ): readonly AttemptId[] {
-    this.store.commit((tx) => {
+  ): Promise<readonly AttemptId[]> {
+    const before = this.store.commit((tx) => {
       const record = this.requireDelegation(tx, delegationId)
       const outcome = delegationMachine.transition(record.state, 'retry')
-      const spec =
-        options.parallel === undefined
-          ? record.spec
-          : { ...record.spec, parallelAttempts: options.parallel }
+      /* A2: the frozen spec copy an attempt carries may be edited by the retry that opens it. */
+      const spec: DelegationSpec = {
+        ...record.spec,
+        ...options.spec,
+        ...(options.parallel === undefined ? {} : { parallelAttempts: options.parallel }),
+        /* `workspace` is never patchable here: a retry that moved the base or the write mode would
+         * be a different delegation wearing the same id (C4b). */
+        workspace: record.spec.workspace,
+      }
+      if (spec.parallelAttempts > this.config.caps.maxParallelAttempts) {
+        throw new SwarmError(
+          'invalid_spec',
+          `parallelAttempts ${spec.parallelAttempts} exceeds the cap of ${this.config.caps.maxParallelAttempts}`,
+        )
+      }
       this.putDelegation(tx, {
         ...record,
         spec,
@@ -1894,18 +2811,56 @@ export class SwarmEngine {
         verdict: null,
         version: record.version + 1,
       })
+      /* D19 opens a **new admission epoch**: the slots this delegation already spent are what the
+       * scheduler counts, and a reopen that did not reset them would never admit anything. */
+      const meta = readMeta(tx, delegationId)
+      if (meta !== null) {
+        tx.putRecord('delegation_meta', delegationId, 1, {
+          ...meta,
+          openedInEpoch: 0,
+          epochQueuedAt: this.now(),
+          ...(options.injectPriorFailure === true
+            ? { priorFailure: this.priorFailureSummary(tx, record) }
+            : { priorFailure: undefined }),
+        } satisfies DelegationMeta)
+      }
       this.emitSummary(tx, delegationId, ctx.actor)
       tx.appendAudit({
         intent: 'retry',
         actor: ctx.actor,
         delegationId,
-        effective: { parallel: spec.parallelAttempts },
+        effective: {
+          parallel: spec.parallelAttempts,
+          specPatched: Object.keys(options.spec ?? {}),
+          injectPriorFailure: options.injectPriorFailure === true,
+        },
         result: { ok: true },
         correlation: ctx.idempotencyKey,
       })
-    })
-    void this.tick()
-    return []
+      return record.attempts
+    }).value
+
+    await this.tick()
+    const after = this.store.read((tx) => this.requireDelegation(tx, delegationId).attempts)
+    return after.filter((id) => !before.includes(id))
+  }
+
+  /**
+   * What the previous attempt actually did wrong, in the words the evidence already uses. Injected
+   * into the next attempt's objective so a retry is not the same prompt run twice.
+   */
+  private priorFailureSummary(tx: ReadTx, record: DelegationRecord): string {
+    const attemptId = record.attempts.at(-1)
+    const attempt = attemptId === undefined ? null : readAttempt(tx, attemptId)
+    if (attempt === null) return 'The previous attempt did not report a reason.'
+    const run = attempt.verifications.at(-1)
+    const failed = (run?.results ?? []).filter((r) => r.status !== 'pass' && r.status !== 'manual')
+    const lines = failed.map((r) => `- ${r.id} (${r.kind}): ${r.status}`)
+    return [
+      `The previous attempt ended \`${attempt.outcome}\`.`,
+      ...(run === undefined ? [] : [`Its last verification returned \`${run.verdict}\`.`]),
+      ...(lines.length === 0 ? [] : ['Criteria that did not pass:', ...lines]),
+    ].join('\n')
   }
 
   /** A6: the new delegation carries `origin`, which is the lineage Q2 and A5 both need. */
@@ -1974,6 +2929,14 @@ export class SwarmEngine {
     })
     if (attemptId === null) throw new SwarmError('not_found', 'this delegation has no attempt yet')
     this.commitPlain('verify_intent', (tx) => {
+      const record = this.requireDelegation(tx, delegationId)
+      if (record.state === 'failed') {
+        /* D21 — `failed → failed`: re-verification appends a run, and a pass reaches `succeeded`
+         * only via D19 then D10. The trigger existed in the table and was fired by nobody, so the
+         * row was reachable only by reading it. */
+        delegationMachine.transition(record.state, 'reverify')
+        return
+      }
       /* D8 from `waiting`, D9 from `running` — queued and applied at turn end (§3.3). */
       this.movePhase(tx, attemptId, 'verify')
       this.refreshDelegationState(tx, delegationId, ctx.actor)
@@ -2037,17 +3000,51 @@ export class SwarmEngine {
       baseHasMoved(setup.attempt.workspace.root, setup.attempt.workspace.baseRevision) &&
       options.mode === 'commit'
     ) {
+      /* §13: "a moved base produces `needs-you` with rebase/report/abandon, **never a silent
+       * failure**". The previous version raised the notice and then landed anyway — a warning
+       * followed by the exact action it warned about, which is worse than no warning: the record
+       * says the work landed on a base that no longer exists. */
+      this.store.commit((tx) => {
+        const record = this.requireDelegation(tx, delegationId)
+        this.putDelegation(tx, { ...record, lastNeedsYouReason: 'landing-conflict' })
+        this.emitSummary(tx, delegationId, ctx.actor)
+        tx.appendAudit({
+          intent: 'land',
+          actor: ctx.actor,
+          delegationId,
+          attemptId: options.attemptId,
+          effective: { mode: options.mode, baseRevision: setup.attempt.workspace.baseRevision },
+          result: { refused: 'base_moved' },
+          correlation: ctx.idempotencyKey,
+        })
+      })
       this.notice({
         kind: 'landing-conflict',
-        severity: 'warn',
+        severity: 'error',
         title: 'The base has moved',
         detail:
-          'Rebase, report or abandon — swarm never resolves a conflict on the agent’s behalf.',
+          'Rebase, report or abandon — swarm never resolves a conflict on the agent’s behalf. ' +
+          'A patch still applies cleanly to the recorded base; a commit no longer does.',
         delegationId,
         attemptId: options.attemptId,
-        actions: [{ intent: 'land', label: 'Land anyway' }],
-        dismissible: true,
+        actions: [
+          { intent: 'retry', label: 'Rebase — retry on the new base' },
+          { intent: 'land', label: 'Report — land as a patch' },
+          { intent: 'archive', label: 'Abandon' },
+        ],
+        dismissible: false,
       })
+      throw new SwarmError(
+        'base_moved',
+        `the base ${setup.attempt.workspace.baseRevision.slice(0, 12)} has moved; rebase, report or abandon`,
+        {
+          details: {
+            delegationId,
+            attemptId: options.attemptId,
+            baseRevision: setup.attempt.workspace.baseRevision,
+          },
+        },
+      )
     }
     const landing = land({
       ...options,
@@ -2145,6 +3142,11 @@ export class SwarmEngine {
   ): null {
     this.store.commit((tx) => {
       if ('fleet' in scope) {
+        /* §3.5's write ordering: the row and the fan-out become durable together, so a restart
+         * reads back the pause the user asked for instead of the absence of one (Q16). */
+        tx.putRecord('server_flags', 'dispatch', 1, {
+          dispatchPausedFleet: paused,
+        } satisfies ServerFlags)
         this.dispatchPausedFleet = paused
         this.emit(
           tx,
@@ -2198,7 +3200,7 @@ export class SwarmEngine {
       attemptsAffected.push(target.attemptId)
       if (target.turnId !== null) turnsCancelled.push(target.turnId)
       const runtime = this.live.get(target.attemptId)
-      if (runtime?.session != null && runtime.fence !== null) {
+      if (runtime !== undefined && runtime.session !== null && runtime.fence !== null) {
         await runtime.session.interrupt('cancel', null, runtime.fence).catch(() => undefined)
       }
     }
@@ -2207,7 +3209,9 @@ export class SwarmEngine {
     if (options.killInstances === true) {
       for (const instance of this.instances.values()) {
         try {
-          instancesKilled.push(await instance.hardKill('kill switch'))
+          const outcome = await instance.hardKill('kill switch')
+          instancesKilled.push(outcome)
+          this.notePartialKill(outcome, null)
         } catch (error) {
           this.notice({
             kind: 'capability-absent',
@@ -2232,6 +3236,11 @@ export class SwarmEngine {
     }
     this.dispatchPausedFleet = true
     this.store.commit((tx) => {
+      /* Q16: "the switch always pauses" — and a switch whose pause evaporates on restart is not a
+       * switch. The row is written in the same transaction as the report. */
+      tx.putRecord('server_flags', 'dispatch', 1, {
+        dispatchPausedFleet: true,
+      } satisfies ServerFlags)
       /* D23 changes no state: the machine is consulted so the row id is on the audit row, and it
        * returns the state it was given. */
       for (const stored of tx.listRecords<DelegationRecord>('delegation')) {
@@ -2315,6 +3324,56 @@ export class SwarmEngine {
     return null
   }
 
+  /** The instances a delegation's attempts actually run on — the scope §4.3.7 names. */
+  private instanceKeysOf(
+    delegationId: DelegationId,
+    attemptIds: readonly AttemptId[],
+  ): readonly InstanceKey[] {
+    return this.store.read((tx) => {
+      const keys = new Set<InstanceKey>()
+      for (const attemptId of attemptIds) {
+        const attempt = readAttempt(tx, attemptId)
+        if (attempt !== null) keys.add(attempt.executor.instanceKey)
+      }
+      if (keys.size === 0) {
+        const meta = readMeta(tx, delegationId)
+        if (meta !== null) keys.add(meta.instanceKey)
+      }
+      return [...keys]
+    })
+  }
+
+  /**
+   * §5.1/§4.3.7/§13: "an adapter that cannot resolve a `daemonPid` MUST report it … **and raise
+   * `notice{kind:'capability-absent'}`**, because a kill that left the daemon alive must never be
+   * reported as a completed stop."
+   *
+   * The adapter reported it faithfully; the server never looked. Only a *thrown* `hardKill` raised
+   * a notice, so the one failure [F1] exists to catch — a bridge-only kill returning
+   * `survivors: []` while the agent keeps writing to the worktree — arrived as a clean success.
+   */
+  private notePartialKill(outcome: KillOutcomeReport, delegationId: DelegationId | null): void {
+    const reasons: string[] = []
+    if (outcome.daemonPid === null) {
+      reasons.push('the daemon pid could not be resolved from servers.json')
+    } else if (!outcome.daemonStopped) {
+      reasons.push(`the daemon (pid ${outcome.daemonPid}) survived the kill`)
+    }
+    if (outcome.survivors.length > 0) reasons.push(`survivors: ${outcome.survivors.join(', ')}`)
+    if (reasons.length === 0) return
+    this.notice({
+      kind: 'capability-absent',
+      severity: 'error',
+      title: 'The hard kill did not stop everything',
+      detail:
+        `${reasons.join('; ')}. The daemon calls setsid(), so killing the bridge group alone ` +
+        'stops nothing — the agent may still be writing to the worktree ([F1], §4.3.7).',
+      ...(delegationId === null ? {} : { delegationId }),
+      actions: [{ intent: 'cancel', label: 'Cancel the delegation' }],
+      dismissible: false,
+    })
+  }
+
   private audit(ctx: IntentContext, intent: string, effective: unknown): void {
     this.store.commit((tx) => {
       tx.appendAudit({
@@ -2355,11 +3414,17 @@ export class SwarmEngine {
         const attemptId = record.liveAttempts[0] ?? record.attempts.at(-1) ?? null
         const attempt = attemptId === null ? null : readAttempt(tx, attemptId)
         const turn = attempt === null ? null : currentTurn(tx, attempt)
-        const toolEvents = attempt === null ? 0 : this.countToolEvents(tx, attempt.id)
+        const toolEvents =
+          attempt === null || turn === null ? 0 : this.countToolEvents(tx, attempt.id, turn.id)
         const ackLogged = turn !== null && turn.deliveryDetail.ackAtMs !== null
         return { record, attempt, turn, toolEvents, ackLogged }
       })
 
+      /* §5.5's order is "take the lease → **reattach** → `tail(12)`". Reconciliation ran before
+       * any reattach and `gatherEvidence` tailed only a session that happened to still be live,
+       * so on the disconnect path — the case the protocol exists for — `digestInTail` was
+       * structurally always `false`, and the strong-evidence row fired on a missing observation. */
+      if (setup.attempt !== null) await this.reattachForEvidence(setup.attempt)
       const evidence = await this.gatherEvidence(setup)
       const decision = decideReconciliation(evidence, {
         autoResendOnStrongEvidence: setup.record.spec.autoResendOnStrongEvidence === true,
@@ -2425,6 +3490,52 @@ export class SwarmEngine {
     }
   }
 
+  /**
+   * One rung of C13's ladder, taken for the evidence rather than for the work: open the session,
+   * take the writer lease with a fresh fence, and start the pump. It is the *same* reattach the
+   * supervisor would do, which is why the supervisor then finds nothing to do.
+   */
+  private async reattachForEvidence(attempt: AttemptRecord): Promise<void> {
+    const runtime = this.live.get(attempt.id)
+    const sessionId = attempt.executor.sessionId
+    if (runtime === undefined || sessionId === null) return
+    if (runtime.session !== null || runtime.instance === null || runtime.reconnecting) return
+    if (attempt.outcome !== 'open' && attempt.outcome !== 'interrupted') return
+
+    let session: ExecutorSessionHandle
+    try {
+      session = await runtime.instance.openSession(sessionId)
+    } catch {
+      /* An unreachable session is not evidence of anything; the ladder still owns the retries. */
+      return
+    }
+    const fence = this.store.commit((tx) => {
+      const lease = tx.acquireLease(sessionLease(sessionId), attempt.id, LEASES.sessionTtlMs)
+      if (lease === null) return null
+      const fresh = readAttempt(tx, attempt.id)
+      if (fresh !== null) {
+        this.moveChannel(tx, fresh, 'reconnect', this.serverActor('reconciliation'))
+        this.moveChannel(
+          tx,
+          this.requireAttempt(tx, attempt.id),
+          'attached',
+          this.serverActor('reconciliation'),
+        )
+      }
+      return { key: lease.key, token: lease.token }
+    }).value
+    if (fence === null) {
+      this.observed.leaseConflicts += 1
+      await session.close('lease held by another writer').catch(() => undefined)
+      return
+    }
+    runtime.session = session
+    runtime.fence = fence
+    /* §4.2: the shadow is invalidated on every reattach, forcing a re-assert before the next send. */
+    runtime.shadow = { model: null, effort: undefined }
+    void this.pump(attempt.id, session)
+  }
+
   private async gatherEvidence(setup: {
     attempt: AttemptRecord | null
     turn: TurnRecord | null
@@ -2435,8 +3546,11 @@ export class SwarmEngine {
     let sessionIdle = true
     if (setup.attempt !== null && setup.turn !== null) {
       const runtime = this.live.get(setup.attempt.id)
-      sessionIdle = setup.attempt.channel !== 'streaming'
-      if (runtime?.session != null) {
+      /* Re-read: the reattach above may have moved the channel, and §5.5 asks about the session
+       * "observed `streaming` **on reattach**", not before it. */
+      const attempt = this.store.read((tx) => readAttempt(tx, setup.attempt!.id)) ?? setup.attempt
+      sessionIdle = attempt.channel !== 'streaming'
+      if (runtime !== undefined && runtime.session !== null) {
         try {
           /* `peekSession`, never the other read ([F8]) — against `""` every turn looks un-landed. */
           const tail = await runtime.session.tail(12)
@@ -2447,7 +3561,7 @@ export class SwarmEngine {
       }
     }
     let workspaceMutated = false
-    if (setup.attempt?.workspace.worktree != null) {
+    if (setup.attempt !== null && setup.attempt.workspace.worktree !== null) {
       const status = porcelainStatus(setup.attempt.workspace.worktree)
       const head = headRevision(setup.attempt.workspace.worktree)
       workspaceMutated =
@@ -2462,12 +3576,18 @@ export class SwarmEngine {
     }
   }
 
-  private countToolEvents(tx: ReadTx, attemptId: AttemptId): number {
+  /**
+   * §5.5's third clause is "any tool event logged **for this turn**", and the emphasis is the whole
+   * rule. Counting the last 500 records of the entire `attempt:*` stream meant a *completed*
+   * previous turn's tool call was read as positive evidence that the message under reconciliation
+   * had landed — `decideReconciliation` then resumed observation on a turn that never arrived.
+   */
+  private countToolEvents(tx: ReadTx, attemptId: AttemptId, turnId: TurnId): number {
     const stream = attemptStream(attemptId)
     const head = tx.head(stream).head
     let count = 0
     for (const record of tx.readLog(stream, Math.max(0, head - 500), 500)) {
-      if (record.ev.k === 'att.tool') count += 1
+      if (record.ev.k === 'att.tool' && record.turnId === turnId) count += 1
     }
     return count
   }
@@ -2490,9 +3610,11 @@ export class SwarmEngine {
     if (gap.kind === 'none') return 'none'
     if (gap.kind === 'stalled') {
       this.notice({
+        /* `NoticeKind` has no `stall` member and it is a locked §6.4 union, so W5 rides `drift`
+         * with a title that names it. Recorded as a deviation rather than widened silently. */
         kind: 'drift',
         severity: 'warn',
-        title: 'A long gap in both clocks',
+        title: 'Stalled — a long gap in both clocks (W5)',
         detail: `wall +${gap.wallGapMs} ms, monotonic +${gap.monoGapMs} ms — the process ran and produced nothing (W5).`,
         actions: [],
         dismissible: true,
@@ -2524,10 +3646,15 @@ export class SwarmEngine {
           }
           this.movePhase(tx, attemptId, 'executor_disconnect')
         }
-        this.putDelegation(tx, {
-          ...record,
-          spend: addSpend(record.spend, { sleptMs: gap.sleptMs, wallMs: gap.wallGapMs }),
-        })
+        /* `sleptMs` alone. Adding `wallGapMs` here too double-counted the suspend: the turn that
+         * spanned it already carries the wall time, and `budgetFractions` subtracts `sleptMs`
+         * exactly once (X16). Only delegations that were actually running slept on the clock. */
+        if (record.liveAttempts.length > 0) {
+          this.putDelegation(tx, {
+            ...record,
+            spend: addSpend(record.spend, { sleptMs: gap.sleptMs }),
+          })
+        }
         this.refreshDelegationState(tx, record.id, this.serverActor('resumed from sleep'))
         if (touched || record.liveAttempts.length > 0) ids.push(record.id)
       }
@@ -2556,6 +3683,170 @@ export class SwarmEngine {
     return 'asleep'
   }
 
+  /* ------------------------------------------------------------------ §3.4 lease maintenance */
+
+  /**
+   * §3.4 rule 2: the writer lease has a 60 s TTL and is **renewed at 20 s**.
+   *
+   * Nothing renewed it, and `LEASES.sessionRenewMs` had no reader at all. Every real turn outlives
+   * 60 s, after which `acquireLease` hands `session:*` to the next caller with a **new** fence —
+   * and the reconnect ladder is exactly such a caller. The streaming writer's fence went stale
+   * mid-turn and its next `applyConfig`/`submit`/`interrupt` was refused `stale_fence`: the writer
+   * lease evicting the writer it exists to protect.
+   *
+   * The `home:*` leases ride along, for the same reason and with the same TTL.
+   */
+  renewLeases(at = this.now()): number {
+    void at
+    let renewed = 0
+    this.store.commit((tx) => {
+      for (const [attemptId, runtime] of this.live) {
+        if (runtime.session === null) continue
+        const lease = tx.renewLease(
+          sessionLease(runtime.session.sessionId),
+          attemptId,
+          LEASES.sessionTtlMs,
+        )
+        if (lease !== null) renewed += 1
+      }
+      for (const key of this.instances.keys()) {
+        const jcodeHome = join(this.layout.instancesDir, hashKey(key), 'home')
+        if (tx.renewLease(homeLease(jcodeHome), `instance:${key}`, LEASES.sessionTtlMs) !== null) {
+          renewed += 1
+        }
+      }
+    })
+    return renewed
+  }
+
+  /**
+   * §3.4 rule 2's other half: **expiry never releases while a turn streams** — it marks the holder
+   * `suspect` and blocks new submissions.
+   *
+   * `leaseStatus` had no caller, so `'suspect'` was a value the type system knew about and the
+   * server never produced. Called before every send, which is the only moment at which "blocks new
+   * submissions" means anything.
+   */
+  private assertWriterLease(attemptId: AttemptId, sessionId: string, streaming: boolean): void {
+    const lease = this.store.read((tx) => tx.getLease(sessionLease(sessionId)))
+    if (lease === null || lease.holder !== attemptId) {
+      this.observed.leaseConflicts += 1
+      throw new SwarmError('lease_held', `the writer lease for ${sessionId} is held elsewhere`, {
+        details: { attemptId, sessionId, holder: lease?.holder ?? null },
+      })
+    }
+    const status = leaseStatus(lease, this.now(), streaming)
+    if (status === 'held') return
+    this.observed.leaseConflicts += 1
+    throw new SwarmError(
+      'lease_held',
+      status === 'suspect'
+        ? `the writer lease for ${sessionId} expired while a turn streams; the holder is suspect`
+        : `the writer lease for ${sessionId} has expired`,
+      { details: { attemptId, sessionId, status } },
+    )
+  }
+
+  /* ---------------------------------------------------------------------------- §2.3 retention */
+
+  /**
+   * §2.3's retention table, applied by the **server**.
+   *
+   * `advanceFloor` and `config.retention` had no server-side reader, so the `attempt:*` rule
+   * ("7 d or 200 MB, then the floor rises") and the `server` stream's 30 days were rows in a table
+   * nothing implemented: `lagged{reason:'retention'}` could only be produced by a test calling the
+   * store directly. `fleet` and `delegation:*` are deliberately absent — "forever" and "delegation
+   * lifetime" are not clock rules — and `audit` is exempt from all of it (S13, Q20).
+   */
+  applyRetention(at = this.now()): number {
+    const attemptCutoff = at - this.config.retention.attemptStreamDays * 24 * 60 * 60_000
+    const serverCutoff = at - SERVER_RETENTION.serverStreamDays * 24 * 60 * 60_000
+    const attemptBytes = this.config.retention.attemptStreamMb * 1024 * 1024
+    let removed = 0
+    this.store.commit((tx) => {
+      for (const row of tx.heads()) {
+        if (row.stream === 'server') {
+          removed += this.raiseFloor(tx, row.stream, row.floor, row.head, serverCutoff, Infinity)
+          continue
+        }
+        if (!row.stream.startsWith('attempt:')) continue
+        removed += this.raiseFloor(tx, row.stream, row.floor, row.head, attemptCutoff, attemptBytes)
+      }
+    })
+    return removed
+  }
+
+  /** Walk from the floor forward until both the age and the size rule are satisfied. */
+  private raiseFloor(
+    tx: WriteTx,
+    stream: StreamName,
+    floor: number,
+    head: number,
+    cutoffTs: number,
+    maxBytes: number,
+  ): number {
+    if (head <= floor) return 0
+    const records = tx.readLog(stream, floor, Math.min(head - floor, SERVER_RETENTION.scanLimit))
+    if (records.length === 0) return 0
+    let total = 0
+    for (const record of records) total += JSON.stringify(record.ev).length
+    let next = floor
+    let carried = total
+    for (const record of records) {
+      const overAge = record.ts < cutoffTs
+      const overSize = carried > maxBytes
+      if (!overAge && !overSize) break
+      next = record.seq
+      carried -= JSON.stringify(record.ev).length
+    }
+    if (next <= floor) return 0
+    return tx.advanceFloor(stream, next)
+  }
+
+  /* --------------------------------------------------------------------------- §8.2 the judge */
+
+  /**
+   * A session for a review, on an instance of swarm's choosing and **never** the attempt's own.
+   * Its writer lease is a real lease with a real fence, because §3.4 rule 1 applies to a judge's
+   * mutating calls exactly as it does to an agent's.
+   */
+  private async openJudgeSession(input: {
+    readonly workingDir: string
+    readonly title: string
+  }): Promise<JudgeSession> {
+    const key = instanceKeyOf({
+      model: this.config.defaults.model,
+    } as unknown as DelegationSpec)
+    const instance = await this.acquireInstance(key, {
+      attempt: {
+        workspace: { worktree: input.workingDir, root: input.workingDir },
+        spec: { execution: { autoPoke: false } },
+      } as unknown as AttemptRecord,
+    })
+    const session = await instance.createSession({
+      workingDir: input.workingDir,
+      title: input.title,
+    })
+    const holder = `judge:${this.ids()}`
+    const lease = this.store.commit((tx) =>
+      tx.acquireLease(sessionLease(session.sessionId), holder, LEASES.sessionTtlMs),
+    ).value
+    if (lease === null) {
+      await session.close('judge could not take its writer lease').catch(() => undefined)
+      this.observed.leaseConflicts += 1
+      throw new SwarmError('lease_held', 'the judge session is already held')
+    }
+    return {
+      session,
+      fence: { key: lease.key, token: lease.token },
+      model: this.config.defaults.model.model,
+      release: async () => {
+        await session.close('review finished').catch(() => undefined)
+        this.store.commit((tx) => tx.releaseLease(sessionLease(session.sessionId), holder))
+      },
+    }
+  }
+
   /* ---------------------------------------------------------------------------- scheduler */
 
   /**
@@ -2569,8 +3860,9 @@ export class SwarmEngine {
     try {
       const plan = this.store.read((tx) => this.planAdmissions(tx))
       for (const candidate of plan) {
-        await this.provision(candidate).catch((error: unknown) => {
-          this.failProvisioning(candidate.delegationId, error)
+        const attemptId = `a_${this.ids()}`
+        await this.provision(candidate, attemptId).catch((error: unknown) => {
+          this.failProvisioning(candidate.delegationId, attemptId, error)
         })
       }
     } finally {
@@ -2588,13 +3880,27 @@ export class SwarmEngine {
       }
       const meta = readMeta(tx, record.id)
       if (meta === null) continue
-      const wanted = record.spec.parallelAttempts - record.liveAttempts.length
+      /**
+       * The **epoch** is what bounds this, not the live count. `liveAttempts` shrinks when an
+       * attempt ends, and a `wanted` derived from it re-admits a replacement for every attempt
+       * that ever finished — an unbounded token-spend loop on any delegation whose siblings end
+       * while one keeps running, which §3.3 explicitly permits ("the first attempt to reach
+       * `verified` does **not** terminate its siblings"). D2 opens up to `parallelAttempts` per
+       * epoch; only D19 (`retry`, or a late follow-up `sendTurn`) opens a new one.
+       */
+      const opened = meta.openedInEpoch ?? record.attempts.length
+      const wanted = Math.min(
+        record.spec.parallelAttempts - opened,
+        record.spec.parallelAttempts - record.liveAttempts.length,
+      )
       for (let i = 0; i < wanted; i++) {
         candidates.push({
           delegationId: record.id,
           siblingIndex: record.liveAttempts.length + i,
           priority: record.priority,
-          queuedAt: record.createdAt,
+          /* Per epoch, not per record: a D19 reopen that carried `createdAt` outranked every
+           * newer delegation forever under the aging guard (F7). */
+          queuedAt: meta.epochQueuedAt ?? record.createdAt,
           workspaceId: record.spec.workspace.workspaceId,
           providerModel: `${record.spec.model.provider}/${record.spec.model.model}`,
           instanceKey: meta.instanceKey,
@@ -2643,8 +3949,7 @@ export class SwarmEngine {
   }
 
   /** D2 → D4: the slot, the leases, the worktree, the session, and then the first turn. */
-  private async provision(candidate: AdmissionCandidate): Promise<void> {
-    const attemptId = `a_${this.ids()}`
+  private async provision(candidate: AdmissionCandidate, attemptId: AttemptId): Promise<void> {
     const prepared = this.store.commit((tx) => {
       const record = this.requireDelegation(tx, candidate.delegationId)
       const meta = readMeta(tx, record.id)
@@ -2697,6 +4002,14 @@ export class SwarmEngine {
       })
       /* D2 — the delegation leaves `queued` on the first admitted attempt. */
       delegationMachine.transition('queued', 'admitted')
+      /* The epoch's slot is spent **here**, durably, in the same transaction that creates the
+       * attempt: a slot that were only inferred from `liveAttempts` comes back when the attempt
+       * ends, and the scheduler opens another one. */
+      tx.putRecord('delegation_meta', record.id, 1, {
+        ...meta,
+        openedInEpoch: (meta.openedInEpoch ?? record.attempts.length) + 1,
+        epochQueuedAt: meta.epochQueuedAt ?? record.createdAt,
+      } satisfies DelegationMeta)
       this.putDelegation(tx, {
         ...record,
         attempts: [...record.attempts, attemptId],
@@ -2710,17 +4023,28 @@ export class SwarmEngine {
 
     const runtime = this.runtimeOf(attemptId)
 
-    if (prepared.attempt.workspace.worktree !== null) {
+    if (prepared.attempt.workspace.worktree === null) {
+      /* `in-place`: the session's working directory is the registered root itself, so S6 runs
+       * against that registration — on the resolved path, again, at use time (§7.3). */
+      this.guard.assertInsideWorkspace(
+        prepared.delegation.spec.workspace.workspaceId,
+        prepared.attempt.workspace.root,
+      )
+    } else {
       createWorktree({
         root: prepared.attempt.workspace.root,
         path: prepared.attempt.workspace.worktree,
         baseRevision: prepared.attempt.workspace.baseRevision,
         branch: `swarm/${attemptId}`,
       })
-      /* S6 again, on the resolved worktree path (§13). */
-      this.guard.assertInsideWorkspace(
-        prepared.delegation.spec.workspace.workspaceId,
+      /* S6 again, on the resolved worktree path — against **swarm's own** worktree root (§7.2),
+       * not the repository. A worktree is deliberately outside the repo it was cut from; the
+       * check that matters is that the path swarm just handed the agent is still inside the
+       * directory swarm owns, which a symlinked `$SWARM_HOME/worktrees` would not be. */
+      assertPathInsideRoot(
+        this.layout.worktreesDir,
         prepared.attempt.workspace.worktree,
+        'worktree',
       )
     }
 
@@ -2797,12 +4121,24 @@ export class SwarmEngine {
     delegation: DelegationRecord,
     attemptId: AttemptId,
   ): TurnRecord {
+    const priorFailure = readMeta(tx, delegation.id)?.priorFailure
     const text = [
       delegation.spec.objective,
       delegation.spec.constraints === undefined
         ? ''
         : `\n\nConstraints: ${delegation.spec.constraints}`,
+      /* `retry{injectPriorFailure}` (§6.3): consumed once, so attempt N+2 does not inherit N's. */
+      priorFailure === undefined ? '' : `\n\nThe previous attempt:\n${priorFailure}`,
     ].join('')
+    if (priorFailure !== undefined) {
+      const meta = readMeta(tx, delegation.id)
+      if (meta !== null) {
+        tx.putRecord('delegation_meta', delegation.id, 1, {
+          ...meta,
+          priorFailure: undefined,
+        } satisfies DelegationMeta)
+      }
+    }
     const directive: TurnDirective = {
       text,
       attemptId,
@@ -2856,6 +4192,27 @@ export class SwarmEngine {
     const existing = this.instances.get(key)
     if (existing !== undefined) return existing
     const jcodeHome = join(this.layout.instancesDir, hashKey(key), 'home')
+
+    /**
+     * §7.1's "an attempt is admitted only when *all* hold: … `home:*` lease", and §3.4 rule 3's
+     * singleton per `JCODE_HOME`. The holder is the **instance**, not the attempt: sibling
+     * attempts share one instance and one home by construction, so an attempt-scoped holder would
+     * have made the second sibling fight the first for a resource they are meant to share.
+     *
+     * The adapter takes `instances/<hash>/lock` in the same breath (§7.2). Two locks, because they
+     * guard against two different intruders: this one against another attempt in *this* server,
+     * that one against another process entirely — which is the one that corrupts the state dir.
+     */
+    const lease = this.store.commit((tx) =>
+      tx.acquireLease(homeLease(jcodeHome), `instance:${key}`, LEASES.sessionTtlMs),
+    ).value
+    if (lease === null) {
+      this.observed.leaseConflicts += 1
+      throw new SwarmError('lease_held', `jcode home ${jcodeHome} is held by another instance`, {
+        details: { key, jcodeHome },
+      })
+    }
+
     const instance = await this.adapter.acquireInstance(key, {
       jcodeHome,
       workingDir: prepared.attempt.workspace.worktree ?? prepared.attempt.workspace.root,
@@ -2871,16 +4228,48 @@ export class SwarmEngine {
     return instance
   }
 
-  /** D5 — preflight/worktree/instance error after 3 bounded retries. */
-  private failProvisioning(delegationId: DelegationId, error: unknown): void {
-    this.store.commit((tx) => {
+  /**
+   * D5 — preflight/worktree/instance error after **3 bounded retries**.
+   *
+   * The retries are the point, and they were unreachable. The old version bumped a counter and
+   * returned for the first two failures **without touching the half-built attempt**: it stayed in
+   * `liveAttempts`, so `wanted` computed to 0 forever, no second attempt was ever provisioned, and
+   * failures 2 and 3 could not happen. A single transient `acquireInstance` refusal wedged the
+   * delegation in `provisioning` permanently, holding a `worktree:*` lease and a worktree
+   * directory nothing would ever reclaim, and `provision_failed` — D5's own trigger — appeared
+   * nowhere outside the state table.
+   *
+   * So each failure now **rolls its attempt back** (lease, worktree, epoch slot) and requeues; the
+   * third fires D5 for real.
+   */
+  private failProvisioning(delegationId: DelegationId, attemptId: AttemptId, error: unknown): void {
+    const detail = error instanceof Error ? error.message : String(error)
+    const outcome = this.store.commit((tx) => {
       const record = readDelegation(tx, delegationId)
-      if (record === null) return
-      const attempts = tx.counter(`provision_failures:${delegationId}`)
-      tx.bumpCounter(`provision_failures:${delegationId}`, 1)
-      if (attempts + 1 < SERVER_POLICY.provisionRetries) return
-      for (const attemptId of record.liveAttempts)
-        this.endAttempt(tx, attemptId, 'failed', 'failed')
+      if (record === null) return 'gone' as const
+      const failures = tx.bumpCounter(`provision_failures:${delegationId}`, 1)
+      this.rollbackProvisioning(tx, delegationId, attemptId)
+
+      if (failures < SERVER_POLICY.provisionRetries) {
+        /* Back to `queued`: the slot is free, the worktree is gone, and the next tick may try
+         * again. This is the state the bounded retry was always supposed to run from. */
+        this.refreshDelegationState(tx, delegationId, this.serverActor('provisioning'), 'queued')
+        tx.appendAudit({
+          intent: 'provision',
+          actor: this.serverActor('provisioning'),
+          delegationId,
+          attemptId,
+          effective: { attempt: failures, of: SERVER_POLICY.provisionRetries },
+          result: { retrying: true, error: detail },
+        })
+        return 'retrying' as const
+      }
+
+      /* D5 proper. Every remaining live attempt is ended and the row id is on the audit trail. */
+      for (const live of this.requireDelegation(tx, delegationId).liveAttempts) {
+        this.movePhase(tx, live, 'provision_failed')
+        this.endAttempt(tx, live, 'failed', 'failed')
+      }
       const fresh = this.requireDelegation(tx, delegationId)
       this.putDelegation(tx, {
         ...fresh,
@@ -2893,18 +4282,75 @@ export class SwarmEngine {
         intent: 'provision',
         actor: this.serverActor('provisioning'),
         delegationId,
-        result: { error: error instanceof Error ? error.message : String(error) },
+        attemptId,
+        effective: { attempt: failures, of: SERVER_POLICY.provisionRetries, row: 'D5' },
+        result: { error: detail },
       })
-    })
+      return 'failed' as const
+    }).value
+
+    if (outcome !== 'failed') return
     this.notice({
       kind: 'doctor-blocked',
       severity: 'error',
       title: 'Provisioning failed',
-      detail: error instanceof Error ? error.message : String(error),
+      detail: `${detail} (after ${SERVER_POLICY.provisionRetries} attempts)`,
       delegationId,
       actions: [{ intent: 'retry', label: 'Retry' }],
       dismissible: true,
     })
+  }
+
+  /**
+   * Undo a half-built attempt so the slot, the lease and the disk all come back.
+   *
+   * An attempt that never attached has no session, no transcript and no evidence: deleting it is
+   * honest, and leaving it in `attempts` would have made D5's "after 3 retries" read as three
+   * abandoned attempts on a delegation the user never got to see start.
+   */
+  private rollbackProvisioning(
+    tx: WriteTx,
+    delegationId: DelegationId,
+    attemptId: AttemptId,
+  ): void {
+    const attempt = readAttempt(tx, attemptId)
+    const record = this.requireDelegation(tx, delegationId)
+    const meta = readMeta(tx, delegationId)
+    if (meta !== null) {
+      tx.putRecord('delegation_meta', delegationId, 1, {
+        ...meta,
+        openedInEpoch: Math.max(0, (meta.openedInEpoch ?? record.attempts.length) - 1),
+      } satisfies DelegationMeta)
+    }
+    this.putDelegation(tx, {
+      ...record,
+      attempts: record.attempts.filter((id) => id !== attemptId),
+      liveAttempts: record.liveAttempts.filter((id) => id !== attemptId),
+      focusedAttempt: record.focusedAttempt === attemptId ? null : record.focusedAttempt,
+    })
+    if (attempt === null) return
+
+    /* Any turn the attempt had already claimed goes back to the delegation's pending queue: it was
+     * prepared (V1) and never written, so it is still owed to whichever attempt starts next. */
+    if (attempt.turns.length > 0) {
+      const pending = tx.getRecord<TurnId[]>('delegation_pending', delegationId)?.value ?? []
+      const restored = attempt.turns.filter((id) => !pending.includes(id))
+      if (restored.length > 0) {
+        tx.putRecord('delegation_pending', delegationId, 1, [...pending, ...restored])
+      }
+    }
+    tx.deleteRecord('attempt', attemptId)
+    tx.deleteRecord('attempt_meta', attemptId)
+    if (attempt.workspace.worktree !== null) {
+      tx.releaseLease(worktreeLease(attempt.workspace.worktree), attemptId)
+      try {
+        removeWorktree(attempt.workspace.root, attempt.workspace.worktree)
+      } catch {
+        /* A worktree that will not come off disk is a disk problem, not a scheduling one; the
+         * lease is already back, which is what the next admission needs. */
+      }
+    }
+    this.live.delete(attemptId)
   }
 
   /* ------------------------------------------------------------------------------ shutdown */
@@ -2917,8 +4363,12 @@ export class SwarmEngine {
       /* C15 again: `close()` is the only release, on shutdown as everywhere else. */
       await runtime.session?.close('server shutting down').catch(() => undefined)
     }
-    for (const instance of this.instances.values()) {
+    for (const [key, instance] of this.instances) {
       await instance.dispose('server shutting down').catch(() => undefined)
+      /* The `home:*` singleton goes back on a clean shutdown, so a restart inside the TTL is not
+       * refused by a lease its own previous boot is still holding (§3.4 rule 3). */
+      const jcodeHome = join(this.layout.instancesDir, hashKey(key), 'home')
+      this.store.commit((tx) => tx.releaseLease(homeLease(jcodeHome), `instance:${key}`))
     }
     this.live.clear()
     this.instances.clear()
@@ -2933,6 +4383,73 @@ export class SwarmEngine {
 }
 
 /* --------------------------------------------------------------------------------- helpers */
+
+/** How much of an `attempt:*` transcript a snapshot carries; the rest is `hasOlder` (§6.2). */
+export const TRANSCRIPT_SNAPSHOT_LIMIT = 500
+
+/**
+ * Rebuild an attempt's transcript from the **durable log** (§5.4 #2, §8.5).
+ *
+ * The log is the only authority here. `tail()` is pinned to `peekSession` and used *only* for
+ * prompt-digest matching ([F8], §5.5), and jcode has no replay at all, so a snapshot built from
+ * anything but swarm's own rows would come back short after a restart — silently, and exactly
+ * when the evidence matters most.
+ */
+export function replayTranscript(
+  tx: ReadTx,
+  attemptId: AttemptId,
+  limit: number,
+): { entries: readonly TranscriptEntry[]; hasOlder: boolean } {
+  const stream = attemptStream(attemptId)
+  const bounds = tx.head(stream)
+  const entries: TranscriptEntry[] = []
+  let cursor = bounds.floor
+  for (;;) {
+    const batch = tx.readLog(stream, cursor, 256)
+    if (batch.length === 0) break
+    for (const record of batch) {
+      const entry = transcriptEntryOf(record.ev, record.ts)
+      if (entry !== null) entries.push(entry)
+    }
+    cursor = batch[batch.length - 1]!.seq
+  }
+  const trimmed = entries.length > limit ? entries.slice(entries.length - limit) : entries
+  return { entries: trimmed, hasOlder: bounds.floor > 0 || trimmed.length < entries.length }
+}
+
+/** The `att.*` half of §6.4 → §6.2's `TranscriptEntry`. Anything else is not transcript. */
+function transcriptEntryOf(event: SwarmEvent, at: number): TranscriptEntry | null {
+  switch (event.k) {
+    case 'att.text':
+      return { k: 'text', text: event.text, at }
+    case 'att.reasoning':
+      return { k: 'reasoning', text: event.text, at, collapsed: true }
+    case 'att.tool':
+      return {
+        k: 'tool',
+        callId: event.callId,
+        name: event.name,
+        target: event.target,
+        status: event.status,
+        output: event.output ?? null,
+        durationMs: event.durationMs ?? null,
+      }
+    case 'att.usage':
+      return { k: 'usage', input: event.input, output: event.output }
+    case 'att.background':
+      return {
+        k: 'background',
+        taskId: event.taskId,
+        label: event.label,
+        provenance: 'scraped',
+        ...(event.percent === undefined ? {} : { percent: event.percent }),
+      }
+    case 'att.error':
+      return { k: 'notice', text: `${event.code}: ${event.message}` }
+    default:
+      return null
+  }
+}
 
 function currentTurn(tx: ReadTx, attempt: AttemptRecord): TurnRecord | null {
   for (let i = attempt.turns.length - 1; i >= 0; i--) {

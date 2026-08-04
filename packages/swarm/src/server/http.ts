@@ -117,7 +117,10 @@ async function handle(
           code: String(body.code ?? ''),
           clientName: String(body.clientName ?? 'unnamed'),
           clientKind: body.clientKind ?? 'extension',
-          connectionId: req.socket.remoteAddress ?? 'local',
+          /* §2.1 rate-limits "20 per minute **per connection**". `remoteAddress` alone is
+           * `127.0.0.1` for every loopback head, so one noisy CLI spent the budget of every
+           * browser on the machine; the remote port is what makes the key a connection. */
+          connectionId: `${req.socket.remoteAddress ?? 'local'}:${req.socket.remotePort ?? 0}`,
         })
         send(res, 200, issued)
       } catch (error) {
@@ -217,16 +220,25 @@ function metrics(context: HttpContext): string {
     lines.push(`swarm_turns_total{delivery="${delivery}"} ${count}`)
   }
   let drops = 0
-  let errors = 0
-  for (const connection of context.connections()) {
-    drops += connection.counters.dropped
-    errors += connection.counters.errors
-  }
+  for (const connection of context.connections()) drops += connection.counters.dropped
   lines.push(`swarm_backpressure_drops_total ${drops}`)
-  lines.push(`swarm_lease_conflicts_total ${errors}`)
+  /* Three of these used to be inventions: `swarm_lease_conflicts_total` reported per-connection
+   * *frame* errors, and the other two were hard-coded `0`. A metric that reports a different
+   * quantity under a metric's name is worse than a missing metric — it is the one a responder
+   * trusts at 3 a.m. The engine counts all three at their source (§7.4). */
+  const observed = context.engine.metrics()
+  lines.push(`swarm_lease_conflicts_total ${observed.leaseConflicts}`)
   lines.push(`swarm_spend_usd ${spend}`)
-  lines.push(`swarm_log_write_seconds 0`)
-  lines.push(`swarm_executor_events_total{kind="all"} 0`)
+  lines.push(`swarm_log_write_seconds ${(observed.logWriteMs / 1000).toFixed(6)}`)
+  const kinds = Object.entries(observed.executorEvents)
+  let total = 0
+  for (const [kind, count] of kinds) {
+    total += count
+    lines.push(`swarm_executor_events_total{kind="${kind}"} ${count}`)
+  }
+  /* The family is always present: a missing series and a zero series read very differently on a
+   * dashboard, and only one of them is true here. */
+  lines.push(`swarm_executor_events_total{kind="all"} ${total}`)
   return `${lines.join('\n')}\n`
 }
 

@@ -176,3 +176,63 @@ describe('§3.3 ChannelState — the C-table', () => {
     expect(channelMachine.transition('detached', 'attached').ok).toBe(false)
   })
 })
+
+/**
+ * The whole cross product. Transcribed from §3.3's C-table, not derived from
+ * `CHANNEL_TRANSITIONS`, so it is an independent statement of the same contract.
+ */
+const CHANNEL_TRIGGERS = [
+  'connection_opened',
+  'attached',
+  'attach_failed',
+  'submit',
+  'message_accepted',
+  'submit_failed',
+  'first_stream_event',
+  'turn_done',
+  'interrupt_issued',
+  'interrupt_merged',
+  'socket_closed',
+  'reconnect',
+  'reconnect_exhausted',
+  'close',
+] as const satisfies readonly ChannelTrigger[]
+
+const LEGAL_CHANNEL_PAIRS: ReadonlySet<string> = new Set<string>([
+  ...ROWS.map((row) => `${row.from}|${row.trigger}`),
+  /* C12 — any non-terminal channel disconnects; `closed` has already released (§5.4 #9). */
+  ...NON_TERMINAL.map((state) => `${state}|socket_closed`),
+])
+
+describe('§3.3 ChannelState — the illegal half of the table', () => {
+  it('accepts exactly the legal (state × trigger) pairs and rejects every other one', () => {
+    const wronglyAccepted: string[] = []
+    const wronglyRejected: string[] = []
+    for (const state of CHANNEL_STATES) {
+      for (const trigger of CHANNEL_TRIGGERS) {
+        const key = `${state}|${trigger}`
+        const outcome = channelMachine.transition(state, trigger)
+        if (LEGAL_CHANNEL_PAIRS.has(key)) {
+          if (!outcome.ok) wronglyRejected.push(key)
+          continue
+        }
+        if (outcome.ok) wronglyAccepted.push(key)
+        else expect({ key, reason: outcome.reason }).toEqual({ key, reason: 'illegal_from' })
+      }
+    }
+    expect(wronglyAccepted).toEqual([])
+    expect(wronglyRejected).toEqual([])
+    expect(
+      CHANNEL_STATES.length * CHANNEL_TRIGGERS.length - LEGAL_CHANNEL_PAIRS.size,
+    ).toBeGreaterThan(90)
+  })
+
+  it('a `closed` channel accepts nothing at all — the lease is already released (#10)', () => {
+    for (const trigger of CHANNEL_TRIGGERS) {
+      expect({ trigger, ok: channelMachine.transition('closed', trigger).ok }).toEqual({
+        trigger,
+        ok: false,
+      })
+    }
+  })
+})

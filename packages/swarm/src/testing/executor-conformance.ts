@@ -27,7 +27,7 @@ import type { Awaitable, ConformanceCase } from './types.ts'
 
 import { sessionLease } from '../domain/leases.ts'
 import { SwarmError } from '../errors.ts'
-import { assert, assertEqual, assertRejects } from './assert.ts'
+import { assert, assertEqual, assertRejects, show } from './assert.ts'
 
 /** A backend-neutral turn description the harness translates for its adapter. */
 export interface ConformanceTurn {
@@ -57,6 +57,18 @@ export interface ExecutorHarness {
 }
 
 const ACK_WINDOW_MS = 40
+
+/**
+ * A bounded window for a **negative** claim about a stream.
+ *
+ * "Nothing more arrived" cannot be drained for — there is no frame to stop on — so the only
+ * honest form is "nothing arrived within a window, and then the stream was ended". It is the same
+ * shape as V5's `awaitAckMs`, which is a deadline for exactly the same reason.
+ */
+const settle = (ms = ACK_WINDOW_MS): Promise<void> =>
+  new Promise((resolve) => {
+    setTimeout(resolve, ms)
+  })
 
 function fenceFor(session: ExecutorSessionHandle, token: number): Fence {
   return { key: sessionLease(session.sessionId), token }
@@ -194,7 +206,14 @@ export function executorConformance(factory: () => Awaitable<ExecutorHarness>): 
   test('applyConfig confirms only what the capability row says is observable', async (c) => {
     const caps = c.harness.adapter.capabilities
     const report = await c.session.applyConfig({ model: 'm-1', reasoningEffort: 'high' }, c.fence)
-    if (!caps.observableEffort) {
+    if (caps.observableEffort) {
+      assert(
+        report.confirmed.includes('reasoningEffort') ||
+          report.refused.some((r) => r.field === 'reasoningEffort'),
+        'observableEffort:true must either confirm the effort or say it was refused — a capability ' +
+          'that is never exercised is not a capability',
+      )
+    } else {
       assert(
         !report.confirmed.includes('reasoningEffort'),
         'observableEffort:false MUST NOT confirm an effort (§5.4 #11) — it is declared, never observed',
@@ -269,10 +288,24 @@ export function executorConformance(factory: () => Awaitable<ExecutorHarness>): 
       return
     }
     await c.session.interrupt('soft', 'stop touching the fixtures', c.fence)
-    if (!caps.interruptLandingObservable) {
-      /* §5.4 #10: `soft_interrupt_injected` is untranslated, so nothing may claim a landing. */
-      assert(true, 'no landing event exists to observe; delivery detail stays unconfirmed')
-    }
+    /*
+     * The observable is "did ANYTHING acknowledge the interrupt". §5.4 #10 turns on the fact that
+     * `soft_interrupt_injected` is untranslated on jcode: nothing arrives, so `landing` stays
+     * `'unconfirmed'` forever and swarm must never claim otherwise. An adapter that DECLARES the
+     * capability owes an event, and one that denies it must not emit anything either — the stream
+     * is ended first so this is a claim about the whole remainder of the turn, not about however
+     * far a bounded drain happened to read.
+     */
+    c.harness.disconnect(c.session)
+    const after = await drain(events, (e) => e.k === 'closed')
+    const acknowledged = after.some((e) => e.k !== 'closed')
+    assertEqual(
+      acknowledged,
+      caps.interruptLandingObservable,
+      caps.interruptLandingObservable
+        ? 'interruptLandingObservable:true must produce something to observe'
+        : 'interruptLandingObservable:false MUST leave the landing unconfirmed (§5.4 #10)',
+    )
   })
 
   test('structuredOutput capability governs structured(), and raw is kept as evidence', async (c) => {
@@ -313,18 +346,25 @@ export function executorConformance(factory: () => Awaitable<ExecutorHarness>): 
     await c.session.submit({ text: 'go', awaitAckMs: ACK_WINDOW_MS }, c.fence)
     const seen = await drain(events, (e) => e.k === 'turn_done')
     const sawUsage = seen.some((e) => e.k === 'usage')
-    if (!caps.usageEvents) {
-      assert(!sawUsage, 'usageEvents:false must never emit a usage event')
-    }
+    assertEqual(
+      sawUsage,
+      caps.usageEvents,
+      caps.usageEvents
+        ? 'usageEvents:true must actually produce one on a turn that reports usage'
+        : 'usageEvents:false must never emit a usage event',
+    )
   })
 
   /* --------------------------------------------------------------------- [F11] tool ids */
 
-  test('tool_start carries the call id and tool_input arrives with an EMPTY one ([F11])', async (c) => {
+  test('tool_input is never attributed to a tool other than the last tool_start ([F11])', async (c) => {
     const events = c.session.events()
     c.harness.scriptTurn(c.session, {
       ack: true,
-      tools: [{ callId: 'call-a', name: 'bash', input: '{"cmd":' }],
+      tools: [
+        { callId: 'call-a', name: 'bash', input: '{"cmd":' },
+        { callId: 'call-b', name: 'read', input: '{"path":' },
+      ],
       turnDone: true,
     })
     await c.session.submit({ text: 'go', awaitAckMs: ACK_WINDOW_MS }, c.fence)
@@ -332,15 +372,32 @@ export function executorConformance(factory: () => Awaitable<ExecutorHarness>): 
     const start = seen.find((e) => e.k === 'tool_start')
     if (start === undefined) return
     assert(start.k === 'tool_start' && start.callId.length > 0, 'tool_start must carry its id')
+
+    /**
+     * §5.1 leaves one thing open, and this assertion holds it open deliberately:
+     * `tool_input.callId` is typed `'' | string` because an adapter MAY attribute at the seam —
+     * the jcode adapter does, to the most recent `tool_start` on that session, which is what §5.1
+     * requires of it — or MAY pass the bridge's literal `''` through, which `MockExecutor` does so
+     * that a consumer keying a buffer by it fails loudly rather than quietly.
+     *
+     * The third value is the one that is never allowed: a *different* tool's id. That is the
+     * failure [F11] describes — every concurrent tool's argument stream merged into one bucket —
+     * and it is the only one a backend-neutral suite can falsify.
+     */
+    let lastStart = ''
+    let inputs = 0
     for (const event of seen) {
-      if (event.k === 'tool_input') {
-        assertEqual(
-          event.callId,
-          '',
-          'input deltas carry an empty call id; the adapter attributes them to the last tool_start',
-        )
-      }
+      if (event.k === 'tool_start') lastStart = event.callId
+      if (event.k !== 'tool_input') continue
+      inputs += 1
+      assertEqual(
+        event.callId === '' || event.callId === lastStart,
+        true,
+        `an input delta was attributed to ${show(event.callId)}, which is not the most recent ` +
+          `tool_start (${show(lastStart)})`,
+      )
     }
+    assert(inputs > 0, 'the scripted turn produced no input deltas to attribute')
   })
 
   /* ------------------------------------------------------- X7, §5.4 #2 stream semantics */
@@ -362,9 +419,8 @@ export function executorConformance(factory: () => Awaitable<ExecutorHarness>): 
     )
   })
 
-  test('nativeReplay:false — a late subscriber receives nothing that was already emitted', async (c) => {
+  test('nativeReplay decides what a LATE subscriber receives, both ways (§5.4 #2)', async (c) => {
     const caps = c.harness.adapter.capabilities
-    if (caps.nativeReplay) return
     const first = c.session.events()
     c.harness.scriptTurn(c.session, { ack: true, text: 'early', turnDone: true })
     await c.session.submit({ text: 'go', awaitAckMs: ACK_WINDOW_MS }, c.fence)
@@ -372,10 +428,145 @@ export function executorConformance(factory: () => Awaitable<ExecutorHarness>): 
     const late = c.session.events()
     c.harness.disconnect(c.session)
     const seen = await drain(late, (e) => e.k === 'closed')
-    assert(
-      !seen.some((e) => e.k === 'text'),
-      'without native replay, what was not received never existed — the durable log is the truth (§5.4 #2)',
+    assertEqual(
+      seen.some((e) => e.k === 'text' && e.text === 'early'),
+      caps.nativeReplay,
+      caps.nativeReplay
+        ? 'nativeReplay:true owes a late subscriber what it missed — declaring it and delivering ' +
+            'nothing is the lie this suite exists to catch'
+        : 'without native replay, what was not received never existed — the durable log is the ' +
+            'truth (§5.4 #2)',
     )
+  })
+
+  /* ------------------------------------------------- §5.2 the rows nothing else exercises */
+
+  test('idempotentSubmit decides whether a repeated submission runs a second turn (§5.2)', async (c) => {
+    const caps = c.harness.adapter.capabilities
+    const events = c.session.events()
+    c.harness.scriptTurn(c.session, { ack: true, text: 'one', turnDone: true })
+    await c.session.submit({ text: 'the same words', awaitAckMs: ACK_WINDOW_MS }, c.fence)
+    await drain(events, (e) => e.k === 'turn_done')
+
+    c.harness.scriptTurn(c.session, { ack: true, text: 'two', turnDone: true })
+    await c.session.submit({ text: 'the same words', awaitAckMs: ACK_WINDOW_MS }, c.fence)
+
+    if (!caps.idempotentSubmit) {
+      const seen = await drain(events, (e) => e.k === 'turn_done')
+      assert(
+        seen.some((e) => e.k === 'turn_done'),
+        'idempotentSubmit:false MUST run it twice; swarm carries the idempotency itself (§2.5 ' +
+          'rule 3) precisely because the executor does not',
+      )
+      return
+    }
+    /* Give a second turn time to play, then end the stream: "no second turn ever ran" is then a
+     * claim about a bounded window plus the whole remainder, not about scheduling luck. */
+    await settle()
+    c.harness.disconnect(c.session)
+    const seen = await drain(events, (e) => e.k === 'closed')
+    assert(
+      !seen.some((e) => e.k === 'turn_done'),
+      'idempotentSubmit:true must recognise the repeat — the seam carries no key (§5.1), so ' +
+        'de-duplication is the only thing the flag can mean',
+    )
+  })
+
+  test('perTurnConfig decides whether config rides the message or sticks to the session (§5.2)', async (c) => {
+    const caps = c.harness.adapter.capabilities
+    if (!caps.observableModel) {
+      /* Config has exactly one observable at this seam (`model_info`), and this adapter denies
+       * it. Nothing is asserted rather than asserted vacuously — the hole is named, not hidden. */
+      return
+    }
+    const events = c.session.events()
+    await c.session.applyConfig({ model: 'm-2' }, c.fence)
+    /* Consume the announcement `applyConfig` itself makes, so what follows is the turn's own. */
+    await drain(events, (e) => e.k === 'model_info')
+
+    c.harness.scriptTurn(c.session, { ack: true, text: 'x', turnDone: true })
+    await c.session.submit({ text: 'go', awaitAckMs: ACK_WINDOW_MS }, c.fence)
+    const seen = await drain(events, (e) => e.k === 'turn_done')
+    assertEqual(
+      seen.some((e) => e.k === 'model_info'),
+      caps.perTurnConfig,
+      caps.perTurnConfig
+        ? 'perTurnConfig:true attaches config to each message, so each turn carries it'
+        : 'perTurnConfig:false is session-sticky: the config is set ONCE and outlives the ' +
+            'submission that followed it — which is why §4.3.3 refuses a mid-turn change',
+    )
+  })
+
+  test('perTurnToolRestriction: unrepresentable at this seam, and argv is never a claim ([F4])', async (c) => {
+    const caps = c.harness.adapter.capabilities
+    /*
+     * §5.1's `ExecutorSubmission` carries `text`/`contextOnly`/`awaitAckMs`/`images` and
+     * `SessionConfigPatch` carries `model`/`reasoningEffort`. Neither carries a tool set, so
+     * there is nowhere for a per-turn restriction to be expressed and no way for one to be
+     * observed: an adapter declaring `true` is declaring something this seam cannot honour.
+     */
+    assertEqual(
+      caps.perTurnToolRestriction,
+      false,
+      'no field of ExecutorSubmission or SessionConfigPatch can carry a tool set (§5.1, §5.2)',
+    )
+    /*
+     * [F4]'s trap: `InstanceOptions.argv` goes to the BRIDGE process, and `spawn_server` forwards
+     * only --provider/--provider-profile/--model to `jcode serve`. Tool flags there are inert, and
+     * an adapter that read them as authority would report a restriction that does not exist.
+     */
+    const withToolArgv = await c.harness.adapter.acquireInstance(c.harness.instanceKey, {
+      ...c.harness.instanceOptions,
+      argv: ['--allowed-tools', 'read'],
+    })
+    assertEqual(
+      c.harness.adapter.capabilities.perTurnToolRestriction,
+      false,
+      'a tool flag in the bridge argv is not a tool-authority claim ([F4], §7.3)',
+    )
+    assertEqual(withToolArgv.adapterId, c.harness.adapter.id, 'and it is the same adapter')
+  })
+
+  test('programmaticApprovals is the supports("permissions") probe, not a claim (R6, §5.2)', async (c) => {
+    const caps = c.harness.adapter.capabilities
+    const info = await c.instance.runtimeInfo()
+    /*
+     * `HealthVM.approvalsAvailable` is defined as this probe and nothing else. If the declared
+     * capability and the advertised one can disagree, the health surface is reporting a constant.
+     */
+    assertEqual(
+      info.capabilities.includes('permissions'),
+      caps.programmaticApprovals,
+      "the declared capability and the backend's advertised one are the same fact (R6)",
+    )
+  })
+
+  test('sessionsPerConnection is a transport fact: sessions stay distinct and isolated (§5.3)', async (c) => {
+    const caps = c.harness.adapter.capabilities
+    const other = await c.instance.createSession({
+      workingDir: c.harness.instanceOptions.workingDir,
+    })
+    assert(other.sessionId !== c.session.sessionId, 'two sessions are two sessions')
+
+    const mine = c.session.events()
+    c.harness.scriptTurn(other, { ack: true, text: 'not for you', turnDone: true })
+    await other.submit({ text: 'go', awaitAckMs: ACK_WINDOW_MS }, fenceFor(other, 1))
+    c.harness.disconnect(c.session)
+    const seen = await drain(mine, (e) => e.k === 'closed')
+    assert(
+      !seen.some((e) => e.k === 'text' && e.text === 'not for you'),
+      'one connection per session (§5.3) is what makes an untagged ApiEvent::Error attributable ' +
+        "at all ([F6]) — a stream that carries another session's events breaks that",
+    )
+    /* A finite number describes the CONNECTION, not the seam: the adapter opens more. */
+    if (typeof caps.sessionsPerConnection === 'number') {
+      for (let i = 0; i < caps.sessionsPerConnection + 1; i++) {
+        const extra = await c.instance.createSession({
+          workingDir: c.harness.instanceOptions.workingDir,
+        })
+        assert(extra.sessionId.length > 0, 'the seam serves more sessions than one connection can')
+      }
+    }
   })
 
   /* --------------------------------------------------------- §5.4 #9 close, §4.3.7 kill */

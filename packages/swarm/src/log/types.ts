@@ -169,6 +169,12 @@ export interface WriteTx extends ReadTx {
    * so the record of what was removed outlives what was removed (§3.5).
    */
   deleteStream(stream: StreamName): number
+  /**
+   * §2.5 rule 3's **24 h TTL** on `(tokenId, idempotencyKey)`. Nothing enforced it, so the cache
+   * was unbounded and a key was answered from the cache forever — which is not idempotency, it is
+   * a permanent refusal to ever run that key again. Returns the number of rows removed.
+   */
+  pruneIdempotent(olderThanMs: number): number
 }
 
 export interface CommitResult<T> {

@@ -1,0 +1,10 @@
+{
+  "extends": "@astrale/typescript-config/base",
+  "compilerOptions": {
+    "lib": ["ES2022"],
+    "types": [],
+    "allowImportingTsExtensions": true,
+    "noEmit": true
+  },
+  "include": ["test/fixtures/es2022-client.ts"]
+}

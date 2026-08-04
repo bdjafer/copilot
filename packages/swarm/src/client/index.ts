@@ -139,6 +139,14 @@ export function createSwarmClient(options: SwarmClientOptions): SwarmClient {
     now,
     capabilities: () => connection.capabilities,
     emit: (key, payload) => {
+      /* `error` has two published surfaces — `SwarmClientOptions.onError` (§6.1) and the `error`
+       * event key (§6.4) — and they must carry the same set. Routing the projection's own
+       * failures through `raise` is what makes that true: a head that wired only the callback
+       * would otherwise miss every `att.error` the executor raised. */
+      if (key === 'error') {
+        raise(payload as SwarmError)
+        return
+      }
       emitter.emit(key, payload)
     },
   })
@@ -401,6 +409,13 @@ export function createSwarmClient(options: SwarmClientOptions): SwarmClient {
   ): Promise<IntentResult<T>> {
     if (destroyed) {
       return { ok: false, error: new SwarmError('internal', 'client destroyed') }
+    }
+    /* The offline queue drains on `hello_ok`, and after a terminal close there will not be one
+     * (§2.5 rule 4) — so an intent issued while `blocked` is refused here rather than queued into
+     * a promise that never settles. `onDown` settles what was already outstanding; this settles
+     * everything issued afterwards. */
+    if (connection.status === 'blocked') {
+      return { ok: false, error: blockedError() }
     }
     const result = await queue.dispatch(
       {

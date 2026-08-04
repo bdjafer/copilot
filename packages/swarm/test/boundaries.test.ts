@@ -15,8 +15,10 @@ import { existsSync, readFileSync, readdirSync, statSync } from 'node:fs'
 import { dirname, join, relative, resolve } from 'node:path'
 import { describe, expect, it } from 'vitest'
 
+import { createSwarmClient } from '../src/client/index.ts'
 import { effortLadder } from '../src/domain/directive.ts'
 import { decodeServerFrame, encodeFrame } from '../src/protocol/codec.ts'
+import { createFakeTransport } from '../src/testing/fake-transport.ts'
 
 const SRC = resolve(import.meta.dirname, '../src')
 
@@ -84,6 +86,38 @@ function scan(source: string): { bare: string; imports: string } {
 
 const code = (source: string): string => scan(source).bare
 
+/**
+ * Every module specifier a file can reach another module through, in one place.
+ *
+ * The graph walk is only as strong as this function: a form it does not recognise is a hole a
+ * Node-touching module can be pulled through without failing the gate. Three forms exist —
+ * `import … from 'x'` / `export … from 'x'`, the **side-effect** `import 'x'` (no `from` to
+ * anchor on), and the **dynamic** `import('x')` — and all three are matched.
+ */
+export function specifiersOf(imports: string): string[] {
+  const patterns = [
+    /* `[^'"]*?` keeps the match inside one statement: an import block has no quote between
+     * `import` and `from`, while a table of string literals cannot be crossed to reach a
+     * distant `from`. The codebase omits semicolons, so there is no terminator to anchor on. */
+    /(?:^|\n)\s*(?:import|export)[^'"]*?\bfrom\s*['"]([^'"]+)['"]/g,
+    /(?:^|\n)\s*import\s*['"]([^'"]+)['"]/g,
+    /\bimport\s*\(\s*['"]([^'"]+)['"]\s*\)/g,
+    /\brequire\s*\(\s*['"]([^'"]+)['"]\s*\)/g,
+  ]
+  const out: string[] = []
+  for (const pattern of patterns) {
+    for (const match of imports.matchAll(pattern)) out.push(match[1]!)
+  }
+  return out
+}
+
+/** The globals no module reachable from `.` may name, per §1.2 and §13. */
+const FORBIDDEN_IN_GRAPH: readonly (readonly [string, RegExp])[] = [
+  ['node:', /node:/],
+  ['a DOM global', /\b(document|window|navigator|localStorage|HTMLElement|ShadowRoot)\b/],
+  ['an extension or bundler global', /chrome\.|wxt\//],
+]
+
 const FILES = walk(SRC).map((path) => ({
   path,
   rel: relative(SRC, path),
@@ -139,10 +173,6 @@ describe('§1.1 the client core is DOM-free and Node-free', () => {
   it('reaches no node:* and no DOM global through the whole import graph of `.` (#34, §13)', () => {
     const seen = new Set<string>()
     const queue = [resolve(SRC, 'index.ts')]
-    /* `[^'"]*?` keeps the match inside one statement: an import block has no quote between
-     * `import` and `from`, while a table of string literals cannot be crossed to reach a
-     * distant `from`. The codebase omits semicolons, so there is no terminator to anchor on. */
-    const specifier = /(?:^|\n)\s*(?:import|export)[^'"]*?\bfrom\s*['"]([^'"]+)['"]/g
 
     while (queue.length > 0) {
       const path = queue.pop()!
@@ -151,13 +181,10 @@ describe('§1.1 the client core is DOM-free and Node-free', () => {
       const scanned = scan(readFileSync(path, 'utf8'))
       const body = scanned.bare
       const rel = relative(SRC, path)
-      expect({ rel, hit: /node:/.test(body) }).toEqual({ rel, hit: false })
-      expect({ rel, hit: /\b(document|window|navigator|localStorage)\b/.test(body) }).toEqual({
-        rel,
-        hit: false,
-      })
-      for (const match of scanned.imports.matchAll(specifier)) {
-        const target = match[1]!
+      for (const [label, pattern] of FORBIDDEN_IN_GRAPH) {
+        expect({ rel, label, hit: pattern.test(body) }).toEqual({ rel, label, hit: false })
+      }
+      for (const target of specifiersOf(scanned.imports)) {
         expect({ rel, target, bare: !target.startsWith('.') }).toEqual({
           rel,
           target,
@@ -169,6 +196,26 @@ describe('§1.1 the client core is DOM-free and Node-free', () => {
 
     /* The graph must actually cover the entry's modules, or the walk proved nothing. */
     expect(seen.size).toBeGreaterThan(10)
+  })
+
+  it('the walk sees side-effect and dynamic imports, not only `from` clauses', () => {
+    /* Without this, a client module could pull a Node-touching one in through either form and
+     * the graph gate would report a clean walk over a graph it never entered. */
+    const source = [
+      "import { a } from './a.ts'",
+      "export { b } from './b.ts'",
+      "import './side-effect.ts'",
+      "const c = await import('./dynamic.ts')",
+      "const d = require('./legacy.ts')",
+      "const notAnImport = ['./table-entry.ts', 'from']",
+    ].join('\n')
+    expect(specifiersOf(scan(source).imports).sort()).toEqual([
+      './a.ts',
+      './b.ts',
+      './dynamic.ts',
+      './legacy.ts',
+      './side-effect.ts',
+    ])
   })
 
   it('stays callable with document, window, navigator, chrome, localStorage and process deleted', () => {
@@ -191,11 +238,49 @@ describe('§1.1 the client core is DOM-free and Node-free', () => {
       const text = encodeFrame({ p: 'swarm', v: 1, k: 'ping', t: 1 })
       expect(decodeServerFrame(text).ok).toBe(true)
       expect(effortLadder('openai', 'gpt-5.4').length).toBeGreaterThan(0)
+      /* §13 names `createSwarmClient` in the same breath as the three pure functions, and it is
+       * the only one of the four that constructs anything: it wires a connection, four stores, a
+       * queue and a tick. A `document`, a `WebSocket` or a `process.nextTick` reached during that
+       * construction is exactly what this deletion is meant to catch. */
+      const client = createSwarmClient({
+        transport: createFakeTransport(),
+        clientName: 'boundaries/0.1',
+        head: 'test',
+        now: () => 1,
+      })
+      expect(client.connection.get().status).toBe('connecting')
+      expect(client.inspect().protocolVersion).toBe(1)
+      client.destroy()
     } finally {
       for (const [name, value] of saved) {
         ;(globalThis as Record<string, unknown>)[name] = value
       }
     }
+  })
+})
+
+describe('§13 the compile-time half of the boundary (the one deletion cannot prove)', () => {
+  it('ships a fixture project with lib:["ES2022"], no dom and no @types/node', () => {
+    const config = JSON.parse(
+      readFileSync(resolve(import.meta.dirname, '../tsconfig.es2022.json'), 'utf8'),
+    ) as {
+      compilerOptions: { lib: string[]; types: string[] }
+      include: string[]
+    }
+    expect(config.compilerOptions.lib).toEqual(['ES2022'])
+    expect(config.compilerOptions.types).toEqual([])
+    expect(config.include).toEqual(['test/fixtures/es2022-client.ts'])
+    /* The fixture must reach the `.` entry, or the project proves nothing about it. */
+    const fixture = readFileSync(resolve(import.meta.dirname, 'fixtures/es2022-client.ts'), 'utf8')
+    expect(fixture).toContain("from '../../src/index.ts'")
+    expect(fixture).toContain('createSwarmClient')
+  })
+
+  it('runs that project as part of `pnpm typecheck`, so a DOM leak fails the gate', () => {
+    const pkg = JSON.parse(
+      readFileSync(resolve(import.meta.dirname, '../package.json'), 'utf8'),
+    ) as { scripts: Record<string, string> }
+    expect(pkg.scripts.typecheck).toContain('tsconfig.es2022.json')
   })
 })
 
@@ -221,7 +306,49 @@ describe('§13 the presentation seam depends on nothing (#34)', () => {
   })
 })
 
+describe('§13 the greps are runnable — the source has to be text', () => {
+  it('every source file is line-oriented text, so `grep -n` reports lines and not "Binary file"', () => {
+    /* Anything outside tab/newline/carriage-return trips the heuristic. A composite map key
+     * written with a literal NUL instead of the `\u0000` escape is the way it happens. */
+    const isControl = (code: number): boolean =>
+      (code < 0x20 && code !== 0x09 && code !== 0x0a && code !== 0x0d) || code === 0x7f
+    const offenders = FILES.filter((f) => {
+      for (let i = 0; i < f.raw.length; i++) if (isControl(f.raw.charCodeAt(i))) return true
+      return false
+    }).map((f) => f.rel)
+    expect(offenders).toEqual([])
+  })
+})
+
 describe('§5.4 the never-call list, grep-enforced', () => {
+  it('prose only: every raw hit for a forbidden name is inside a comment, in every file', () => {
+    /*
+     * The comment-stripped greps above prove no module *references* these. This proves the
+     * stripping is the only reason they pass — i.e. that each raw hit is documentation and not a
+     * string literal, an identifier in a template, or a dynamic property access. Without it,
+     * "implemented over code" is an unchecked claim about the scanner rather than about the code.
+     */
+    const forbidden = [
+      /detachSession/,
+      /globalEvents/,
+      /getHistory/,
+      /waitForAccept/,
+      /comment-core|comment-ui|browser-copilot|temporal-memory/,
+      /chrome\.|wxt\//,
+    ]
+    const inCode: string[] = []
+    let proseHits = 0
+    for (const file of FILES) {
+      for (const pattern of forbidden) {
+        if (pattern.test(file.raw)) proseHits += 1
+        if (pattern.test(file.code)) inCode.push(`${file.rel} :: ${pattern.source}`)
+      }
+    }
+    expect(inCode).toEqual([])
+    /* And the check is not vacuous: these names ARE discussed, which is the whole deviation. */
+    expect(proseHits).toBeGreaterThan(5)
+  })
+
   it('never calls detachSession or globalEvents (#10, #11)', () => {
     const offenders = FILES.filter((f) => /detachSession|globalEvents/.test(f.code)).map(
       (f) => f.rel,

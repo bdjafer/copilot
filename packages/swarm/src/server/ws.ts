@@ -18,20 +18,26 @@
  * Node ≥ 24, server-only.
  */
 
+import type { SwarmError } from '../errors.ts'
 import type { LogRecord } from '../log/types.ts'
 import type { SwarmEvent } from '../protocol/events.ts'
-import type { ClientFrame, ServerCapability, ServerFrame, StreamName } from '../protocol/frames.ts'
-import type { ActorRef, HeadKind } from '../types.ts'
+import type {
+  ClientFrame,
+  HeadKind,
+  ServerCapability,
+  ServerFrame,
+  StreamName,
+} from '../protocol/frames.ts'
+import type { IntentResponse } from '../protocol/intents.ts'
+import type { ActorRef } from '../types.ts'
 import type { SwarmEngine } from './engine.ts'
 import type { TokenRecord } from './tokens.ts'
 
-import { SwarmError } from '../errors.ts'
 import {
   decodeClientFrame,
   encodeFrame,
   parseStreamName,
   resolveSubscription,
-  utf8ByteLength,
 } from '../protocol/codec.ts'
 import { BACKPRESSURE, CLOSE_CODES, HEARTBEAT } from '../protocol/constants.ts'
 
@@ -190,7 +196,16 @@ export class SwarmConnection {
             : { expectedVersion: frame.expectedVersion }),
         })
         if (result.ok) {
-          this.write({ p: 'swarm', v: 1, k: 'res', id: frame.id, data: result.value })
+          /* `res.data` is `IntentResponse` — `{ value, version }` — because a bare value cannot
+           * carry the record version, and the version is what the *next* intent's
+           * `expectedVersion` is compared against (`protocol/intents.ts`). */
+          this.write({
+            p: 'swarm',
+            v: 1,
+            k: 'res',
+            id: frame.id,
+            data: { value: result.value, version: result.version } satisfies IntentResponse,
+          })
         } else {
           this.counters.errors += 1
           this.write({
@@ -378,6 +393,29 @@ export class SwarmConnection {
       ts: record.ts,
       ev: record.ev,
     })
+    /* §2.4's cap applies to the **paused** buffer too, and it is the failure the section exists to
+     * prevent: deltas coalesce into two entries, but every other kind takes its own `${kind}:${seq}`
+     * key, so a head that stops acking grows this map without bound. At the cap the stream is
+     * dropped explicitly — lag is never silent, and never memory. */
+    if (subscription.coalesced.size > BACKPRESSURE.queueFrames) {
+      this.dropSubscription(subscription, 'backpressure')
+    }
+  }
+
+  /** Explicit degradation: drop one `attempt:*` and say so (§2.3 forbids silent gaps). */
+  private dropSubscription(subscription: Subscription, reason: 'backpressure'): void {
+    this.counters.dropped += 1
+    this.counters.lagged += 1
+    subscription.coalesced.clear()
+    this.subscriptions.delete(subscription.stream)
+    this.write({
+      p: 'swarm',
+      v: 1,
+      k: 'lagged',
+      stream: subscription.stream,
+      fromSeq: subscription.cursor,
+      reason,
+    })
   }
 
   private flushCoalesced(subscription: Subscription): void {
@@ -418,25 +456,12 @@ export class SwarmConnection {
     }
     const target = victim ?? this.subscriptions.get(incoming) ?? null
     if (target === null) return
-    this.counters.dropped += 1
-    this.counters.lagged += 1
-    this.subscriptions.delete(target.stream)
-    this.write({
-      p: 'swarm',
-      v: 1,
-      k: 'lagged',
-      stream: target.stream,
-      fromSeq: target.cursor,
-      reason: 'backpressure',
-    })
+    this.dropSubscription(target, 'backpressure')
   }
 
   write(frame: ServerFrame): void {
     if (this.closed) return
     const text = encodeFrame(frame)
-    const bytes = utf8ByteLength(text)
-    this.queuedBytes += bytes
-    this.queuedFrames += 1
     this.counters.sent += 1
     try {
       this.socket.send(text)
@@ -444,8 +469,18 @@ export class SwarmConnection {
       this.close(CLOSE_CODES.backpressure, 'socket write failed')
       return
     }
-    this.queuedBytes -= bytes
-    this.queuedFrames -= 1
+    /* §2.4's queue is what the **transport** still holds, not what this method just handled. The
+     * previous version incremented and decremented on consecutive lines, which made
+     * `queuedFrames` permanently 0 and the 4 000-frame half of the rule unreachable: only the
+     * byte half could ever fire. A drained socket resets the backlog; anything else accrues. */
+    const buffered = this.socket.bufferedAmount()
+    if (buffered === 0) {
+      this.queuedBytes = 0
+      this.queuedFrames = 0
+      return
+    }
+    this.queuedBytes = buffered
+    this.queuedFrames += 1
   }
 
   /** §2.4: server ping at 15 s idle; no `pong` and no frame within 30 s ⇒ close **4008**. */
@@ -536,24 +571,11 @@ const TOKEN_PREFIX = 'swarm.tok.'
  * reach this server, and only the `Host` check notices.
  */
 export function admit(input: AdmissionInput): AdmissionOutcome {
+  /* The table's order is normative, not cosmetic: an unpaired client with a stale `Host` must see
+   * **4001** (fix: pair) and not **4003**, which §2.5 #4 makes terminal in the client with a
+   * different fix string entirely. Protocol → Token → Origin → Host. */
   if (!input.protocols.includes(SUBPROTOCOL)) {
     return { ok: false, close: CLOSE_CODES.protocol, httpStatus: 400, reason: 'swarm.v1 required' }
-  }
-  if (!hostAllowed(input.host, input.port)) {
-    return {
-      ok: false,
-      close: CLOSE_CODES.forbidden,
-      httpStatus: 403,
-      reason: 'Host must be a literal loopback authority',
-    }
-  }
-  if (!originAllowed(input.origin, input.allowedOrigins)) {
-    return {
-      ok: false,
-      close: CLOSE_CODES.forbidden,
-      httpStatus: 403,
-      reason: 'Origin is not in the allowlist',
-    }
   }
   const carrier = input.protocols.find((p) => p.startsWith(TOKEN_PREFIX))
   if (carrier === undefined) {
@@ -573,28 +595,56 @@ export function admit(input: AdmissionInput): AdmissionOutcome {
       reason: 'unknown or revoked token',
     }
   }
+  if (!originAllowed(input.origin, input.allowedOrigins)) {
+    return {
+      ok: false,
+      close: CLOSE_CODES.forbidden,
+      httpStatus: 403,
+      reason: 'Origin is not in the allowlist',
+    }
+  }
+  if (!hostAllowed(input.host, input.port)) {
+    return {
+      ok: false,
+      close: CLOSE_CODES.forbidden,
+      httpStatus: 403,
+      reason: 'Host must be a literal loopback authority',
+    }
+  }
   /* The server echoes **exactly** `swarm.v1` — never the token subprotocol, which would put the
    * credential into the response headers of every handshake. */
   return { ok: true, token, protocol: SUBPROTOCOL }
 }
 
+/**
+ * §2.1: "literal `127.0.0.1:<port>` or `localhost:<port>`". The port-less forms are **not** on
+ * that list and were accepted anyway — a rebound name resolving to loopback on port 80 would have
+ * walked past the one check that defeats DNS rebinding.
+ */
 export function hostAllowed(host: string | undefined, port: number): boolean {
   if (host === undefined) return false
-  return (
-    host === `127.0.0.1:${port}` ||
-    host === `localhost:${port}` ||
-    host === `[::1]:${port}` ||
-    host === '127.0.0.1' ||
-    host === 'localhost'
-  )
+  return host === `127.0.0.1:${port}` || host === `localhost:${port}` || host === `[::1]:${port}`
 }
 
-/** Absent is allowed (a CLI or Node head sends none); present must be on the list. */
+/**
+ * Absent is allowed (a CLI or Node head sends none); present must be **on the list**.
+ *
+ * An entry may end in `:*` to allow any port on that scheme+hostname — that is how §2.1's
+ * "dev `http://localhost:*`" is expressed as data. What is no longer true is that the whole
+ * loopback origin space is allowed unconditionally: that made `config.origins` advisory, and an
+ * allowlist that does not exclude is a gate that does not gate (S8).
+ */
 export function originAllowed(origin: string | undefined, allowed: readonly string[]): boolean {
   if (origin === undefined || origin.length === 0) return true
-  if (allowed.includes(origin)) return true
-  if (origin.startsWith('chrome-extension://') && allowed.some((a) => a === origin)) return true
-  return /^http:\/\/localhost(:\d+)?$/.test(origin) || /^http:\/\/127\.0\.0\.1(:\d+)?$/.test(origin)
+  return allowed.some((entry) => {
+    if (entry === origin) return true
+    if (!entry.endsWith(':*')) return false
+    const prefix = entry.slice(0, -1)
+    return (
+      origin === entry.slice(0, -2) ||
+      (origin.startsWith(prefix) && /^\d+$/.test(origin.slice(prefix.length)))
+    )
+  })
 }
 
 export function errorFrame(id: number | null, error: SwarmError): ServerFrame {

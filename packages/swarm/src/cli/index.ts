@@ -21,8 +21,16 @@ import { randomUUID } from 'node:crypto'
 import type { SwarmServerConfig } from '../server/config.ts'
 import type { ExecutorAdapter } from '../server/executor/types.ts'
 import type { SwarmServer } from '../server/server.ts'
-import type { PreflightReport } from '../types.ts'
+import type {
+  ConnectionVM,
+  IntentResult,
+  PreflightReport,
+  ReasoningEffort,
+  SwarmClient,
+  TurnDeliveryMode,
+} from '../types.ts'
 
+import { createSwarmClient } from '../client/index.ts'
 import { SwarmError } from '../errors.ts'
 import { loadServerConfig, resolveSwarmHome, swarmHomeLayout } from '../server/config.ts'
 import { createJcodeAdapter } from '../server/executor/jcode.ts'
@@ -30,7 +38,6 @@ import { preflightJcode } from '../server/executor/spawn.ts'
 import { createInProcessTransport } from '../server/in-process.ts'
 import { createSwarmServer } from '../server/server.ts'
 import { TokenStore } from '../server/tokens.ts'
-import { WireClient } from './wire-client.ts'
 import { webSocketTransport } from './ws-transport.ts'
 
 export interface CliIo {
@@ -263,11 +270,21 @@ async function head(
           token,
         })
 
-  const client = new WireClient({ transport, clientName: 'swarm-cli/0.1', head: 'cli' })
+  /* H10, and the whole of §7.1's claim: **the identical client core**, not a CLI-shaped copy of
+   * it. `createSwarmClient` connects on construction over the injected transport (H7), so the
+   * only difference between this head and the extension is which transport it was handed. */
+  const client = createSwarmClient({
+    transport,
+    clientName: 'swarm-cli/0.1',
+    head: 'cli',
+    onError: () => undefined,
+  })
   try {
-    await client.connect()
+    await waitForConnection(client)
+    await waitForFleet(client)
   } catch (error) {
     io.err(SwarmError.is(error) ? `${error.code}: ${error.message}` : String(error))
+    client.destroy()
     return 1
   }
 
@@ -277,8 +294,88 @@ async function head(
     io.err(SwarmError.is(error) ? `${error.code}: ${error.message}` : String(error))
     return 1
   } finally {
-    client.close()
+    client.destroy()
   }
+}
+
+/**
+ * Resolve on `connected`, refuse on `blocked`. A terminal close is terminal for the CLI too
+ * (§2.5 rule 4): a revoked `cli-token` must print a fix, not retry until the shell gives up.
+ */
+function waitForConnection(client: SwarmClient, timeoutMs = 5_000): Promise<void> {
+  const settle = (vm: ConnectionVM): 'ok' | 'blocked' | null =>
+    vm.status === 'connected' ? 'ok' : vm.status === 'blocked' ? 'blocked' : null
+  const blocked = (vm: ConnectionVM): SwarmError =>
+    new SwarmError(
+      vm.blockedReason === 'unauthenticated'
+        ? 'unauthenticated'
+        : vm.blockedReason === 'forbidden'
+          ? 'forbidden'
+          : 'bad_protocol',
+      `the server refused this head (${vm.blockedReason ?? 'unknown'}) — run \`swarm serve\``,
+      { retryable: false },
+    )
+
+  const first = settle(client.connection.get())
+  if (first === 'ok') return Promise.resolve()
+  if (first === 'blocked') return Promise.reject(blocked(client.connection.get()))
+
+  return new Promise((resolve, reject) => {
+    const timer = setTimeout(() => {
+      unsubscribe()
+      reject(new SwarmError('executor_unavailable', 'the swarm server did not answer'))
+    }, timeoutMs)
+    timer.unref?.()
+    const unsubscribe = client.connection.subscribe((vm) => {
+      const outcome = settle(vm)
+      if (outcome === null) return
+      clearTimeout(timer)
+      unsubscribe()
+      if (outcome === 'ok') resolve()
+      else reject(blocked(vm))
+    })
+  })
+}
+
+/**
+ * `hello_ok` is not enough for a **one-shot** head.
+ *
+ * The client pins `server` and `fleet` and re-subscribes on every `hello_ok` (§2.5 rule 2), but the
+ * `snap` frames arrive after it. A long-lived head does not care — it renders when they land. A CLI
+ * verb runs once and exits, so `swarm say <id>` issued in that window would find an empty
+ * projection and refuse `not_found` for a delegation that exists — a lie about the fleet, produced
+ * by a race the user cannot see. So the head waits for its own base state before running a verb.
+ */
+function waitForFleet(client: SwarmClient, timeoutMs = 5_000): Promise<void> {
+  /* Both pinned streams have delivered their snapshot: `server` and `fleet` (§2.5 rule 2). The
+   * counter is the only honest signal — an *empty* fleet and an *unloaded* one are the same value,
+   * so waiting on the store's content would be waiting on nothing. */
+  const ready = (): boolean => (client.inspect().counters.snapshots ?? 0) >= 2
+  const deadline = Date.now() + timeoutMs
+  return new Promise((resolve, reject) => {
+    const poll = (): void => {
+      if (client.connection.get().status === 'blocked') {
+        reject(new SwarmError('unauthenticated', 'the server refused this head'))
+        return
+      }
+      if (ready()) {
+        resolve()
+        return
+      }
+      if (Date.now() > deadline) {
+        reject(new SwarmError('executor_unavailable', 'the fleet snapshot never arrived'))
+        return
+      }
+      setTimeout(poll, 5).unref?.()
+    }
+    poll()
+  })
+}
+
+/** `{ok:false}` is an expected outcome for a domain refusal (#24), so the CLI unwraps it here. */
+function unwrap<T>(result: IntentResult<T>): T {
+  if (result.ok) return result.value
+  throw result.error
 }
 
 function readToken(
@@ -293,31 +390,24 @@ function readToken(
   return TokenStore.readCliToken(cliTokenPath)
 }
 
-async function verb(parsed: ParsedArgs, io: CliIo, client: WireClient): Promise<number> {
+async function verb(parsed: ParsedArgs, io: CliIo, client: SwarmClient): Promise<number> {
   const key = (): string => randomUUID()
   switch (parsed.verb) {
     case 'status': {
-      const state = (await client.subscribe('fleet', 'snapshot')) as {
-        counts: Record<string, number>
-        concurrency: { runningAttempts: number; cap: number; queued: number }
-        dispatchPaused: boolean
-      }
+      const fleet = client.fleet.get()
       io.out(
-        `attempts ${state.concurrency.runningAttempts}/${state.concurrency.cap}` +
-          ` · queued ${state.concurrency.queued}` +
-          ` · dispatch ${state.dispatchPaused ? 'PAUSED' : 'running'}`,
+        `attempts ${fleet.concurrency.runningAttempts}/${fleet.concurrency.cap}` +
+          ` · queued ${fleet.concurrency.queued}` +
+          ` · dispatch ${fleet.dispatchPaused ? 'PAUSED' : 'running'}`,
       )
-      for (const [bucket, count] of Object.entries(state.counts)) {
+      for (const [bucket, count] of Object.entries(fleet.counts)) {
         if (count > 0) io.out(`  ${bucket.padEnd(14)} ${count}`)
       }
       return 0
     }
 
     case 'ls': {
-      const state = (await client.subscribe('fleet', 'snapshot')) as {
-        buckets: Record<string, string[]>
-      }
-      for (const [bucket, ids] of Object.entries(state.buckets)) {
+      for (const [bucket, ids] of Object.entries(client.fleet.get().buckets)) {
         for (const id of ids) io.out(`${bucket.padEnd(14)} ${id}`)
       }
       return 0
@@ -329,15 +419,20 @@ async function verb(parsed: ParsedArgs, io: CliIo, client: WireClient): Promise<
         io.err('usage: swarm new <objective> --workspace <id>')
         return 1
       }
-      const id = await client.request(
-        'createDelegation',
-        {
+      const parallel = Number(parsed.flags.parallel ?? 1)
+      const id = unwrap(
+        await client.createDelegation({
           idempotencyKey: key(),
           spec: {
             specVersion: 1,
             objective,
             acceptance: [],
-            workspace: { workspaceId: flagString(parsed.flags.workspace) ?? 'default' },
+            workspace: {
+              workspaceId: flagString(parsed.flags.workspace) ?? 'default',
+              ...(parsed.flags.base === undefined
+                ? {}
+                : { baseRef: flagString(parsed.flags.base) }),
+            },
             model: { provider: 'anthropic', model: 'claude-opus-5', reasoningEffort: null },
             budget: {
               maxWallMs: 45 * 60_000,
@@ -350,12 +445,11 @@ async function verb(parsed: ParsedArgs, io: CliIo, client: WireClient): Promise<
             execution: { nativeSwarm: false, jcodeMemory: false, autoPoke: true, skills: [] },
             context: [],
             delivery: { mode: 'after-turn', notify: 'notify' },
-            parallelAttempts: Number(parsed.flags.parallel ?? 1),
+            parallelAttempts: (parallel === 2 || parallel === 3 ? parallel : 1) as 1 | 2 | 3,
           },
-        },
-        key(),
+        }),
       )
-      io.out(String(id))
+      io.out(id)
       return 0
     }
 
@@ -365,24 +459,22 @@ async function verb(parsed: ParsedArgs, io: CliIo, client: WireClient): Promise<
         io.err('usage: swarm say <delegationId> <text>')
         return 1
       }
-      const turnId = await client.request(
-        'sendTurn',
-        {
-          delegationId,
-          directive: {
-            text: rest.join(' '),
-            idempotencyKey: key(),
-            ...(parsed.flags.attempt === undefined
-              ? {}
-              : { attemptId: flagString(parsed.flags.attempt) }),
-            ...(parsed.flags.delivery === undefined
-              ? {}
-              : { delivery: flagString(parsed.flags.delivery) }),
-          },
-        },
-        key(),
+      const turnId = unwrap(
+        await client.sendTurn(delegationId, {
+          text: rest.join(' '),
+          idempotencyKey: key(),
+          ...(parsed.flags.attempt === undefined
+            ? {}
+            : { attemptId: flagString(parsed.flags.attempt) }),
+          ...(parsed.flags.delivery === undefined
+            ? {}
+            : { delivery: flagString(parsed.flags.delivery) as TurnDeliveryMode }),
+          ...(parsed.flags.effort === undefined
+            ? {}
+            : { reasoningEffort: flagString(parsed.flags.effort) as ReasoningEffort }),
+        }),
       )
-      io.out(String(turnId))
+      io.out(turnId)
       return 0
     }
 
@@ -392,10 +484,10 @@ async function verb(parsed: ParsedArgs, io: CliIo, client: WireClient): Promise<
         io.err('usage: swarm cancel <delegationId> [--scope turn|delegation|hard]')
         return 1
       }
-      await client.request(
-        'cancel',
-        { delegationId, options: { scope: flagString(parsed.flags.scope) ?? 'delegation' } },
-        key(),
+      unwrap(
+        await client.cancel(delegationId, {
+          scope: (flagString(parsed.flags.scope) ?? 'delegation') as 'turn' | 'delegation' | 'hard',
+        }),
       )
       io.out(`cancelled ${delegationId}`)
       return 0
@@ -407,8 +499,7 @@ async function verb(parsed: ParsedArgs, io: CliIo, client: WireClient): Promise<
         io.err('usage: swarm verify <delegationId>')
         return 1
       }
-      const runId = await client.request('verify', { delegationId, options: {} }, key())
-      io.out(String(runId))
+      io.out(unwrap(await client.verify(delegationId)))
       return 0
     }
 
@@ -418,19 +509,14 @@ async function verb(parsed: ParsedArgs, io: CliIo, client: WireClient): Promise<
         io.err('usage: swarm land <delegationId> <attemptId> [--mode commit|patch]')
         return 1
       }
-      const landing = await client.request(
-        'land',
-        {
-          delegationId,
-          options: {
-            attemptId,
-            mode: flagString(parsed.flags.mode) ?? 'commit',
-            ...(parsed.flags.branch === undefined
-              ? {}
-              : { targetBranch: flagString(parsed.flags.branch) }),
-          },
-        },
-        key(),
+      const landing = unwrap(
+        await client.land(delegationId, {
+          attemptId,
+          mode: (flagString(parsed.flags.mode) ?? 'commit') as 'commit' | 'patch',
+          ...(parsed.flags.branch === undefined
+            ? {}
+            : { targetBranch: flagString(parsed.flags.branch) }),
+        }),
       )
       io.out(JSON.stringify(landing))
       return 0
@@ -438,10 +524,12 @@ async function verb(parsed: ParsedArgs, io: CliIo, client: WireClient): Promise<
 
     case 'watch': {
       const delegationId = parsed.positionals[0]
-      const stream = delegationId === undefined ? 'fleet' : (`delegation:${delegationId}` as const)
-      client.onEvent((event) => io.out(`${event.seq}\t${event.ev.k}`))
-      await client.subscribe(stream, 'snapshot')
-      await new Promise<void>((resolve) => setTimeout(resolve, Number(parsed.flags.ms ?? 2_000)))
+      const off = client.subscribe((eventKey) => io.out(String(eventKey)))
+      if (delegationId !== undefined) client.focus(delegationId)
+      await new Promise<void>((resolve) => {
+        setTimeout(resolve, Number(parsed.flags.ms ?? 2_000)).unref?.()
+      })
+      off()
       return 0
     }
 

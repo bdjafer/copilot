@@ -28,6 +28,10 @@ export default defineConfig({
         presentation: 'src/presentation.ts',
         server: 'src/server/index.ts',
         testing: 'src/testing/index.ts',
+        /* Not an export entry — `bin: { "swarm": "./dist/cli.js" }` (§1.1), so H1's four entries
+         * hold. It is still a build entry, because a `bin` that names a file the build does not
+         * emit is a package that installs a broken command. */
+        cli: 'src/cli.ts',
       },
       formats: ['es'],
       fileName: (_format, name) => `${name}.js`,

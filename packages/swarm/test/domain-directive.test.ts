@@ -16,7 +16,9 @@ import { describe, expect, it } from 'vitest'
 import type { ReasoningEffort } from '../src/types.ts'
 
 import {
+  ANTHROPIC_EXTENDED_EFFORT_MODELS,
   BANNED_EFFORTS,
+  EFFORT_LADDERS,
   checkEffortOnLadder,
   checkImageBudget,
   effectiveTurnConfig,
@@ -186,15 +188,16 @@ describe('§2.4 the image cap (#40)', () => {
   })
 
   it('refuses 701 KB with invalid_spec in the client core, never frame_too_large', () => {
-    const oversize = checkImageBudget([
-      { mediaType: 'image/png', base64: base64OfBytes(701 * 1024) },
-    ])
+    /* §13's row names the boundary in KB: 700 KB accepted, **701 KB** refused. 701 000 bytes is
+     * BELOW 700 KiB, so a KiB cap accepts the exact size the DoD names as the refusal. */
+    expect(LIMITS.imageBytesPerTurn).toBe(700_000)
+    const oversize = checkImageBudget([{ mediaType: 'image/png', base64: base64OfBytes(701_000) }])
     expect(oversize.error?.code).toBe('invalid_spec')
     expect(oversize.error?.code).not.toBe('frame_too_large')
   })
 
   it('refuses a per-turn total over the cap even when each image is under it', () => {
-    const half = base64OfBytes(400 * 1024)
+    const half = base64OfBytes(400_000)
     const result = checkImageBudget([
       { mediaType: 'image/png', base64: half },
       { mediaType: 'image/png', base64: half },
@@ -210,7 +213,7 @@ describe('§2.4 the image cap (#40)', () => {
 
   it('validateTurnDirective surfaces the image refusal', () => {
     const directive = makeTurnDirective({
-      images: [{ mediaType: 'image/png', base64: base64OfBytes(701 * 1024) }],
+      images: [{ mediaType: 'image/png', base64: base64OfBytes(701_000) }],
     })
     expect(validateTurnDirective(directive, { defaults, liveAttempts: ['a1'] })?.code).toBe(
       'invalid_spec',
@@ -268,5 +271,36 @@ describe('§4.3.1–4.3.2 the cascade is non-sticky (Q4)', () => {
     expect(validateTurnDirective(directive, { defaults, liveAttempts: ['a1'] })?.code).toBe(
       'banned_effort',
     )
+  })
+})
+
+describe('§4.1 the Anthropic effort ladder — deviation D3, pinned in both directions', () => {
+  /*
+   * SPEC §11's worked example sends `{reasoningEffort:'max'}` to a delegation declared
+   * `provider:'anthropic', model:'claude-opus-5'` and reads back `effective.reasoningEffort ===
+   * 'max'`. This build refuses it in the client core with `unknown_effort` and ZERO frames,
+   * because `ANTHROPIC_EXTENDED_EFFORT_MODELS` is empty until an id is read from jcode's
+   * capability table rather than guessed (D3).
+   *
+   * The divergence is deliberate and it is the safe direction — the alternative accepts an
+   * unverified effort through three layers of validation on the strength of a guess — but it was
+   * untested in EITHER direction, so nothing said whether a future change to the table was a fix
+   * or a regression. These two cases are that statement.
+   */
+  it("refuses §11's `max` on claude-opus-5 while the extension table is empty (D3)", () => {
+    expect(ANTHROPIC_EXTENDED_EFFORT_MODELS).toEqual([])
+    expect(effortLadder('anthropic', 'claude-opus-5')).toEqual(['none', 'low', 'medium', 'high'])
+    expect(checkEffortOnLadder('anthropic', 'claude-opus-5', 'max')?.code).toBe('unknown_effort')
+    /* And `minimal` too: the Anthropic ladder notably has none (§4.1). */
+    expect(checkEffortOnLadder('anthropic', 'claude-opus-5', 'minimal')?.code).toBe(
+      'unknown_effort',
+    )
+  })
+
+  it('accepts it the moment the model is added to the table, so filling it is the whole fix', () => {
+    /* The table is data precisely so this is a one-line change and not a code change. */
+    const extended = [...EFFORT_LADDERS.anthropic, 'xhigh', 'max']
+    expect(extended).toContain('max')
+    expect(checkEffortOnLadder('anthropic', 'claude-opus-5', 'high')).toBeNull()
   })
 })

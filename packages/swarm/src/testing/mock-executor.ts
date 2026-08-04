@@ -115,6 +115,8 @@ const defaultSleep = (ms: number): Promise<void> =>
  * of whether anyone is draining it.
  */
 class EventChannel {
+  /** Kept only when the adapter declares `nativeReplay` — the mock must not out-promise its row. */
+  private readonly history: ExecutorEvent[] = []
   private readonly consumers = new Set<{
     queue: ExecutorEvent[]
     wake: (() => void) | null
@@ -125,8 +127,11 @@ class EventChannel {
   }>()
   private ended = false
 
+  constructor(private readonly replay: boolean) {}
+
   emit(event: ExecutorEvent): void {
     if (this.ended) return
+    if (this.replay) this.history.push(event)
     for (const observer of Array.from(this.observers)) {
       if (observer.match(event)) {
         this.observers.delete(observer)
@@ -167,7 +172,10 @@ class EventChannel {
 
   iterator(): AsyncIterableIterator<ExecutorEvent> {
     const consumer: { queue: ExecutorEvent[]; wake: (() => void) | null } = {
-      queue: [],
+      /* §5.4 #2: without native replay, what was not received never existed. With it, a late
+       * subscriber is owed everything already emitted — and an adapter that declares the
+       * capability and delivers nothing is exactly what the conformance suite is for. */
+      queue: this.replay ? [...this.history] : [],
       wake: null,
     }
     this.consumers.add(consumer)
@@ -199,7 +207,7 @@ class EventChannel {
 
 class MockSession implements ExecutorSessionHandle {
   readonly sessionId: string
-  readonly channel = new EventChannel()
+  readonly channel: EventChannel
   /** `role`/`content` pairs, the only thing `tail()` may ever return (§5.4 #12). */
   readonly transcript: { role: string; content: string }[] = []
   readonly scripts: MockTurnScript[] = []
@@ -220,7 +228,11 @@ class MockSession implements ExecutorSessionHandle {
   ) {
     this.sessionId = sessionId
     this.title = title ?? null
+    this.channel = new EventChannel(instance.capabilities.nativeReplay)
   }
+
+  /** Every distinct submission, for `idempotentSubmit` — the seam carries no key (§5.1). */
+  private readonly submitted = new Map<string, SubmitReceipt>()
 
   private get capabilities(): ExecutorCapabilities {
     return this.instance.capabilities
@@ -302,6 +314,15 @@ class MockSession implements ExecutorSessionHandle {
         'one in-flight turn per session under the writer lease',
       )
     }
+    if (this.capabilities.idempotentSubmit) {
+      /*
+       * `ExecutorSubmission` carries no idempotency key (§5.1), so the only thing "idempotent
+       * submit" can mean at this seam is that the backend recognises a repeated submission and
+       * does not run it twice. jcode declares `false` and therefore MUST run it twice.
+       */
+      const previous = this.submitted.get(msg.text)
+      if (previous !== undefined) return previous
+    }
 
     this.transcript.push({ role: 'user', content: msg.text })
     const script = this.scripts.shift() ?? this.defaultScript(msg)
@@ -319,15 +340,17 @@ class MockSession implements ExecutorSessionHandle {
     void this.play(script, msg)
 
     const ack = await observed
-    if (ack === null) {
-      /* V5: swarm's own deadline elapsed with no `message_accepted` on the stream. */
-      return { ack: 'unknown', ackAtMs: null, correlated: this.capabilities.submitAckCorrelates }
-    }
-    return {
-      ack: 'accepted',
-      ackAtMs: this.instance.now(),
-      correlated: this.capabilities.submitAckCorrelates,
-    }
+    const receipt: SubmitReceipt =
+      ack === null
+        ? /* V5: swarm's own deadline elapsed with no `message_accepted` on the stream. */
+          { ack: 'unknown', ackAtMs: null, correlated: this.capabilities.submitAckCorrelates }
+        : {
+            ack: 'accepted',
+            ackAtMs: this.instance.now(),
+            correlated: this.capabilities.submitAckCorrelates,
+          }
+    if (this.capabilities.idempotentSubmit) this.submitted.set(msg.text, receipt)
+    return receipt
   }
 
   private defaultScript(msg: ExecutorSubmission): MockTurnScript {
@@ -342,6 +365,11 @@ class MockSession implements ExecutorSessionHandle {
     await this.instance.sleep(0)
     if (this.channel.closed) return
     if (script.ack !== false) this.channel.emit({ k: 'accepted' })
+    if (this.capabilities.perTurnConfig && this.shadow.model !== null) {
+      /* `perTurnConfig` means the config is attached to the MESSAGE. jcode is session-sticky and
+       * declares `false`, so it announces a model once, when it is set — never per turn. */
+      this.channel.emit({ k: 'model_info', model: this.shadow.model, solicited: false })
+    }
 
     for (const step of script.steps ?? []) {
       if (this.channel.closed) return
@@ -445,9 +473,13 @@ class MockSession implements ExecutorSessionHandle {
       this.channel.emit({ k: 'turn_done' })
     }
     /*
-     * Landing is unobservable (§5.4 #10): `soft_interrupt_injected` is not translated, so no
-     * event is emitted here and `deliveryDetail.landing` stays `'unconfirmed'` forever.
+     * Landing is unobservable on jcode (§5.4 #10): `soft_interrupt_injected` is not translated,
+     * so nothing is emitted here and `deliveryDetail.landing` stays `'unconfirmed'` forever. An
+     * adapter that DECLARES the capability owes an observable, and the mock honours its own row.
      */
+    if ((kind === 'soft' || kind === 'urgent') && this.capabilities.interruptLandingObservable) {
+      this.channel.emit({ k: 'session_status', status: 'interrupt_landed', trusted: false })
+    }
     return Promise.resolve()
   }
 
@@ -541,7 +573,11 @@ class MockInstance implements ExecutorInstance {
     return Promise.resolve({
       server: 'mock',
       protocolVersion: 1,
-      capabilities: ['structured'],
+      /* R6: `approvalsAvailable` is the `supports('permissions')` probe and nothing else, so the
+       * declared capability and the advertised one must be the same fact. */
+      capabilities: this.capabilities.programmaticApprovals
+        ? ['structured', 'permissions']
+        : ['structured'],
       providers: ['mock'],
       routes: [
         {

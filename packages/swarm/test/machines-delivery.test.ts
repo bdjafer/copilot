@@ -217,3 +217,83 @@ describe('§3.3 DeliveryState — the V-table', () => {
     expect(ended.ok && ended.state).toBe('ended')
   })
 })
+
+/**
+ * The whole cross product. Transcribed from §3.3's V-table, not derived from
+ * `DELIVERY_TRANSITIONS`.
+ */
+const DELIVERY_TRIGGERS = [
+  'persisted',
+  'written',
+  'refused_preflight',
+  'message_accepted',
+  'accept_timeout',
+  'disconnect_before_ack',
+  'first_stream_event',
+  'turn_done',
+  'disconnect_before_turn_done',
+  'reconciled_positive',
+  'resend_resolved',
+  'session_error',
+  'retract_before_write',
+  'context_only_ack',
+  'retract_interrupt',
+] as const satisfies readonly DeliveryTrigger[]
+
+const LEGAL_DELIVERY_PAIRS: ReadonlySet<string> = new Set<string>([
+  ...ROWS.filter((row) => row.from !== null).map((row) => `${row.from}|${row.trigger}`),
+  /* Two rows are asserted above rather than declared in `ROWS`, because neither has a plain
+   * target: V9 is multi-target, and V12 DELETES the queue row instead of moving it. */
+  'unknown|reconciled_positive',
+  'prepared|retract_before_write',
+])
+
+describe('§3.3 DeliveryState — the illegal half of the table', () => {
+  it('accepts exactly the legal (state × trigger) pairs and rejects every other one', () => {
+    const wronglyAccepted: string[] = []
+    const wronglyRejected: string[] = []
+    for (const state of DELIVERY_STATES) {
+      for (const trigger of DELIVERY_TRIGGERS) {
+        const key = `${state}|${trigger}`
+        const outcome = deliveryMachine.transition(state, trigger)
+        if (LEGAL_DELIVERY_PAIRS.has(key)) {
+          /* V9 is the one multi-target row: legal, but the reducer refuses to guess which of
+           * `accepted|running|ended` reconciliation found (`target_required`). */
+          if (!outcome.ok && outcome.reason !== 'target_required') wronglyRejected.push(key)
+          continue
+        }
+        if (outcome.ok) wronglyAccepted.push(key)
+        else expect({ key, reason: outcome.reason }).toEqual({ key, reason: 'illegal_from' })
+      }
+    }
+    expect(wronglyAccepted).toEqual([])
+    expect(wronglyRejected).toEqual([])
+    expect(
+      DELIVERY_STATES.length * DELIVERY_TRIGGERS.length - LEGAL_DELIVERY_PAIRS.size,
+    ).toBeGreaterThan(80)
+  })
+
+  it('`unknown` is not terminal — it still accepts the rows that resolve it (X4, Q5)', () => {
+    /* V9 names three possible targets and will not pick one for the caller. */
+    const reconciled = deliveryMachine.transition('unknown', 'reconciled_positive', {
+      to: 'running',
+    })
+    expect(reconciled.ok && reconciled.state).toBe('running')
+    expect(deliveryMachine.transition('unknown', 'reconciled_positive').ok).toBe(false)
+    expect(deliveryMachine.transition('unknown', 'resend_resolved').ok).toBe(true)
+    /* And nothing else leaves it: `session_error` is V11's, from `sent`/`accepted` only. */
+    expect(deliveryMachine.transition('unknown', 'session_error').ok).toBe(false)
+  })
+
+  it('a terminal delivery accepts nothing', () => {
+    for (const state of DELIVERY_TERMINAL_STATES) {
+      for (const trigger of DELIVERY_TRIGGERS) {
+        expect({ state, trigger, ok: deliveryMachine.transition(state, trigger).ok }).toEqual({
+          state,
+          trigger,
+          ok: false,
+        })
+      }
+    }
+  })
+})

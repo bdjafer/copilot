@@ -101,9 +101,10 @@ export class ConfirmationRegistry {
   /** Unanswered requests expire after `confirmationTtlMs` and are **denied** automatically. */
   expire(): void {
     const at = this.now()
-    for (const [id, entry] of [...this.pending.entries()]) {
+    /* Snapshotted, because `resolve` deletes from the map it is iterating. */
+    const entries = Array.from(this.pending.values())
+    for (const entry of entries) {
       if (entry.request.expiresAt <= at) entry.resolve('deny', '', 'expired')
-      void id
     }
   }
 }

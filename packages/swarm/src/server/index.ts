@@ -21,6 +21,65 @@ export type { AttemptMeta, IntentContext, IntentResult, SwarmEngineOptions } fro
 export { createSqliteStore } from './store.ts'
 export type { SqliteStoreOptions } from './store.ts'
 
+/* §6.7 (Q8, #39) — six tools, and the confirmation seam that gates the three that write. */
+export { ConfirmationRegistry, COPILOT_READ_TOOLS, COPILOT_WRITE_TOOLS } from './confirm.ts'
+export type { ConfirmationDecision, ConfirmationRegistryOptions } from './confirm.ts'
+export { createCopilotSurface } from './copilot.ts'
+export type { CopilotSurfaceOptions, CopilotTools, CopilotWaitUntil } from './copilot.ts'
+
+/* §8 — the verifier and its evidence bundle. */
+export { createVerifier, verdictOf, writeEvidenceBundle, REVIEW_RUBRIC_SCHEMA } from './verifier.ts'
+export type { CommandRunner, ReviewRunner, VerifierOptions } from './verifier.ts'
+
+/* §7.3 — the workspace allowlist, worktrees, diff and landing. */
+export {
+  assertPathInsideRoot,
+  createWorktree,
+  diffAgainstBase,
+  land,
+  resolveBaseRevision,
+  WorkspaceGuard,
+} from './workspace.ts'
+export type { ResolvedWorkspace, WorktreeSpec } from './workspace.ts'
+
+/* §7.2/§7.3 — `$SWARM_HOME`, `config.json` and `runtime.json`. */
+export {
+  defaultServerConfig,
+  loadServerConfig,
+  resolveSwarmHome,
+  swarmHomeLayout,
+  writeServerConfig,
+} from './config.ts'
+export type {
+  RuntimeFile,
+  SwarmHomeLayout,
+  SwarmServerConfig,
+  WorkspaceRegistration,
+} from './config.ts'
+
+/* §2.1 — pairing, tokens and the local CLI trust file. */
+export { CLI_TOKEN_ID, TokenStore } from './tokens.ts'
+export type { IssuedToken, PairingCode, TokenRecord } from './tokens.ts'
+
+/* §2.1–§2.5 — one connection, and the admission table it is admitted by. */
+export { admit, SwarmConnection, SERVER_CAPABILITY_SET } from './ws.ts'
+export type { AdmissionOutcome, ConnectionSocket, ConnectionOptions } from './ws.ts'
+
+/* §6.1 H7, §7.1 `--in-process` — the same connection over a pipe. */
+export { createInProcessTransport } from './in-process.ts'
+
+/* §5.1/§5.3 — the jcode adapter, swarm's own bridge spawn and the two-group kill. */
+export { createJcodeAdapter, JcodeAdapter } from './executor/jcode.ts'
+export type { JcodeAdapterOptions } from './executor/jcode.ts'
+export {
+  buildBridgeEnv,
+  killTwoGroups,
+  launchBridge,
+  preflightJcode,
+  resolveDaemonPid,
+} from './executor/spawn.ts'
+export type { BridgeLauncher, SpawnedBridge, VersionProbe } from './executor/spawn.ts'
+
 /* The log contract the store implements (§3.5) — re-exported so `./server` is self-sufficient. */
 export { DDL, FENCE_COUNTER, PRAGMAS, SCHEMA_VERSION, TABLES } from '../log/ddl.ts'
 export type {

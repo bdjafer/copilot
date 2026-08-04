@@ -286,6 +286,44 @@ export function storeConformance(factory: () => Awaitable<StoreHarness>): Confor
     assertEqual(next.seq, 3, 'a reclaimed seq is gone, not free — a gap must never be observable')
   })
 
+  test('seq is never reused after a PURGE either — deleteStream leaves a head tombstone', async ({
+    store,
+  }) => {
+    store.commit((tx) => {
+      tx.appendLog({ stream: DELEG, ev: sampleEvent('deleg.channel'), actor: makeActor() })
+      tx.appendLog({ stream: DELEG, ev: sampleEvent('deleg.channel'), actor: makeActor() })
+      tx.appendLog({ stream: DELEG, ev: sampleEvent('deleg.channel'), actor: makeActor() })
+    })
+    const removed = store.commit((tx) => tx.deleteStream(DELEG)).value
+    assertEqual(removed, 3, 'the log rows are reclaimed')
+
+    const head = store.read((tx) => tx.head(DELEG))
+    assertEqual(head.head, 3, 'the head survives the rows: §2.3 says seq "is never reused"')
+    assertEqual(head.floor, 3, 'and the floor rises to it, so a resume below it is honest lag')
+
+    const next = store.commit((tx) =>
+      tx.appendLog({ stream: DELEG, ev: sampleEvent('deleg.channel'), actor: makeActor() }),
+    ).value
+    /*
+     * The failure this pins: a head holding cursor 3 across a purge/reopen. If `seq` restarted at
+     * 1 it is served DIFFERENT content at seqs it has already applied — silently, because a
+     * re-delivery below the cursor is dropped as a duplicate (§2.3) — or, if it resumes above the
+     * new head, refused `bad_cursor` on a stream nobody re-subscribes.
+     */
+    assertEqual(next.seq, 4, 'the next append continues past the purged head, it does not restart')
+  })
+
+  test('deleteStream on a stream that never allocated a seq leaves no tombstone', async ({
+    store,
+  }) => {
+    assertEqual(store.commit((tx) => tx.deleteStream(DELEG)).value, 0, 'nothing to reclaim')
+    assertEqual(
+      store.read((tx) => tx.heads().some((row) => row.stream === DELEG)),
+      false,
+      'a stream that never existed does not get a head row from being deleted',
+    )
+  })
+
   /* ------------------------------------------------------------ §2.3 snapshot atomicity */
 
   test('snapshot reports the head it materialized at', async ({ store }) => {

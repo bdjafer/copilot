@@ -72,6 +72,13 @@ export interface ProjectionOptions {
 interface DelegationMeta {
   createdAtMs: number
   updatedAtMs: number
+  /**
+   * The part of the server's `attentionScore` this client's own flag derivation cannot account
+   * for, and which no age can explain either (§6.4–6.6). It is zero whenever the two agree, which
+   * is the normal case; when they disagree it is what keeps F2's ordering the *server's* ordering
+   * instead of silently discarding a flag's weight into a 199-minute age clamp.
+   */
+  residual: number
 }
 
 export interface ProjectionResult {
@@ -152,16 +159,23 @@ function hasUnknownDelivery(vm: DelegationVM): boolean {
   return vm.attempts.some((attempt) => attempt.currentTurn?.delivery === 'unknown')
 }
 
-function scoreOf(vm: DelegationVM, createdAtMs: number, nowMs: number): number {
-  return attentionScore({
-    state: vm.state,
-    landed: vm.landed,
-    stalled: vm.stalledForMs !== null,
-    deliveryUnknown: hasUnknownDelivery(vm),
-    budgetBreached: vm.budget.worstFraction >= 1,
-    staleBase: vm.staleBase,
-    ageMinutes: Math.max(0, (nowMs - createdAtMs) / 60_000),
-  })
+function ageMinutesOf(createdAtMs: number, nowMs: number): number {
+  return Math.min(ATTENTION_WEIGHTS.ageCap, Math.max(0, (nowMs - createdAtMs) / 60_000))
+}
+
+function scoreOf(vm: DelegationVM, createdAtMs: number, nowMs: number, residual: number): number {
+  return (
+    residual +
+    attentionScore({
+      state: vm.state,
+      landed: vm.landed,
+      stalled: vm.stalledForMs !== null,
+      deliveryUnknown: hasUnknownDelivery(vm),
+      budgetBreached: vm.budget.worstFraction >= 1,
+      staleBase: vm.staleBase,
+      ageMinutes: ageMinutesOf(createdAtMs, nowMs),
+    })
+  )
 }
 
 function addSpendEvent(spend: SpendCounters, input: number, output: number): SpendCounters {
@@ -181,6 +195,15 @@ export function createProjection(options: ProjectionOptions): Projection {
   const meta = new Map<DelegationId, DelegationMeta>()
   const focusedAttempt = new Map<DelegationId, AttemptId | null>()
   const attemptOwners = new Map<AttemptId, DelegationId>()
+  /**
+   * The tool calls still running on each attempt, in the order they started (W4, #47, [F11]).
+   *
+   * `nowDoing` is "latest tool + target, one line", and concurrent tools are the expected case —
+   * so a `done` may not blank the line while another tool is still executing. A `Map` keyed by
+   * `callId` is the whole mechanism: `set` on an existing key keeps its position, so the last
+   * value is the most recently *started* survivor rather than the most recently updated one.
+   */
+  const runningTools = new Map<AttemptId, Map<string, string>>()
   let fleet: FleetVM = EMPTY_FLEET
   let health: HealthVM = EMPTY_HEALTH
   let notices: readonly NoticeVM[] = []
@@ -191,6 +214,34 @@ export function createProjection(options: ProjectionOptions): Projection {
   let fleetChanged = false
   let healthChanged = false
   let noticesChanged = false
+
+  /**
+   * Record a tool transition and return the attempt's `nowDoing` (W4). `null` only once **every**
+   * tool on the attempt has finished — a `done` on one of two concurrent tools used to blank the
+   * line while the longest-running one was still executing.
+   */
+  const trackTool = (
+    attemptId: AttemptId,
+    callId: string,
+    status: 'start' | 'exec' | 'done' | 'error',
+    name: string,
+    target: string | null,
+  ): string | null => {
+    let running = runningTools.get(attemptId)
+    if (running === undefined) {
+      running = new Map<string, string>()
+      runningTools.set(attemptId, running)
+    }
+    if (status === 'done' || status === 'error') running.delete(callId)
+    else running.set(callId, toolLine(name, target))
+    if (running.size === 0) {
+      runningTools.delete(attemptId)
+      return null
+    }
+    let latest: string | null = null
+    for (const line of running.values()) latest = line
+    return latest
+  }
 
   /* -------------------------------------------------------------------- delegation plumbing */
 
@@ -222,7 +273,7 @@ export function createProjection(options: ProjectionOptions): Projection {
     const createdAtMs = info?.createdAtMs ?? nowMs
     const vm: DelegationVM = {
       ...withDerived,
-      attentionScore: scoreOf(withDerived, createdAtMs, nowMs),
+      attentionScore: scoreOf(withDerived, createdAtMs, nowMs, info?.residual ?? 0),
     }
     for (const attempt of vm.attempts) attemptOwners.set(attempt.id, vm.id)
     return deepFreeze(vm)
@@ -248,18 +299,35 @@ export function createProjection(options: ProjectionOptions): Projection {
   const sameVM = (a: DelegationVM, b: DelegationVM): boolean =>
     a === b || JSON.stringify(a) === JSON.stringify(b)
 
+  /**
+   * Recover the age the wire does not carry, and keep what the inversion cannot explain.
+   *
+   * The server's `attentionScore` is the only age signal on the wire, so it is inverted against
+   * this client's own flag derivation. The inversion is only exact while two independent
+   * computations of §6.4–6.6's weights agree; where they do not — `hasUnknownDelivery` is the
+   * concrete risk, since it scans turn state the server may legitimately summarise differently —
+   * the leftover is **kept as a residual** rather than clamped away. Clamping it discarded the
+   * flag's whole weight: a server score of 600 whose flag this client cannot re-derive projected
+   * as 199, i.e. below `staleBase`, and stayed there. The residual is re-derived on every
+   * server-authored VM, so a flag the server drops stops counting on the next summary.
+   */
   const seed = (vm: DelegationVM, nowMs: number): void => {
-    if (meta.has(vm.id)) {
-      const info = meta.get(vm.id)!
-      info.updatedAtMs = nowMs
+    const info = meta.get(vm.id)
+    if (info === undefined) {
+      const unexplained = Math.max(0, vm.attentionScore - flagScore(vm))
+      const ageMinutes = Math.min(ATTENTION_WEIGHTS.ageCap, unexplained)
+      meta.set(vm.id, {
+        createdAtMs: nowMs - ageMinutes * 60_000,
+        updatedAtMs: nowMs,
+        residual: unexplained - ageMinutes,
+      })
       return
     }
-    /* First sight: the server's score is the only age signal on the wire, so invert it once. */
-    const ageMinutes = Math.min(
-      ATTENTION_WEIGHTS.ageCap,
-      Math.max(0, vm.attentionScore - flagScore(vm)),
+    info.updatedAtMs = nowMs
+    info.residual = Math.max(
+      0,
+      vm.attentionScore - flagScore(vm) - ageMinutesOf(info.createdAtMs, nowMs),
     )
-    meta.set(vm.id, { createdAtMs: nowMs - ageMinutes * 60_000, updatedAtMs: nowMs })
   }
 
   const touch = (id: DelegationId, nowMs: number): void => {
@@ -555,6 +623,9 @@ export function createProjection(options: ProjectionOptions): Projection {
       case 'deleg.attempt_ended': {
         const delegationId = context.streamId
         if (delegationId === null) return
+        /* An ended attempt runs nothing; keeping its tool map would leak one entry per attempt
+         * for the life of a long-running head. */
+        runningTools.delete(event.attemptId)
         const vm = patch(delegationId, at, (current) => ({
           ...current,
           attempts: current.attempts.map((a) =>
@@ -621,7 +692,11 @@ export function createProjection(options: ProjectionOptions): Projection {
               ? {
                   ...attempt,
                   turns: attempt.turns + 1,
-                  toolCalls: attempt.toolCalls + event.toolCalls,
+                  /* Replace, never add. `att.tool{status:'start'}` already counted this turn's
+                   * calls live off the attempt stream; adding the server's authoritative total on
+                   * top double-counted every one of them into `AttemptComparisonVM` (A5's cost
+                   * comparison) and the budget surface. */
+                  toolCalls: attempt.toolCalls - attempt.currentTurn.toolCalls + event.toolCalls,
                   currentTurn: { ...attempt.currentTurn, toolCalls: event.toolCalls },
                 }
               : attempt,
@@ -741,14 +816,18 @@ export function createProjection(options: ProjectionOptions): Projection {
         if (attemptId === null) return
         const delegationId = attemptOwners.get(attemptId)
         if (delegationId === undefined) return
-        const nowDoing =
-          event.status === 'done' || event.status === 'error'
-            ? null
-            : toolLine(event.name, event.target)
+        const nowDoing = trackTool(attemptId, event.callId, event.status, event.name, event.target)
+        const started = event.status === 'start'
         patchAttempt(delegationId, attemptId, at, (attempt) => ({
           ...attempt,
           nowDoing,
-          toolCalls: event.status === 'start' ? attempt.toolCalls + 1 : attempt.toolCalls,
+          /* Live, and **provisional**: `deleg.turn_ended` carries the server's authoritative count
+           * for the turn and swaps this estimate out for it rather than adding to it. */
+          toolCalls: started ? attempt.toolCalls + 1 : attempt.toolCalls,
+          currentTurn:
+            started && attempt.currentTurn !== null
+              ? { ...attempt.currentTurn, toolCalls: attempt.currentTurn.toolCalls + 1 }
+              : attempt.currentTurn,
         }))
         return
       }
@@ -821,6 +900,19 @@ export function createProjection(options: ProjectionOptions): Projection {
       /* A snapshot **replaces**: it is the fully materialized view at `seq`, and a merge would
        * keep a delegation the server has since purged (§2.3). Every row then goes through the
        * same derivation an event uses, so snapshot and replay converge byte-for-byte. */
+      const kept = new Set<DelegationId>(snapshot.delegations.map((vm) => vm.id))
+      /* The per-delegation side tables are pruned with it. `delegations` was already replaced
+       * wholesale, but `meta`, `focusedAttempt` and `attemptOwners` were not — in a service
+       * worker living for weeks across fleet churn (#5) that is unbounded growth, and a stale
+       * `meta` row also suppresses the age re-seed for an id the server has purged. */
+      /* Deleting the current entry while iterating a `Map` is well defined; no copy is needed. */
+      for (const id of meta.keys()) if (!kept.has(id)) meta.delete(id)
+      for (const id of focusedAttempt.keys()) if (!kept.has(id)) focusedAttempt.delete(id)
+      for (const [attemptId, owner] of attemptOwners) {
+        if (kept.has(owner)) continue
+        attemptOwners.delete(attemptId)
+        runningTools.delete(attemptId)
+      }
       delegations = new Map()
       delegationsChanged = true
       for (const vm of snapshot.delegations) {

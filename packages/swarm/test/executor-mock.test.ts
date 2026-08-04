@@ -6,7 +6,13 @@
 
 import { describe, expect, it } from 'vitest'
 
-import type { ExecutorEvent, ExecutorSessionHandle } from '../src/server/executor/types.ts'
+import type {
+  ExecutorAdapter,
+  ExecutorCapabilities,
+  ExecutorEvent,
+  ExecutorSessionHandle,
+} from '../src/server/executor/types.ts'
+import type { MockExecutorOptions } from '../src/testing/mock-executor.ts'
 
 import { sessionLease } from '../src/domain/leases.ts'
 import { SwarmError } from '../src/errors.ts'
@@ -29,11 +35,13 @@ const CONFIGURATIONS = {
       observableEffort: true,
       observableModel: true,
       perTurnConfig: true,
+      programmaticApprovals: true,
       structuredOutput: true,
       contextOnlyMessage: true,
       softInterrupt: true,
       interruptLandingObservable: true,
       history: 'lossless' as const,
+      sessionsPerConnection: 'many' as const,
       usageEvents: true,
     },
   },
@@ -57,6 +65,99 @@ for (const [label, options] of Object.entries(CONFIGURATIONS)) {
     }
   })
 }
+
+/**
+ * §5.2's whole claim about this suite is "**a lying adapter fails CI**", and that is a property of
+ * the suite, not of the mock — a mock that derives its behaviour from its own capability row can
+ * never disagree with it. So the lie is injected at the seam instead: a wrapper that keeps
+ * `MockExecutor`'s behaviour and swaps the declared row underneath it.
+ *
+ * These cases are the mutation proof, made permanent. Each one asserts that the suite **rejects**
+ * a row the backend does not honour; a row nothing exercises would silently pass and is exactly
+ * what this catches.
+ */
+function lyingAdapter(
+  truth: MockExecutorOptions,
+  lie: Partial<ExecutorCapabilities>,
+): ExecutorAdapter {
+  const real = new MockExecutor(truth)
+  return {
+    id: real.id,
+    capabilities: { ...real.capabilities, ...lie },
+    preflight: () => real.preflight(),
+    acquireInstance: (key, opts) => real.acquireInstance(key, opts),
+  }
+}
+
+function lyingHarness(truth: MockExecutorOptions, lie: Partial<ExecutorCapabilities>) {
+  const honest = mockExecutorHarness(truth)
+  return { ...honest, adapter: lyingAdapter(truth, lie) }
+}
+
+async function failuresUnder(
+  truth: MockExecutorOptions,
+  lie: Partial<ExecutorCapabilities>,
+): Promise<string[]> {
+  const failed: string[] = []
+  for (const testCase of executorConformance(() => lyingHarness(truth, lie))) {
+    try {
+      await testCase.run()
+    } catch {
+      failed.push(testCase.name)
+    }
+  }
+  return failed
+}
+
+describe('§5.2 a lying adapter fails CI — the claim, asserted', () => {
+  const LIES: readonly { readonly label: string; readonly lie: Partial<ExecutorCapabilities> }[] = [
+    { label: 'nativeReplay', lie: { nativeReplay: true } },
+    { label: 'idempotentSubmit', lie: { idempotentSubmit: true } },
+    { label: 'submitAckCorrelates', lie: { submitAckCorrelates: true } },
+    { label: 'observableEffort', lie: { observableEffort: true } },
+    { label: 'perTurnConfig', lie: { perTurnConfig: true } },
+    { label: 'programmaticApprovals', lie: { programmaticApprovals: true } },
+    { label: 'perTurnToolRestriction', lie: { perTurnToolRestriction: true } },
+    { label: 'interruptLandingObservable', lie: { interruptLandingObservable: true } },
+    { label: 'usageEvents', lie: { usageEvents: false } },
+    { label: 'history', lie: { history: 'none' } },
+    { label: 'structuredOutput', lie: { structuredOutput: false } },
+    { label: 'contextOnlyMessage', lie: { contextOnlyMessage: false } },
+    { label: 'softInterrupt', lie: { softInterrupt: false } },
+  ]
+
+  for (const { label, lie } of LIES) {
+    it(`rejects an adapter that overstates \`${label}\``, async () => {
+      const failed = await failuresUnder({}, lie)
+      expect(failed.length).toBeGreaterThan(0)
+    })
+  }
+
+  it('and passes the honest row it was derived from, so the proof is not vacuous', async () => {
+    expect(await failuresUnder({}, {})).toEqual([])
+  })
+
+  it('rejects an adapter that UNDERSTATES a capability it actually has', async () => {
+    const capable = {
+      capabilities: {
+        nativeReplay: true,
+        observableEffort: true,
+        interruptLandingObservable: true,
+        programmaticApprovals: true,
+      },
+    }
+    expect(await failuresUnder(capable, {})).toEqual([])
+    /* Same behaviour, denied on the wire: every one of the four must be caught. */
+    for (const lie of [
+      { nativeReplay: false },
+      { observableEffort: false },
+      { interruptLandingObservable: false },
+      { programmaticApprovals: false },
+    ] as const) {
+      expect(await failuresUnder(capable, lie)).not.toEqual([])
+    }
+  })
+})
 
 describe('§5.2 the capability matrix', () => {
   it('mock defaults to the jcode column, so a test that does not opt out tests the real shape', () => {

@@ -15,7 +15,7 @@
  */
 
 import { createHash, randomBytes, timingSafeEqual } from 'node:crypto'
-import { mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import { chmodSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { dirname } from 'node:path'
 
 import type { HeadKind } from '../protocol/frames.ts'
@@ -128,6 +128,10 @@ export class TokenStore {
       `${JSON.stringify({ tokens: [...this.records.values()] }, null, 2)}\n`,
       { mode: 0o600 },
     )
+    /* `writeFileSync`'s `mode` applies at **creation** only: on a file that already exists it is a
+     * no-op, so a `tokens.json` that was ever world-readable stayed world-readable for the rest of
+     * its life. §2.1 says 0600, and 0600 is what the file must actually be. */
+    chmodSync(this.options.path, 0o600)
   }
 
   list(): readonly TokenRecord[] {
@@ -230,6 +234,7 @@ export class TokenStore {
     const issued = this.issueToken('swarm cli', 'cli', CLI_TOKEN_ID)
     mkdirSync(dirname(path), { recursive: true, mode: 0o700 })
     writeFileSync(path, issued.token, { mode: 0o600 })
+    chmodSync(path, 0o600)
     return issued
   }
 

@@ -12,16 +12,162 @@
  * DOM-free and Node-free.
  */
 
+import type { SwarmEvent } from '../protocol/events.ts'
 import type { DelegationVM } from '../types.ts'
+import type { TestClient } from './client-harness.ts'
 import type { ConformanceCase } from './types.ts'
 
+import { emptySpendCounters } from '../domain/budget.ts'
 import { SERVER_POLICY } from '../domain/constants.ts'
 import { attentionScore } from '../domain/rollup.ts'
 import { SwarmError } from '../errors.ts'
 import { CLOSE_CODES } from '../protocol/constants.ts'
+import { SWARM_CLIENT_EVENT_KEYS } from '../types.ts'
 import { assert, assertDeepEqual, assertEqual } from './assert.ts'
 import { createTestClient, makeAttemptSnapshot, makeFleetSnapshot } from './client-harness.ts'
-import { makeDelegationVM, makeTurnDirective } from './fixtures.ts'
+import {
+  makeAttemptVM,
+  makeConfirmationRequest,
+  makeDelegationVM,
+  makeHealthVM,
+  makeLandingRecord,
+  makeNoticeVM,
+  makeRetractReport,
+  makeTurnDirective,
+  makeTurnVM,
+  makeVerificationRun,
+} from './fixtures.ts'
+
+/**
+ * §6.2's thirteen members plus §6.3's nineteen intents, with `focus` — declared by both — counted
+ * once. Transcribed from the spec, never derived from the implementation: a list built from
+ * `Object.keys(client)` would pass for any surface at all.
+ */
+export const SPEC_CLIENT_MEMBERS = [
+  'connection',
+  'fleet',
+  'delegations',
+  'focus',
+  'health',
+  'notices',
+  'transcript',
+  'diff',
+  'on',
+  'once',
+  'subscribe',
+  'inspect',
+  'destroy',
+  'createDelegation',
+  'sendTurn',
+  'retract',
+  'cancel',
+  'retry',
+  'branch',
+  'verify',
+  'accept',
+  'land',
+  'discard',
+  'archive',
+  'reconcile',
+  'pauseDispatch',
+  'killSwitch',
+  'updateDefaults',
+  'confirm',
+  'deny',
+  'setFilter',
+] as const
+
+/**
+ * One script that reaches all 23 keys of `SwarmClientEvents` — twenty from projected `evt`s, and
+ * three (`stream:lagged`, `error`, `server-changed`) from the frames that are not events at all.
+ * The clock is pinned so two runs of it are comparable byte for byte.
+ */
+function driveEveryEventKey(harness: TestClient): void {
+  const at = 5_000
+  harness.start() /* `connection` */
+  harness.transport.evt('server', 1, { k: 'server.health', health: makeHealthVM() }, at)
+  harness.transport.evt('server', 2, { k: 'server.notice', notice: makeNoticeVM() }, at)
+  harness.transport.evt(
+    'server',
+    3,
+    { k: 'server.confirmation', request: makeConfirmationRequest() },
+    at,
+  )
+  harness.transport.evt(
+    'fleet',
+    1,
+    { k: 'fleet.delegation_created', delegation: makeDelegationVM() },
+    at,
+  )
+  harness.transport.evt(
+    'fleet',
+    2,
+    { k: 'fleet.delegation_summary', delegation: makeDelegationVM({ title: 'Renamed' }) },
+    at,
+  )
+  harness.transport.evt(
+    'fleet',
+    3,
+    {
+      k: 'fleet.delegation_state',
+      delegationId: 'delegation-1',
+      state: 'needs-you',
+      bucket: 'needs-you',
+      version: 2,
+    },
+    at,
+  )
+  harness.transport.evt(
+    'fleet',
+    4,
+    {
+      k: 'fleet.spend',
+      spend: { ...emptySpendCounters(), estUsd: 9, capUsd: 10 },
+    },
+    at,
+  )
+
+  harness.client.focus('delegation-1')
+  const deleg = (seq: number, event: SwarmEvent): void => {
+    harness.transport.evt('delegation:delegation-1', seq, event, at)
+  }
+  deleg(1, { k: 'deleg.attempt_started', attempt: makeAttemptVM() })
+  deleg(2, { k: 'deleg.turn_prepared', turn: makeTurnVM() })
+  deleg(3, {
+    k: 'deleg.turn_delivery',
+    turnId: 'turn-1',
+    delivery: 'running',
+    detail: { ackAtMs: at, correlated: false, landing: 'confirmed' },
+  })
+  deleg(4, {
+    k: 'deleg.turn_ended',
+    turnId: 'turn-1',
+    usage: { input: 1, output: 2 },
+    toolCalls: 1,
+  })
+  deleg(5, { k: 'deleg.turn_retracted', report: makeRetractReport() })
+  deleg(6, {
+    k: 'deleg.verify_started',
+    attemptId: 'attempt-1',
+    runId: 'run-1',
+    reason: 'auto-turn-end',
+  })
+  deleg(7, { k: 'deleg.verify_result', run: makeVerificationRun() })
+  deleg(8, { k: 'deleg.landed', landing: makeLandingRecord() })
+  deleg(9, { k: 'deleg.drift', attemptId: 'attempt-1', kind: 'model', detail: 'shadow differs' })
+  deleg(10, {
+    k: 'deleg.evidence',
+    attemptId: 'attempt-1',
+    evidenceRef: 'evidence/attempt-1',
+    manifestDigest: 'sha256:0',
+  })
+  deleg(11, { k: 'deleg.attempt_ended', attemptId: 'attempt-1', outcome: 'verified' })
+
+  harness.transport.lagged('fleet', 4, 'backpressure') /* `stream:lagged` */
+  harness.transport.fail(null, 'rate_limited', 'slow down', true) /* `error` */
+  harness.transport.serverClose(1006)
+  harness.transport.handshake({ serverVersion: '9.9.9' }) /* `server-changed` */
+}
 
 export function clientConformance(): ConformanceCase[] {
   const cases: ConformanceCase[] = []
@@ -175,6 +321,103 @@ export function clientConformance(): ConformanceCase[] {
     harness.transport.lagged('fleet', 7, 'retention')
     assertEqual(raised, 1, 'lag is always explicit and always surfaced')
     assertEqual(harness.transport.lastSub('fleet')?.from, 'snapshot', 'MUST re-subscribe snapshot')
+    harness.destroy()
+  })
+
+  test('a fleet snapshot REPLACES — a delegation the server purged does not survive it (X11)', () => {
+    /*
+     * The portable suite is what a third-party head runs, so it has to hold the client to the
+     * rules a head cannot see itself breaking. A snapshot that MERGED would keep a purged
+     * delegation in the fleet forever, and nothing in the head's own code would ever say so.
+     */
+    const harness = createTestClient()
+    harness.start()
+    harness.transport.evt('fleet', 1, {
+      k: 'fleet.delegation_created',
+      delegation: makeDelegationVM({ id: 'purged' }),
+    })
+    assert(harness.client.delegations.get().has('purged'), 'seeded')
+    harness.transport.lagged('fleet', 1, 'retention')
+    harness.transport.snap(
+      'fleet',
+      40,
+      makeFleetSnapshot({ delegations: [makeDelegationVM({ id: 'kept' })] }),
+    )
+    assertEqual(harness.client.delegations.get().has('purged'), false, 'a snapshot replaces')
+    assertEqual(harness.client.delegations.get().has('kept'), true, 'and installs what it carries')
+    assertEqual(harness.client.delegations.get().size, 1, 'with nothing else left over')
+    harness.destroy()
+  })
+
+  test('one drop, ONE re-subscribe: a lag must not amplify into a sub per frame (§2.4)', () => {
+    const harness = createTestClient()
+    harness.start()
+    harness.transport.clearSent()
+    harness.transport.lagged('fleet', 5, 'backpressure')
+    for (let seq = 6; seq <= 15; seq++) {
+      harness.transport.evt('fleet', seq, {
+        k: 'fleet.caps',
+        concurrency: { runningAttempts: seq, cap: 4, queued: 0 },
+        dispatchPaused: false,
+      })
+    }
+    assertEqual(
+      harness.transport.of('sub').filter((frame) => frame.stream === 'fleet').length,
+      1,
+      'the in-flight window behind a `lagged` is dropped, not answered frame by frame',
+    )
+    assertEqual(harness.errors.length, 0, 'and none of it is reported as a gap')
+    harness.destroy()
+  })
+
+  test('an `err` answering a `sub` is routed: `bad_cursor` re-snapshots and is surfaced (§2.3)', () => {
+    const harness = createTestClient()
+    harness.start()
+    harness.transport.evt('fleet', 1, {
+      k: 'fleet.caps',
+      concurrency: { runningAttempts: 1, cap: 4, queued: 0 },
+      dispatchPaused: false,
+    })
+    harness.transport.serverClose(1006)
+    harness.transport.clearSent()
+    harness.transport.handshake()
+    const resume = harness.transport.lastSub('fleet')
+    assert(resume !== undefined, 'the stream resumes from its cursor')
+    assertEqual(resume!.from, 1, 'from the durable cursor')
+    harness.transport.fail(resume!.id, 'bad_cursor', 'cursor is above the head')
+    assert(
+      harness.errors.some((error) => error.code === 'bad_cursor'),
+      'a refused subscription is an error a head can render, never silence',
+    )
+    assertEqual(
+      harness.transport.lastSub('fleet')?.from,
+      'snapshot',
+      '§2.3 already names the remedy for an unusable cursor',
+    )
+    harness.destroy()
+  })
+
+  test('an `err` naming an unknown code settles its intent rather than hanging it (§2.2)', async () => {
+    const harness = createTestClient()
+    harness.start()
+    const pending = harness.client.cancel('delegation-1', { scope: 'delegation' })
+    const req = harness.transport.lastReq('cancel')
+    assert(req !== undefined, 'the intent left')
+    harness.transport.deliverText(
+      JSON.stringify({
+        p: 'swarm',
+        v: 1,
+        k: 'err',
+        id: req!.id,
+        code: 'a_code_from_a_later_minor',
+        message: 'refused',
+        retryable: false,
+      }),
+    )
+    const result = await pending
+    assert(!result.ok, 'the refusal is delivered')
+    if (!result.ok) assertEqual(result.error.code, 'internal', 'degraded, never dropped')
+    assertEqual(harness.client.connection.get().pendingIntents, 0, 'nothing is left in flight')
     harness.destroy()
   })
 
@@ -533,6 +776,60 @@ export function clientConformance(): ConformanceCase[] {
     assert(report.streams.length >= 2, 'server and fleet are pinned')
     assertEqual(report.pending.length, 0, 'nothing is in flight')
     harness.destroy()
+  })
+
+  test('an intent issued while `blocked` is refused, never queued forever (§2.5 rule 4)', async () => {
+    const harness = createTestClient()
+    harness.start()
+    harness.transport.serverClose(CLOSE_CODES.unauthenticated)
+    /* The offline queue drains on `hello_ok`, and after a terminal close there will not be one. */
+    const result = await harness.client.reconcile('delegation-1')
+    assert(!result.ok, 'a blocked client answers its callers')
+    if (!result.ok) {
+      assertEqual(result.error.code, 'unauthenticated', 'the refusal names the block')
+      assertEqual(result.error.retryable, false, 'and says retrying will not help')
+    }
+    assertEqual(harness.client.connection.get().queuedOffline, 0, 'nothing was queued')
+    harness.destroy()
+  })
+
+  /* ---------------------------------------------------------- §6.2/§6.3/§6.4 the surface */
+
+  test('the client exposes exactly the members §6.2 and §6.3 declare (§13)', () => {
+    const harness = createTestClient()
+    const keys = Object.keys(harness.client).sort()
+    const declared = [...SPEC_CLIENT_MEMBERS].sort()
+    assertDeepEqual(keys, declared, 'nothing listed is missing and nothing exported is unlisted')
+    harness.destroy()
+  })
+
+  test('every key of `SwarmClientEvents` is reachable from the wire (§6.4)', () => {
+    const harness = createTestClient()
+    const seen = new Set<string>()
+    harness.client.subscribe((key) => {
+      seen.add(key)
+    })
+    driveEveryEventKey(harness)
+    const missing = SWARM_CLIENT_EVENT_KEYS.filter((key) => !seen.has(key))
+    assertDeepEqual(missing, [], 'a declared key the client never raises is a dead contract')
+    harness.destroy()
+  })
+
+  test('the same frames and the same clock project byte-identically (§6.2)', () => {
+    const a = createTestClient({ startAtMs: 5_000 })
+    const b = createTestClient({ startAtMs: 5_000 })
+    driveEveryEventKey(a)
+    driveEveryEventKey(b)
+    const project = (harness: ReturnType<typeof createTestClient>): string =>
+      JSON.stringify({
+        delegations: [...harness.client.delegations.get().entries()],
+        fleet: harness.client.fleet.get(),
+        notices: harness.client.notices.get(),
+      })
+    assertEqual(project(a), project(b), 'a projection is a pure function of (events, clock)')
+    assert(a.client.delegations.get().size > 0, 'and the comparison is not vacuous')
+    a.destroy()
+    b.destroy()
   })
 
   test('`destroy()` settles every outstanding intent instead of hanging (§4.4 applied)', async () => {

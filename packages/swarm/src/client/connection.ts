@@ -231,13 +231,26 @@ export function createConnection(options: ConnectionOptions): Connection {
     }
   }
 
+  /**
+   * §2.5 rule 2 reads as a **set** predicate, and it is treated as one. A server that re-orders an
+   * otherwise identical capability list is not a changed server, and calling it one costs a
+   * `server-changed` notice on a non-dismissible path plus `resubscribeAll(force:true)` — a full
+   * re-snapshot of every stream, including every open `attempt:*`, the one family §2.4 lets lag.
+   */
+  const sameCapabilitySet = (
+    a: readonly ServerCapability[],
+    b: readonly ServerCapability[],
+  ): boolean => {
+    if (a.length !== b.length) return false
+    const seen = new Set<ServerCapability>(a)
+    return seen.size === new Set<ServerCapability>([...a, ...b]).size && b.every((c) => seen.has(c))
+  }
+
   const handleHelloOk = (frame: HelloOkFrame): void => {
     helloAcknowledged = true
     const versionChanged = serverVersion !== null && serverVersion !== frame.serverVersion
     const capsChanged =
-      serverVersion !== null &&
-      (capabilities.length !== frame.capabilities.length ||
-        capabilities.some((c, i) => c !== frame.capabilities[i]))
+      serverVersion !== null && !sameCapabilitySet(capabilities, frame.capabilities)
     const wasSuppressed = resendSuppressed
     serverVersion = frame.serverVersion
     capabilities = [...frame.capabilities]

@@ -120,6 +120,7 @@ export function createSqliteStore(path: string, options: SqliteStoreOptions = {}
     readLog: db.prepare('SELECT * FROM log WHERE stream = ? AND seq > ? ORDER BY seq ASC LIMIT ?'),
     trimLog: db.prepare('DELETE FROM log WHERE stream = ? AND seq <= ?'),
     dropStream: db.prepare('DELETE FROM log WHERE stream = ?'),
+    pruneIdem: db.prepare('DELETE FROM idem WHERE created_at < ?'),
     dropHead: db.prepare('DELETE FROM stream_head WHERE stream = ?'),
     getRecord: db.prepare('SELECT kind, id, version, json FROM records WHERE kind = ? AND id = ?'),
     listRecords: db.prepare(
@@ -407,9 +408,22 @@ export function createSqliteStore(path: string, options: SqliteStoreOptions = {}
       },
 
       deleteStream(stream): number {
+        const current = readTx.head(stream)
         const removed = q.dropStream.run(stream).changes
-        q.dropHead.run(stream)
+        /*
+         * The head row is a **tombstone**, not a row to delete (§2.3: `seq` "is never reused").
+         * Dropping it restarts the sequence at 1, so a head still holding cursor 3 that resumes
+         * after a purge is either refused `bad_cursor` or — far worse — served different content
+         * at a `seq` it has already applied. The floor rises to the head, so a resume below it is
+         * answered with an honest `lagged`. A stream that never allocated a `seq` leaves nothing.
+         */
+        if (current.head > 0) q.upsertHead.run(stream, current.head, current.head)
+        else q.dropHead.run(stream)
         return Number(removed)
+      },
+
+      pruneIdempotent(olderThanMs): number {
+        return Number(q.pruneIdem.run(now() - olderThanMs).changes)
       },
     }
   }

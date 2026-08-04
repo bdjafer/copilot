@@ -332,12 +332,31 @@ export function decodeServerFrame(text: string): DecodeResult<ServerFrame> {
       if (f.id !== null && !isReqId(f.id)) {
         return fail('bad_protocol', 'err.id must be an integer or null', true)
       }
-      if (!isSwarmErrorCode(f.code))
-        return fail('bad_protocol', `unknown error code ${String(f.code)}`)
       if (typeof f.message !== 'string')
         return fail('bad_protocol', 'err.message must be a string', true)
       if (typeof f.retryable !== 'boolean') {
         return fail('bad_protocol', 'err.retryable must be a boolean', true)
+      }
+      if (!isSwarmErrorCode(f.code)) {
+        /*
+         * §2.2's forward-compatibility rule, applied to the `code` axis rather than only to `k`.
+         * `err` is the **only** refusal channel and the intent queue has no request timeout, so
+         * dropping the frame leaves its `req` pending forever — and §2.5 rule 3's re-send does not
+         * rescue it, because the idempotency cache replays the same unknown code. A server that
+         * adds a `SwarmErrorCode` in a later minor must not be able to hang an older head, so the
+         * refusal is delivered as `internal` with the wire code preserved for a human.
+         */
+        return {
+          ok: true,
+          frame: {
+            ...f,
+            code: 'internal',
+            details: {
+              ...(isRecord(f.details) ? f.details : {}),
+              unknownErrorCode: String(f.code),
+            },
+          } as unknown as ServerFrame,
+        }
       }
       return { ok: true, frame: f as unknown as ServerFrame }
     }

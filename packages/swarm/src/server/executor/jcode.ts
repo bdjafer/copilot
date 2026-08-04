@@ -34,6 +34,7 @@
 import { mkdirSync } from 'node:fs'
 import { join } from 'node:path'
 
+import type { SwarmErrorCode } from '../../errors.ts'
 import type {
   AdapterId,
   Fence,
@@ -42,7 +43,7 @@ import type {
   ReasoningEffort,
 } from '../../types.ts'
 import type { JcodeApiEvent, JcodeSdkClient, JcodeTransport } from './sdk.ts'
-import type { BridgeLauncher, SpawnedBridge, VersionProbe } from './spawn.ts'
+import type { BridgeLauncher, HomeLock, SpawnedBridge, VersionProbe } from './spawn.ts'
 import type {
   ConfigApplyReport,
   ExecutorAdapter,
@@ -66,7 +67,7 @@ import { BANNED_EFFORTS } from '../../domain/directive.ts'
 import { checkFence, sessionLease } from '../../domain/leases.ts'
 import { SwarmError } from '../../errors.ts'
 import {
-  buildBridgeEnv,
+  acquireHomeLock,
   assertChildStillAlive,
   killTwoGroups,
   launchBridge,
@@ -288,21 +289,27 @@ class JcodeSession implements ExecutorSessionHandle {
    * session on the instance ([F7]).
    */
   private async pump(): Promise<void> {
+    let sawClosed = false
     try {
       for await (const raw of this.client.events()) {
         const event = normalizeJcodeEvent(raw, this.attribution)
         if (event === null) continue
         if (event.k === 'turn_done' || event.k === 'closed') this.turnInFlight = false
         this.fanout.emit(event)
-        if (event.k === 'closed') break
+        if (event.k === 'closed') {
+          sawClosed = true
+          break
+        }
       }
     } catch (error) {
       this.fanout.emit({ k: 'error', code: 'internal', message: String(error) })
     }
-    if (!this.fanout.closed) {
-      this.fanout.emit({ k: 'closed', reason: 'stream ended' })
-      this.fanout.end()
-    }
+    /* **Exactly one** `closed`, and the stream ends on it. A synthesized second one would make
+     * `closed` a value a consumer has to count rather than a terminal it can stop at — and §5.4 #2
+     * has no replay, so a consumer that read past the end would be reading nothing forever. */
+    if (this.fanout.closed) return
+    if (!sawClosed) this.fanout.emit({ k: 'closed', reason: 'stream ended' })
+    this.fanout.end()
   }
 
   private guardOpen(): void {
@@ -342,11 +349,20 @@ class JcodeSession implements ExecutorSessionHandle {
     const refused: { field: string; reason: string }[] = []
 
     if (patch.model !== undefined) {
+      const wanted = patch.model
+      /* `model_info` is broadcast to every attached client and is what sets `modelConfirmed` —
+       * asynchronously, **on the stream**, never from the return value (§4.2). Observed the same
+       * way the ack is, and for the same reason: a call that resolves proves only that it was
+       * accepted, and `observableModel: true` is a claim this file has to be able to back. */
+      const observed = this.fanout.observe(
+        (e) => e.k === 'model_info' && e.model === wanted,
+        this.instance.configConfirmMs,
+        this.instance.sleep,
+      )
       try {
-        await this.client.setModel(this.sessionId, patch.model)
+        await this.client.setModel(this.sessionId, wanted)
         applied.push('model')
-        /* `model_info` is broadcast to every attached client and is what sets
-         * `modelConfirmed` — asynchronously, on the stream, not from this return value. */
+        if ((await observed) !== null) confirmed.push('model')
       } catch (error) {
         refused.push({ field: 'model', reason: reasonOf(error) })
       }
@@ -501,7 +517,7 @@ function reasonOf(error: unknown): string {
   return /invalid_request/i.test(message) ? 'invalid_request' : message
 }
 
-function asSwarmError(error: unknown, fallback: Parameters<typeof SwarmError>[0]): SwarmError {
+function asSwarmError(error: unknown, fallback: SwarmErrorCode): SwarmError {
   return SwarmError.is(error)
     ? error
     : new SwarmError(fallback, error instanceof Error ? error.message : String(error))
@@ -542,6 +558,8 @@ class JcodeInstance implements ExecutorInstance {
     private readonly options: JcodeAdapterOptions,
     private readonly instanceOptions: InstanceOptions,
     private readonly child: SpawnedBridge | null,
+    /** §3.4 rule 3 / §7.2 `instances/<hash>/lock`; released with the instance, never before. */
+    private readonly homeLock: HomeLock | null = null,
   ) {}
 
   readonly now = (): number => (this.options.now ?? Date.now)()
@@ -553,6 +571,15 @@ class JcodeInstance implements ExecutorInstance {
 
   get structuredDeadlineMs(): number {
     return this.options.structuredDeadlineMs ?? 10 * 60_000
+  }
+
+  /**
+   * How long `applyConfig` waits for the `model_info` that confirms a `setModel` (§4.2). Short by
+   * design: the value is a *confirmation*, and an unconfirmed model is a legitimate outcome that
+   * `ConfigApplyReport.confirmed` reports honestly — it is never a reason to fail a turn.
+   */
+  get configConfirmMs(): number {
+    return this.options.configConfirmMs ?? 250
   }
 
   probeClient(): JcodeSdkClient {
@@ -673,6 +700,9 @@ class JcodeInstance implements ExecutorInstance {
     this.disposed = true
     for (const session of Array.from(this.sessions.values())) await session.close(reason)
     await this.probe.client.close().catch(() => undefined)
+    /* The singleton is released only here: while this instance lives, no second daemon may take
+     * the same `JCODE_HOME` (§3.4 rule 3, R9). */
+    this.homeLock?.release()
   }
 
   /**
@@ -725,6 +755,8 @@ export interface JcodeAdapterOptions {
   readonly versionFloor?: string
   readonly acceptTimeoutMs?: number
   readonly structuredDeadlineMs?: number
+  /** How long `applyConfig` waits for the confirming `model_info` (§4.2). */
+  readonly configConfirmMs?: number
   readonly killGraceMs?: number
   readonly kill?: (pid: number, signal: NodeJS.Signals | number) => void
   readonly now?: () => number
@@ -732,7 +764,14 @@ export interface JcodeAdapterOptions {
   /** Skip the spawn entirely and connect to an existing socket — the fake-transport path. */
   readonly socketPathOverride?: string
   readonly readServersJson?: (path: string) => string
+  /** Written into `instances/<hash>/lock` beside the pid (§3.4 rule 3, §7.2). */
+  readonly bootId?: string
+  /** Injected by tests so the singleton can be driven with no second process. */
+  readonly homeLockHooks?: Parameters<typeof acquireHomeLock>[2]
 }
+
+/** One boot id per server process — the half of the home lock a stale pid cannot forge. */
+const PROCESS_BOOT_ID = `boot_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 8)}`
 
 export class JcodeAdapter implements ExecutorAdapter {
   readonly id: AdapterId = 'jcode'
@@ -768,6 +807,40 @@ export class JcodeAdapter implements ExecutorAdapter {
     const socketPath = this.options.socketPathOverride ?? join(runtimeDir, 'api.sock')
     const daemonSocket = join(runtimeDir, 'jcode.sock')
 
+    /* §7.2's `instances/<hash>/lock`, taken **before** anything is spawned into that home. Two
+     * daemons on one state dir corrupt `active_pids`/`internal_pids`/`streaming_pids` (§5.3, R9),
+     * and the second one need not be a swarm process at all — hence a file, not only a store row. */
+    const homeLock = acquireHomeLock(
+      join(opts.jcodeHome, '..', 'lock'),
+      { pid: process.pid, bootId: this.options.bootId ?? PROCESS_BOOT_ID },
+      ...(this.options.homeLockHooks === undefined ? [] : [this.options.homeLockHooks]),
+    )
+
+    try {
+      return await this.launchInstance(key, opts, {
+        runtimeDir,
+        socketPath,
+        daemonSocket,
+        homeLock,
+      })
+    } catch (error) {
+      /* Nothing was ever started in that home, so nothing may keep claiming it. */
+      homeLock.release()
+      throw error
+    }
+  }
+
+  private async launchInstance(
+    key: InstanceKey,
+    opts: InstanceOptions,
+    paths: {
+      readonly runtimeDir: string
+      readonly socketPath: string
+      readonly daemonSocket: string
+      readonly homeLock: HomeLock
+    },
+  ): Promise<ExecutorInstance> {
+    const { runtimeDir, socketPath, daemonSocket } = paths
     let child: SpawnedBridge | null = null
     let pgid: number | null = null
     if (this.options.socketPathOverride === undefined) {
@@ -823,6 +896,7 @@ export class JcodeAdapter implements ExecutorAdapter {
       this.options,
       opts,
       child,
+      paths.homeLock,
     )
     this.instances.set(key, instance)
     return instance

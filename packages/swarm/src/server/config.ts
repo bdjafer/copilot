@@ -139,7 +139,10 @@ export function defaultServerConfig(overrides: DeepPartialConfig = {}): SwarmSer
     configVersion: 1,
     port: SERVER_POLICY.defaultPort,
     bind: '127.0.0.1',
-    origins: [],
+    /* §2.1's "dev `http://localhost:*`", as data. It has to be *in* the list, because the list is
+     * now authoritative: the loopback origin space used to be allowed unconditionally, which made
+     * `origins` advisory for exactly the clients it was written to constrain. */
+    origins: ['http://localhost:*', 'http://127.0.0.1:*'],
     workspaces: [],
     defaults: {
       model: { provider: 'anthropic', model: 'claude-opus-5', reasoningEffort: 'medium' },

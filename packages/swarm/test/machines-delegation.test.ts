@@ -286,3 +286,84 @@ describe('§3.3 DelegationState — the D-table', () => {
     }
   })
 })
+
+/**
+ * The **whole** cross product, not a handful of samples.
+ *
+ * The D-table is the contract, and "the reducer rejects what the table does not contain" was
+ * previously answered by seven negative cases out of ~200 pairs. `waiting --needs_you-->`,
+ * `needs-you --verify-->`, `queued --land-->` and `running --accept-->` were all untested — and
+ * every one of them is a state a live delegation reaches. The legal set below is transcribed from
+ * §3.3, not derived from `DELEGATION_TRANSITIONS`, so it is an independent statement of the table.
+ */
+const DELEGATION_TRIGGERS = [
+  'created',
+  'admitted',
+  'cancel_delegation',
+  'attempt_attached',
+  'provision_failed',
+  'turn_done_no_followup',
+  'needs_you',
+  'verify',
+  'verification_passed',
+  'verification_failed_budget_remaining',
+  'verification_exhausted',
+  'send_turn',
+  'accept',
+  'archive_abandon',
+  'executor_disconnect',
+  'retry',
+  'land',
+  'reverify',
+  'hard_spend_cap',
+  'kill_switch',
+] as const satisfies readonly DelegationTrigger[]
+
+const LEGAL_DELEGATION_PAIRS: ReadonlySet<string> = new Set<string>([
+  ...ROWS.filter((row) => row.from !== null).map((row) => `${row.from}|${row.trigger}`),
+  /* D17 — cancel from every non-terminal state. */
+  ...NON_TERMINAL.map((state) => `${state}|cancel_delegation`),
+  /* D19 — retry or a late sendTurn reopens every terminal state. */
+  ...DELEGATION_TERMINAL_STATES.flatMap((state) => [`${state}|retry`, `${state}|send_turn`]),
+  /* D23 — the kill switch is legal everywhere and changes nothing (#31, Q16). */
+  ...DELEGATION_STATES.map((state) => `${state}|kill_switch`),
+])
+
+describe('§3.3 DelegationState — the illegal half of the table', () => {
+  it('accepts exactly the legal (state × trigger) pairs and rejects all 180-odd others', () => {
+    const wronglyAccepted: string[] = []
+    const wronglyRejected: string[] = []
+    let checked = 0
+    for (const state of DELEGATION_STATES) {
+      for (const trigger of DELEGATION_TRIGGERS) {
+        checked += 1
+        const key = `${state}|${trigger}`
+        const outcome = delegationMachine.transition(state, trigger)
+        if (LEGAL_DELEGATION_PAIRS.has(key)) {
+          if (!outcome.ok) wronglyRejected.push(key)
+          continue
+        }
+        if (outcome.ok) wronglyAccepted.push(key)
+        else expect({ key, reason: outcome.reason }).toEqual({ key, reason: 'illegal_from' })
+      }
+    }
+    expect(wronglyAccepted).toEqual([])
+    expect(wronglyRejected).toEqual([])
+    expect(checked).toBe(DELEGATION_STATES.length * DELEGATION_TRIGGERS.length)
+    /* The cross product must dwarf the legal set, or "illegal transitions are rejected" is a
+     * claim about a handful of pairs. */
+    expect(checked - LEGAL_DELEGATION_PAIRS.size).toBeGreaterThan(150)
+  })
+
+  it('names the four the previous coverage missed, so a regression reads as a rule', () => {
+    for (const [state, trigger] of [
+      ['waiting', 'needs_you'],
+      ['needs-you', 'verify'],
+      ['queued', 'land'],
+      ['running', 'accept'],
+    ] as const) {
+      const outcome = delegationMachine.transition(state, trigger)
+      expect({ state, trigger, ok: outcome.ok }).toEqual({ state, trigger, ok: false })
+    }
+  })
+})

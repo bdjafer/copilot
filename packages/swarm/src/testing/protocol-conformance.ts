@@ -261,18 +261,36 @@ export function protocolConformance(): ConformanceCase[] {
     }
   })
 
-  test('an err frame naming an unknown code is refused', () => {
+  test('an err frame naming an unknown code is delivered as internal, never dropped (§2.2)', () => {
     const result = decodeServerFrame(
       JSON.stringify({
         ...envelope,
         k: 'err',
-        id: null,
+        id: 7,
         code: 'nope',
         message: 'x',
         retryable: false,
       }),
     )
-    assert(!result.ok, 'the error code union is closed on the wire too (§9)')
+    /*
+     * §2.2's forward compatibility is a rule about the whole frame, not only about `k`. `err` is
+     * the only refusal channel and the intent queue has no request timeout, so a dropped `err`
+     * leaves its `req` pending **forever** — and §2.5 rule 3's re-send cannot rescue it, because
+     * the idempotency cache replays the same unknown code. A server that adds a `SwarmErrorCode`
+     * in a later minor must not be able to hang every refused intent on an older head.
+     */
+    assert(result.ok, 'an unknown error code must still decode, or it hangs its intent')
+    if (!result.ok) return
+    const frame = result.frame
+    assert(frame.k === 'err', 'it is still an err frame')
+    if (frame.k !== 'err') return
+    assertEqual(frame.id, 7, 'it still answers its request')
+    assertEqual(frame.code, 'internal', 'an unrecognised code degrades to internal (§9)')
+    assertEqual(
+      (frame.details as { unknownErrorCode?: unknown } | undefined)?.unknownErrorCode,
+      'nope',
+      'and the wire code is preserved for a human',
+    )
   })
 
   /* -------------------------------------------------------------------- §2.2 stream names */
@@ -367,8 +385,10 @@ export function protocolConformance(): ConformanceCase[] {
 
   test('the §2.4 limits are the numbers the spec names', () => {
     assertEqual(LIMITS.frameBytes, 1024 * 1024, 'frame cap is 1 MiB')
-    assertEqual(LIMITS.imageBytesPerImage, 700 * 1024, '700 KB decoded per image')
-    assertEqual(LIMITS.imageBytesPerTurn, 700 * 1024, '700 KB decoded per turn')
+    /* KB, not KiB. §13's row is "700 KB accepted, 701 KB refused", and 701 000 < 700 × 1024 —
+     * a KiB cap accepts the exact byte count the DoD names as the refusal. */
+    assertEqual(LIMITS.imageBytesPerImage, 700_000, '700 KB decoded per image')
+    assertEqual(LIMITS.imageBytesPerTurn, 700_000, '700 KB decoded per turn')
     assertEqual(BACKPRESSURE.queueBytes, 4 * 1024 * 1024, 'outbound queue is 4 MiB')
     assertEqual(BACKPRESSURE.queueFrames, 4_000, 'or 4 000 frames')
     assertEqual(BACKPRESSURE.unackedWindow, 512, 'unacked window is 512 frames')

@@ -69,6 +69,20 @@ export interface DelegationMeta {
   readonly baseRef: string
   readonly workspaceRoot: string
   readonly instanceKey: string
+  /**
+   * How many attempts this delegation has **opened in the current admission epoch** — the durable
+   * half of D2's "the scheduler admits up to *n* attempts independently".
+   *
+   * Without it the scheduler computed `parallelAttempts − liveAttempts.length` on every tick, and
+   * `liveAttempts` shrinks whenever an attempt *ends*: every finished attempt was silently
+   * backfilled with a fresh worktree, a fresh session and fresh tokens, forever. An attempt is
+   * admitted by D2 (from `queued`) or by a D19 reopen — and by nothing else.
+   */
+  readonly openedInEpoch?: number
+  /** When this epoch began. D19 restarts it, so a reopen does not carry its original age (F7). */
+  readonly epochQueuedAt?: number
+  /** Set by `retry{injectPriorFailure}`, consumed once by the next attempt's objective turn (A2). */
+  readonly priorFailure?: string
 }
 
 export function readDelegation(tx: ReadTx, id: DelegationId): DelegationRecord | null {

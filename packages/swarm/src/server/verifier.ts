@@ -20,8 +20,8 @@
 
 import { spawnSync } from 'node:child_process'
 import { createHash } from 'node:crypto'
-import { mkdirSync, readFileSync, statSync, writeFileSync } from 'node:fs'
-import { join } from 'node:path'
+import { existsSync, mkdirSync, readFileSync, realpathSync, statSync, writeFileSync } from 'node:fs'
+import { dirname, isAbsolute, join, relative, resolve, sep } from 'node:path'
 
 import type {
   AcceptanceCriterion,
@@ -33,6 +33,7 @@ import type {
 } from '../types.ts'
 
 import { VERIFIER_CAPS } from '../domain/constants.ts'
+import { SwarmError } from '../errors.ts'
 import { scrubbedEnv } from './workspace.ts'
 
 /** The fixed rubric schema of §8.2 — one shape, so a judge cannot invent its own verdict format. */
@@ -119,6 +120,53 @@ const defaultRunCommand: CommandRunner = (input) => {
 
 function sha256(data: string | Buffer): string {
   return createHash('sha256').update(data).digest('hex')
+}
+
+/* ------------------------------------------------------------- §8.1/§7.3 the second door (S6) */
+
+/**
+ * Contain a criterion-supplied relative path inside the run's already-guarded `cwd`.
+ *
+ * `assertWorkspace` guards the run root **once**, and that was never the whole door: every
+ * `AcceptanceCriterion` carries its own `cwd` or `path`, all of them agent-influenced (§8.1 calls
+ * acceptance commands "agent-influenced code"). `join(cwd, '../../..')` escaped it, and what it
+ * escaped into is `$SWARM_HOME` — `tokens.json`, `cli-token` and `swarm.db`. §7.3's algorithm is
+ * "on every use, on the resolved path", so it runs here too, per criterion.
+ *
+ * The path need not exist: a `file{must:'absent'}` criterion names one that must not. So the
+ * containment test runs against the **nearest existing ancestor**'s realpath, with the missing
+ * suffix appended lexically — a symlink cannot hide in a component that is not there yet.
+ */
+export function containWithin(base: string, requested: string | undefined): string {
+  const rel = requested ?? '.'
+  if (isAbsolute(rel)) {
+    throw new SwarmError('workspace_denied', `criterion path '${rel}' must be relative`, {
+      details: { base, requested: rel },
+    })
+  }
+  const written = resolve(base, rel)
+  const realBase = realpathSync(resolve(base))
+
+  let probe = resolve(realBase, rel)
+  const target = probe
+  while (!existsSync(probe)) {
+    const parent = dirname(probe)
+    if (parent === probe) break
+    probe = parent
+  }
+  const suffix = relative(probe, target)
+  const resolved = suffix.length === 0 ? realpathSync(probe) : join(realpathSync(probe), suffix)
+  if (
+    resolved !== realBase &&
+    !resolved.startsWith(realBase.endsWith(sep) ? realBase : realBase + sep)
+  ) {
+    throw new SwarmError('workspace_denied', `'${rel}' resolves outside the attempt worktree`, {
+      details: { base: realBase, requested: rel, resolved },
+    })
+  }
+  /* Validated on the **resolved** path (§7.3), handed back **as written**: the child gets the
+   * path the operator would recognise, and `/var` → `/private/var` on Darwin is not a rename. */
+  return written
 }
 
 /** §8.3: output is captured to files and truncated **in the record** at 64 KiB (VE8). */
@@ -227,9 +275,19 @@ function runCommandCriterion(
 ): CriterionResult {
   const timeoutMs = Math.max(1, Math.min(criterionTimeout(criterion), context.remaining))
   const startedAt = Date.now()
+
+  let cwd: string
+  try {
+    /* S6, per criterion (§7.3, §8.1): a `cwd` of `'../../..'` reaches `$SWARM_HOME`, which holds
+     * `tokens.json`, `cli-token` and `swarm.db`. Refusing is a criterion `error`, never a run. */
+    cwd = containWithin(context.cwd, criterion.cwd)
+  } catch (error) {
+    return refusedCommand(criterion, context, startedAt, error)
+  }
+
   const result = context.runCommand({
     command: criterion.command,
-    cwd: criterion.cwd === undefined ? context.cwd : join(context.cwd, criterion.cwd),
+    cwd,
     timeoutMs,
     /* VE7: the same scrubbed env the agent got, plus only what the criterion declared. */
     env: scrubbedEnv(criterion.env ?? {}),
@@ -258,11 +316,45 @@ function runCommandCriterion(
   }
 }
 
+/** A criterion refused by the allowlist: recorded as evidence, never silently skipped. */
+function refusedCommand(
+  criterion: { readonly id: string },
+  context: CriterionContext,
+  startedAt: number,
+  error: unknown,
+): CriterionResult {
+  const message = error instanceof Error ? error.message : String(error)
+  const stdoutRef = join(context.evidenceRef, `${criterion.id}.out`)
+  const stderrRef = join(context.evidenceRef, `${criterion.id}.err`)
+  writeFileSync(stdoutRef, '', { mode: 0o600 })
+  writeFileSync(stderrRef, `workspace_denied: ${message}\n`, { mode: 0o600 })
+  return {
+    id: criterion.id,
+    kind: 'command',
+    status: 'error',
+    exitCode: null,
+    durationMs: Math.max(0, Date.now() - startedAt),
+    stdoutRef,
+    stderrRef,
+    truncated: false,
+  }
+}
+
 function runFileCriterion(
   criterion: Extract<AcceptanceCriterion, { kind: 'file' }> & { id: string },
   context: CriterionContext,
 ): CriterionResult {
-  const path = join(context.cwd, criterion.path)
+  let path: string
+  try {
+    path = containWithin(context.cwd, criterion.path)
+  } catch (error) {
+    return {
+      id: criterion.id,
+      kind: 'file',
+      status: 'error',
+      observed: error instanceof Error ? error.message : String(error),
+    }
+  }
   let exists = true
   let content = ''
   try {
@@ -328,7 +420,19 @@ function runArtifactCriterion(
   criterion: Extract<AcceptanceCriterion, { kind: 'artifact' }> & { id: string },
   context: CriterionContext,
 ): CriterionResult {
-  const path = join(context.cwd, criterion.path)
+  let path: string
+  try {
+    path = containWithin(context.cwd, criterion.path)
+  } catch {
+    return {
+      id: criterion.id,
+      kind: 'artifact',
+      status: 'error',
+      sha256: null,
+      bytes: null,
+      producedDuringAttempt: criterion.producedDuringAttempt,
+    }
+  }
   let bytes: number | null = null
   let digest: string | null = null
   try {
@@ -419,14 +523,23 @@ export function verdictOf(
     (r) => r.kind === 'command' || r.kind === 'file' || r.kind === 'artifact',
   )
   const reviews = results.filter((r) => r.kind === 'review')
-  if (results.some((r) => r.status === 'error' || r.status === 'timeout')) return 'fail'
+  /* A machine-checkable criterion that errored or timed out did not pass, and an unfinished check
+   * is a failed run (§8.4's "none is error/timeout"). */
+  if (machine.some((r) => r.status === 'error' || r.status === 'timeout')) return 'fail'
+  const reviewErrored = reviews.some((r) => r.status === 'error')
   if (machine.length === 0) {
     if (reviews.length === 0) return 'indeterminate'
     if (options.reviewIsAuthoritative !== true) return 'indeterminate'
+    if (reviewErrored) return 'indeterminate'
     return reviews.every((r) => r.status === 'pass') ? 'pass' : 'fail'
   }
   if (!machine.every((r) => r.status === 'pass')) return 'fail'
-  return reviews.every((r) => r.status === 'pass') ? 'pass' : 'fail'
+  /* A judge that **ran** and scored below its threshold is evidence, and fails the run. A judge
+   * that could not run at all is **not** evidence: `review` is advisory (§3.2), so its absence
+   * routes to `indeterminate` — and therefore to `needs-you` (§8.4 rule 4) — never to `fail`.
+   * Mapping it to `fail` made "no review runner is configured" look like "the work is wrong". */
+  if (reviews.some((r) => r.status === 'fail')) return 'fail'
+  return reviewErrored ? 'indeterminate' : 'pass'
 }
 
 /** ≥1 machine-checkable criterion makes `verified` reachable at all (§3.2). */

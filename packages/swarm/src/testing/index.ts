@@ -28,7 +28,8 @@ export type { StoreHarness } from './store-conformance.ts'
 
 export { protocolConformance } from './protocol-conformance.ts'
 
-export { clientConformance } from './client-conformance.ts'
+/** `SPEC_CLIENT_MEMBERS` is the §6.2/§6.3 surface as data, so a host can assert it directly. */
+export { SPEC_CLIENT_MEMBERS, clientConformance } from './client-conformance.ts'
 
 /**
  * The scripted transport and the client harness. `createFakeTransport()` is deliberately *not*

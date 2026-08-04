@@ -80,13 +80,16 @@ export const LIMITS = {
   /** One text message. Oversize event payloads truncate with `truncated: true`. */
   frameBytes: 1024 * 1024,
   /**
-   * 700 KB **decoded**, per image and per turn — *derived* from `frameBytes`, not chosen (§2.4):
-   * base64 inflates by ~33 %, so 700 KiB decoded is ~933 KiB on the wire and fits one frame with
-   * room for the envelope and the prompt. Refused in the client core with `invalid_spec` before
-   * any frame is built, so the user never gets a transport error for a product-level refusal.
+   * 700 **KB** decoded — 700 000 bytes, not 700 KiB — per image and per turn, *derived* from
+   * `frameBytes` rather than chosen (§2.4): base64 inflates by ~33 %, so 700 KB decoded is
+   * ~933 KB on the wire and fits one 1 MiB frame with room for the envelope and the prompt.
+   * Refused in the client core with `invalid_spec` before any frame is built, so the user never
+   * gets a transport error for a product-level refusal. The unit is load-bearing: §13's boundary
+   * row is "700 KB accepted, **701 KB** refused", and 701 000 < 700 × 1024 — a KiB cap accepts
+   * the very byte count the DoD names as the refusal.
    */
-  imageBytesPerImage: 700 * 1024,
-  imageBytesPerTurn: 700 * 1024,
+  imageBytesPerImage: 700_000,
+  imageBytesPerTurn: 700_000,
 } as const
 
 export const BACKPRESSURE = {

@@ -36,6 +36,17 @@ export const LEASES = {
   reconciliationTtlMs: 60_000,
 } as const
 
+/**
+ * §2.3's retention table, for the two streams that have a **clock** rule. `fleet` is "forever" and
+ * `delegation:*` is "delegation lifetime", neither of which a timer can apply; `audit` is exempt
+ * from every one of them (S13, Q20).
+ */
+export const SERVER_RETENTION = {
+  serverStreamDays: 30,
+  /** How many records one retention pass inspects — a floor rises steadily, never in one gulp. */
+  scanLimit: 2_000,
+} as const
+
 /** C13 — the channel supervisor's reconnect ladder. */
 export const CHANNEL_RECONNECT = {
   baseMs: 500,

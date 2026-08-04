@@ -18,7 +18,7 @@
  */
 
 import { spawn, spawnSync } from 'node:child_process'
-import { existsSync, mkdirSync, readFileSync } from 'node:fs'
+import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 
 import type { PreflightReport } from '../../types.ts'
@@ -51,7 +51,16 @@ export interface BridgeEnvInput {
 
 export function buildBridgeEnv(input: BridgeEnvInput): Record<string, string> {
   const source = input.sourceEnv ?? process.env
-  const env: Record<string, string> = {
+  /* §7.3: the allowlist is "**added to** the mandatory base set" — so it is written **first** and
+   * the mandatory map overwrites it. Copied last, a config listing `JCODE_SWARM_ENABLED` or
+   * `JCODE_HOME` would replace the value §5.3 pins, re-enabling jcode's native swarm — the exact
+   * thing §5.4 #6 and §4.1's triple ladder exist to block — from a file nobody reviews. */
+  const env: Record<string, string> = {}
+  for (const name of input.allowlist ?? []) {
+    const value = source[name]
+    if (value !== undefined) env[name] = value
+  }
+  Object.assign(env, {
     PATH: source.PATH ?? '/usr/bin:/bin',
     HOME: source.HOME ?? '',
     LANG: source.LANG ?? 'C.UTF-8',
@@ -65,15 +74,94 @@ export function buildBridgeEnv(input: BridgeEnvInput): Record<string, string> {
     JCODE_NO_TELEMETRY: '1',
     JCODE_NON_INTERACTIVE: '1',
     JCODE_AUTO_POKE: input.autoPoke ? '1' : '0',
-  }
+  })
   if (input.sshAuthSock !== undefined && input.sshAuthSock.length > 0) {
     env.SSH_AUTH_SOCK = input.sshAuthSock
   }
-  for (const name of input.allowlist ?? []) {
-    const value = source[name]
-    if (value !== undefined) env[name] = value
-  }
   return env
+}
+
+/* ------------------------------------------------------ §3.4 rule 3 / §7.2 the home singleton */
+
+export interface HomeLockHolder {
+  readonly pid: number
+  readonly bootId: string
+}
+
+export interface HomeLock {
+  readonly path: string
+  readonly holder: HomeLockHolder
+  release(): void
+}
+
+/**
+ * `instances/<hash>/lock` — the `O_EXCL` singleton of §3.4 rule 3 and §7.2, holding pid + boot id
+ * and **reclaimed only after a liveness probe fails** (R9).
+ *
+ * Why it is a file and not only a row in `swarm.db`: the thing being guarded is a *directory*, and
+ * the second daemon that would corrupt it may belong to a second `swarm serve` — or to the user
+ * running `jcode` by hand — neither of which reads swarm's store. §5.3: "jcode writes
+ * `active_pids`/`internal_pids`/`streaming_pids` there and two daemons on one state dir corrupt
+ * it." A store lease alone would have been a gate that does not gate (S8).
+ */
+export function acquireHomeLock(
+  path: string,
+  holder: HomeLockHolder,
+  hooks: {
+    readonly alive?: (pid: number) => boolean
+    readonly read?: (path: string) => string
+    readonly write?: (path: string, body: string) => void
+    readonly remove?: (path: string) => void
+  } = {},
+): HomeLock {
+  const isAlive =
+    hooks.alive ??
+    ((pid: number) => {
+      try {
+        process.kill(pid, 0)
+        return true
+      } catch {
+        return false
+      }
+    })
+  const read = hooks.read ?? ((target: string) => readFileSync(target, 'utf8'))
+  const write =
+    hooks.write ??
+    ((target: string, body: string) => {
+      mkdirSync(join(target, '..'), { recursive: true, mode: 0o700 })
+      writeFileSync(target, body, { flag: 'wx', mode: 0o600 })
+    })
+  const remove = hooks.remove ?? ((target: string) => rmSync(target, { force: true }))
+
+  const body = `${JSON.stringify(holder)}\n`
+  for (let attempt = 0; attempt < 2; attempt++) {
+    try {
+      write(path, body)
+      return { path, holder, release: () => remove(path) }
+    } catch (error) {
+      if ((error as { code?: string }).code !== 'EEXIST') throw error
+      let incumbent: HomeLockHolder | null = null
+      try {
+        incumbent = JSON.parse(read(path)) as HomeLockHolder
+      } catch {
+        incumbent = null
+      }
+      /* A live incumbent owns the home. A dead one left a file, not a claim — reclaim it, which is
+       * the only reason the pid is in there at all. An unreadable lock is treated as dead: a
+       * truncated file is a crash artefact, and refusing forever on one would need a manual `rm`. */
+      if (incumbent !== null && typeof incumbent.pid === 'number' && isAlive(incumbent.pid)) {
+        throw new SwarmError(
+          'lease_held',
+          `jcode home is held by pid ${incumbent.pid} (boot ${incumbent.bootId})`,
+          { details: { path, incumbent } },
+        )
+      }
+      remove(path)
+    }
+  }
+  throw new SwarmError('lease_held', `could not take the jcode home lock at ${path}`, {
+    details: { path },
+  })
 }
 
 /* ------------------------------------------------------------------------------ version gate */
@@ -362,6 +450,12 @@ export interface KillHooks {
 export interface TwoGroupKillInput extends KillHooks {
   readonly pgid: number
   readonly daemonPid: number | null
+  /**
+   * How long to let `SIGKILL` land before the survivor scan. `kill(2)` returns as soon as the
+   * signal is *queued*, so scanning immediately reports a just-killed pid as alive — a false
+   * survivor, which §4.3.7 turns into a `capability-absent` notice for a stop that worked.
+   */
+  readonly settleMs?: number
 }
 
 export interface TwoGroupKillResult {
@@ -422,10 +516,17 @@ export async function killTwoGroups(input: TwoGroupKillInput): Promise<TwoGroupK
   await sleep(graceMs)
 
   const survivors: number[] = []
+  let killed = false
   if (input.daemonPid !== null && alive(kill, input.daemonPid)) {
     signalGroup(input.daemonPid, 'SIGKILL')
+    killed = true
   }
-  if (alive(kill, input.pgid)) signalGroup(input.pgid, 'SIGKILL')
+  if (alive(kill, input.pgid)) {
+    signalGroup(input.pgid, 'SIGKILL')
+    killed = true
+  }
+  /* `SIGKILL` is asynchronous: the scan below runs after the kernel has had a chance to reap. */
+  if (killed) await sleep(input.settleMs ?? 50)
 
   if (input.daemonPid !== null && alive(kill, input.daemonPid)) survivors.push(input.daemonPid)
   if (alive(kill, input.pgid)) survivors.push(input.pgid)
