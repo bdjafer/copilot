@@ -551,10 +551,164 @@ describe('§4 the per-turn control block, at the SERVER boundary', () => {
     expect(withMax?.effective.reasoningEffort).toBe('max')
     /* The omission resets to the delegation default ('medium'), never to 'max' (§4.3.2). */
     expect(without?.effective.reasoningEffort).toBe('medium')
+
+    /* …and the reset REACHED THE EXECUTOR. Every assertion above reads `effective`, which is
+     * `effectiveTurnConfig`'s pure output over `(directive, delegation defaults)` — the record, not
+     * the session. Deleting the `applyConfig` call from `dispatchQueue` outright left the whole
+     * suite green, so §4.2's "`setReasoningEffort` (await) → … → `sendMessage`" was asserted
+     * nowhere at any level. `adapter.calls` is the ordered log of what actually left swarm. */
+    const efforts = adapter.calls.flatMap((call) =>
+      call.k === 'applyConfig' && call.patch.reasoningEffort !== undefined
+        ? [call.patch.reasoningEffort]
+        : [],
+    )
+    /* Three, not two: `execution.autoPoke` opens the attempt with the objective under the
+     * delegation default before either of these turns exists. */
+    expect(efforts).toEqual(['medium', 'max', 'medium'])
+
+    /* Order, not just presence: config is applied BEFORE the send it configures, per turn. */
+    const sequence = adapter.calls.flatMap((call) =>
+      call.k === 'applyConfig'
+        ? [`config:${String(call.patch.reasoningEffort)}`]
+        : call.k === 'submit'
+          ? [`submit:${call.text}`]
+          : [],
+    )
+    expect(sequence.slice(-4)).toEqual([
+      'config:max',
+      'submit:plan',
+      'config:medium',
+      'submit:apply step 1',
+    ])
+  })
+
+  it('§4.2 — the model reaches the executor as a `setModel` before the send, and is not re-sent', async () => {
+    const adapter = new MockExecutor()
+    const h = await serve({ adapter })
+    const id = await create(h, {
+      model: { provider: 'openai', model: 'gpt-5.4', reasoningEffort: 'medium' },
+    })
+    await tick(h)
+
+    await h.server.engine.dispatch(
+      'sendTurn',
+      { delegationId: id, directive: { text: 'one', idempotencyKey: 'm1' } },
+      ctx(),
+    )
+    await settle(8)
+    await h.server.engine.dispatch(
+      'sendTurn',
+      { delegationId: id, directive: { text: 'two', model: 'gpt-5.4-mini', idempotencyKey: 'm2' } },
+      ctx(),
+    )
+    await settle(8)
+
+    const models = adapter.calls.flatMap((call) =>
+      call.k === 'applyConfig' && call.patch.model !== undefined ? [call.patch.model] : [],
+    )
+    /* Turn 1 asserts the delegation default against an empty shadow; turn 2 asserts its override.
+     * Neither is a re-send of a value the shadow already holds — the shadow is what makes §4.2's
+     * "if it differs" a real condition rather than a comment. */
+    expect(models).toEqual(['gpt-5.4', 'gpt-5.4-mini'])
+  })
+
+  it('a `reasoningEffort: null` delegation dispatches its turns instead of refusing every one pre-flight', async () => {
+    /*
+     * The regression this pins was CRITICAL and invisible: `shadow.effort` starts `undefined`,
+     * `reconciliationTarget` returns `null` for a delegation whose default effort is `null`,
+     * `null !== undefined`, so the engine built `patch.reasoningEffort = null` — which the jcode
+     * adapter refuses `no_effort_to_set`, because the wire has no unset. Every turn of such a
+     * delegation was therefore moved to `refused_preflight` and dequeued, on the first turn and
+     * again after every reconnect (the shadow is re-invalidated on each reattach). It never
+     * surfaced because `MockExecutor.applyConfig` ACCEPTED `null` and reported it applied.
+     *
+     * The mock now refuses it exactly as jcode does (pinned for every adapter in
+     * `executorConformance`), so this case fails against the old engine.
+     *
+     * `''` in the extension head's `effort()` maps to `null`, so this is a state the shipped UI
+     * can produce.
+     */
+    const adapter = new MockExecutor()
+    const h = await serve({ adapter })
+    const id = await create(h, {
+      model: { provider: 'openai', model: 'gpt-5.4', reasoningEffort: null },
+    })
+    await tick(h)
+
+    const sent = await h.server.engine.dispatch(
+      'sendTurn',
+      { delegationId: id, directive: { text: 'go with the default', idempotencyKey: 'k-null' } },
+      ctx(),
+    )
+    expect(okOf(sent)).toBe(true)
+    await settle(8)
+
+    const attemptId = delegation(h, id).attempts[0]!
+    const turns = attempt(h, attemptId).turns.map((turnId) => turn(h, turnId))
+    const row = turns.find((t) => t.directive.text === 'go with the default')
+    expect(row?.effective.reasoningEffort).toBe(null)
+    expect(row?.delivery).not.toBe('refused_preflight')
+
+    /* Nothing unsendable was ever offered to the executor: there is no effort to reconcile TO
+     * when none was ever driven, so `applyConfig` carries the model alone. */
+    const efforts = adapter.calls.flatMap((call) =>
+      call.k === 'applyConfig' && call.patch.reasoningEffort !== undefined
+        ? [call.patch.reasoningEffort]
+        : [],
+    )
+    expect(efforts).toEqual([])
+    expect(
+      adapter.calls.some((call) => call.k === 'submit' && call.text === 'go with the default'),
+    ).toBe(true)
+  })
+
+  it('an effort that WAS driven and cannot be unset refuses the turn rather than run it under a lie', async () => {
+    /* The other half of the `null` rule. Turn 1 drives `max`; turn 2 omits the field, so §4.3.2
+     * reconciles to the delegation default — which is `null`, "no effort is driven". No wire can
+     * express that, so the honest outcome is V3's `refused_preflight`, never a send under an
+     * effort the turn's own record denies (§4.3.4). */
+    const adapter = new MockExecutor()
+    const h = await serve({ adapter })
+    const id = await create(h, {
+      model: { provider: 'openai', model: 'gpt-5.4', reasoningEffort: null },
+    })
+    await tick(h)
+
+    await h.server.engine.dispatch(
+      'sendTurn',
+      {
+        delegationId: id,
+        directive: { text: 'deep', reasoningEffort: 'max', idempotencyKey: 'n1' },
+      },
+      ctx(),
+    )
+    await settle(8)
+    await h.server.engine.dispatch(
+      'sendTurn',
+      { delegationId: id, directive: { text: 'shallow again', idempotencyKey: 'n2' } },
+      ctx(),
+    )
+    await settle(8)
+
+    const attemptId = delegation(h, id).attempts[0]!
+    const turns = attempt(h, attemptId).turns.map((turnId) => turn(h, turnId))
+    expect(turns.find((t) => t.directive.text === 'deep')?.delivery).not.toBe('failed')
+    /* V3: `refused_preflight` is the trigger; `failed` is the state it lands in. */
+    const refused = turns.find((t) => t.directive.text === 'shallow again')
+    expect(refused?.delivery).toBe('failed')
+    expect(refused?.deliveryDetail.reason).toBe('executor_refused')
+    /* The refusal is a real executor answer, not a guess made without asking. */
+    expect(
+      adapter.calls.some((call) => call.k === 'applyConfig' && call.patch.reasoningEffort === null),
+    ).toBe(true)
+    expect(adapter.calls.some((call) => call.k === 'submit' && call.text === 'shallow again')).toBe(
+      false,
+    )
   })
 
   it('a config change while a turn is in flight returns `turn_in_flight` and produces ZERO executor calls', async () => {
-    const h = await serve()
+    const adapter = new MockExecutor()
+    const h = await serve({ adapter })
     const id = await create(h)
     await tick(h)
     const attemptId = delegation(h, id).attempts[0]!
@@ -564,6 +718,7 @@ describe('§4 the per-turn control block, at the SERVER boundary', () => {
       tx.putRecord('attempt', attemptId, 1, { ...record, channel: 'streaming' })
     })
     const before = h.server.engine.store.read((tx) => tx.listRecords<TurnRecord>('turn')).length
+    const callsBefore = adapter.calls.length
 
     const refused = await h.server.engine.dispatch(
       'sendTurn',
@@ -579,6 +734,10 @@ describe('§4 the per-turn control block, at the SERVER boundary', () => {
     expect(h.server.engine.store.read((tx) => tx.listRecords<TurnRecord>('turn')).length).toBe(
       before,
     )
+    /* …and "ZERO executor calls" now means it literally, against the adapter's own call log. The
+     * record count alone could not distinguish "no call was made" from "a call was made and its
+     * turn was then deleted" — and [F10] is precisely about a call whose side effect survives. */
+    expect(adapter.calls.length).toBe(callsBefore)
   })
 
   it('§4.3.10 — a `sendTurn` without `attemptId` and two live attempts refuses `attempt_ambiguous`', async () => {

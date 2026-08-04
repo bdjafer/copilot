@@ -165,13 +165,15 @@ export type ExecutorEvent =
   | { readonly k: 'reasoning_done'; readonly durationSecs?: number }
   | { readonly k: 'tool_start' | 'tool_exec'; readonly callId: string; readonly name: string }
   /**
-   * jcode: `callId` is **always** `''` — the bridge hard-codes `call_id: String::new()` for
-   * `tool_input_delta` while `tool_start`/`tool_exec`/`tool_done` carry `event["id"]` ([F11]).
-   * The adapter MUST attribute the delta to the most recent `tool_start` on that session and MUST
-   * NOT key input buffers by `callId`, or every concurrent tool's argument stream merges into one
-   * bucket.
+   * [F11]: the bridge was verified to hard-code `call_id: String::new()` for `tool_input_delta`
+   * while the other three tool events carry a real id. Protocol v1 types the field as a plain
+   * `string`, and whether 0.67.0 still empties it is unreachable without a model turn, so the
+   * adapter keeps the mitigation unconditionally: an **empty** wire `call_id` is attributed to the
+   * most recent `tool_start` on that session, a non-empty one is taken at face value. A consumer
+   * MUST NOT key input buffers by the raw wire value, or every concurrent tool's argument stream
+   * merges into one bucket.
    */
-  | { readonly k: 'tool_input'; readonly callId: '' | string; readonly delta: string }
+  | { readonly k: 'tool_input'; readonly callId: string; readonly delta: string }
   | {
       readonly k: 'tool_done'
       readonly callId: string
@@ -194,13 +196,27 @@ export type ExecutorEvent =
       readonly label: string
       readonly percent?: number
       readonly summary: string
-      /** Literal for jcode: reverse-engineered from a markdown header in a notification ([B7]). */
-      readonly provenance: 'scraped'
+      /**
+       * `'native'` on protocol v1: `background_progress` is a first-class event carrying
+       * `task_id`, `label`, `percent` and `summary`, so [B7]'s markdown-header scrape of a
+       * `notification` body describes a bridge that no longer exists — there is no `notification`
+       * event kind on jcode 0.67.0. `'scraped'` is retained for any backend that must
+       * reverse-engineer the signal, and either value MUST NOT feed state, budget or completion:
+       * a progress report is not a turn.
+       */
+      readonly provenance: 'native' | 'scraped'
+      /** Native only: the task reported itself finished. */
+      readonly done?: boolean
     }
   | {
       readonly k: 'model_info'
       readonly provider?: string
       readonly model?: string
+      /**
+       * jcode 0.67.0's `model_info` carries **no** `solicited` field, so this is `false` for every
+       * jcode event: a broadcast cannot be told from an answer. It stays in the union because a
+       * backend that can distinguish the two owes the distinction.
+       */
       readonly solicited: boolean
     }
   /** Never feeds a state machine (#18). */

@@ -1,16 +1,18 @@
 /**
  * SPEC-swarm §5.1–§5.4 and §13's jcode rows — the adapter, over `fakeJcodeTransport()`.
  *
- * The local jcode has no `api-bridge` on the path this suite can reach, so **the fake is the
- * evidence**: every behaviour it reproduces is one the spec cites a source line for, and each one
- * is the *reason* a rule exists. The rows asserted here are the ones §13 names:
+ * The fake is the hermetic evidence: every behaviour it reproduces was verified against a live
+ * `jcode v0.67.0` `api-bridge` on 2026-08-04 and is re-derived from the real binary by
+ * `test/real-bridge.test.ts` under `SWARM_REAL_BRIDGE=1`. The rows asserted here are the ones
+ * §13 names:
  *
- *  - `sendMessage` is called **without** `waitForAccept`, and `ack:'accepted'` is produced only by
- *    an observed `message_accepted` on the session's own `events()` stream ([F2], #42).
+ *  - `sendMessage` is called with `waitForAccept: false` — explicitly, because 1.1.0 defaults it
+ *    to `true` — and `ack:'accepted'` is produced only by an observed `message_accepted` on the
+ *    session's own `events()` stream ([F2], #42).
  *  - Two concurrent tools produce correctly attributed input deltas even though every
  *    `tool_input_delta` arrives with `call_id: ''` ([F11], #47).
- *  - `HealthVM.instances[].ok` goes false when the daemon dies while the bridge stays up — and an
- *    unattached `ping`, which is answered bridge-locally, must **not** produce it ([F5], #44).
+ *  - `HealthVM.instances[].ok` goes false when the daemon dies while the bridge stays up — which
+ *    a plain `ping()` does detect, because nothing survives a dead daemon ([F5], #44).
  *  - A mid-turn config change is never issued: the reply is withheld until turn end and the SDK
  *    raises `HarnessError('timeout')` **while the setting still lands** ([F10], #8).
  *  - `hardKill` signals two groups and refuses `capability_absent` with no pgid ([F1], §4.3.7).
@@ -74,15 +76,17 @@ async function wire(options: Parameters<typeof jcodeExecutorHarness>[0] = {}): P
 /* ------------------------------------------------------------------- [F2] the ack, observed */
 
 describe('[F2] the ack can only come from the stream (#42, V5)', () => {
-  it('`sendMessage` is called with NO accept-wait flag at all', async () => {
+  it('`sendMessage` is called with `waitForAccept: false`, explicitly', async () => {
     const w = await wire()
     w.harness.scriptTurn(w.session, { ack: true, text: 'hi' })
     await w.session.submit({ text: 'go', awaitAckMs: 60 }, w.fence)
 
     const send = w.harness.bridge.callsOf('send_message')[0]!
-    /* Not `false` — **absent**. The SDK resolves either way, so passing it at all would put a
-     * value in the call that carries no information and reads as if it did. */
-    expect(Object.keys(send.params)).not.toContain('waitForAccept')
+    /* §13 used to require the flag to be ABSENT, on the 1.0.1 default of "do not wait". The
+     * installed 1.1.0 defaults it to `true` with a 10 s accept timeout, so absence now means ten
+     * seconds of blocking on exactly the un-acked send whose latency matters most. It is passed,
+     * and it is passed false. */
+    expect(send.params.waitForAccept).toBe(false)
     await w.harness.dispose()
   })
 
@@ -113,13 +117,13 @@ describe('[F2] the ack can only come from the stream (#42, V5)', () => {
 
 /* ---------------------------------------------------------- [F11] tool input attribution */
 
-describe('[F11] every `tool_input_delta` arrives with `call_id: ""` (#47)', () => {
+describe('[F11] an empty `tool_input_delta` call id is attributed, a real one is kept (#47)', () => {
   it('two concurrent tools produce correctly attributed input deltas', async () => {
     const attribution = { lastToolStart: null as string | null }
     const events = [
-      { ev: 'tool_start', session_id: 's', id: 'call-a', name: 'bash' },
+      { ev: 'tool_start', session_id: 's', call_id: 'call-a', name: 'bash' },
       { ev: 'tool_input_delta', session_id: 's', call_id: '', delta: 'ls -la' },
-      { ev: 'tool_start', session_id: 's', id: 'call-b', name: 'read' },
+      { ev: 'tool_start', session_id: 's', call_id: 'call-b', name: 'read' },
       { ev: 'tool_input_delta', session_id: 's', call_id: '', delta: 'README.md' },
     ] as const
 
@@ -129,6 +133,18 @@ describe('[F11] every `tool_input_delta` arrives with `call_id: ""` (#47)', () =
      * one bucket — the failure the attribution rule exists to prevent. */
     expect(inputs.map((e) => (e as { callId: string }).callId)).toEqual(['call-a', 'call-b'])
     expect(inputs.map((e) => (e as { delta: string }).delta)).toEqual(['ls -la', 'README.md'])
+  })
+
+  it('a NON-empty wire call id is taken at face value, not overwritten by attribution', () => {
+    /* Protocol v1 types `call_id` as a plain string. [F11] observed the bridge emptying it, but
+     * an adapter that *always* substituted the last `tool_start` would corrupt a bridge that
+     * fixed the bug — so the mitigation is conditional, and both directions are pinned. */
+    const attribution = { lastToolStart: null as string | null }
+    const normalized = [
+      { ev: 'tool_start', session_id: 's', call_id: 'call-a', name: 'bash' },
+      { ev: 'tool_input_delta', session_id: 's', call_id: 'call-b', delta: 'from b' },
+    ].map((raw) => normalizeJcodeEvent(raw as never, attribution))
+    expect(normalized[1]).toEqual({ k: 'tool_input', callId: 'call-b', delta: 'from b' })
   })
 
   it('the same holds end-to-end through the adapter', async () => {
@@ -159,15 +175,28 @@ describe('[F11] every `tool_input_delta` arrives with `call_id: ""` (#47)', () =
 /* -------------------------------------------------------------- [F5] the connection topology */
 
 describe('[F5] the probe connection, and the only liveness signal there is (#44)', () => {
-  it('`create_session` runs on the probe connection and re-attaches it to the probe session', async () => {
+  it("every `create_session` runs on its OWN fresh connection, never the probe's", async () => {
     const w = await wire()
-    const attaches = w.harness.bridge.callsOf('attach_session')
-    const probeSession = w.harness.bridge.callsOf('create_session')[0]
-    expect(probeSession).toBeDefined()
-    /* The creating connection *becomes* attached and cannot be detached (#10), so the probe
-     * re-attaches to its own session immediately after handing the new id over. */
-    expect(attaches.length).toBeGreaterThanOrEqual(2)
-    expect(w.harness.transport.clients.length).toBeGreaterThanOrEqual(2)
+    const creates = w.harness.bridge.callsOf('create_session')
+    /* Two: the probe session, and the workspace session `wire()` opened. On the real bridge a
+     * second `create_session` over one connection returns the FIRST session and creates nothing,
+     * so sharing a connection here would silently collapse the fleet onto the probe session —
+     * one transcript, one working directory, one agent, with distinct ids reported anyway. */
+    expect(creates.length).toBeGreaterThanOrEqual(2)
+    const attached = w.harness.transport.clients.map((c) => c.attachedSessionId)
+    expect(new Set(attached).size).toBe(attached.length)
+    expect(attached).toContain(w.session.sessionId)
+    await w.harness.dispose()
+  })
+
+  it('`attachSession` returning a DIFFERENT session id is a hard failure, not a silent adoption', async () => {
+    const w = await wire()
+    /* The bridge never fails an unknown id: it answers with the current attachment, or
+     * manufactures a session in the bridge's cwd — outside the worktree and outside every
+     * guarantee §5.5 makes. Both look like success on the wire. */
+    await expect(w.instance.openSession('no-such-session')).rejects.toThrow(
+      /attached to .* instead|is gone/i,
+    )
     await w.harness.dispose()
   })
 
@@ -183,30 +212,53 @@ describe('[F5] the probe connection, and the only liveness signal there is (#44)
     const w = await wire()
     const calls = w.harness.bridge.callsOf('set_retention_policy')
     expect(calls).toHaveLength(1)
-    expect(calls[0]!.params.policy).toBeNull()
+    expect(calls[0]!.params.archiveAfterDays).toBeNull()
     await w.harness.dispose()
   })
 
-  it('a dead daemon fails the ATTACHED probe ping while every disk-served request stays green', async () => {
+  it('a dead daemon fails EVERY request, including the ones [F5] believed were disk-served', async () => {
     const w = await wire()
     w.harness.bridge.killDaemon()
 
-    /* The five disk-served requests answer happily with a dead daemon ([F5]) — which is exactly
-     * why an "admin" connection can look healthy while nothing is running. */
-    await expect(w.instance.listSessions()).resolves.toBeInstanceOf(Array)
-    await expect(w.session.tail(4)).resolves.toBeInstanceOf(Array)
-
-    /* `HealthVM.instances[].ok` must come from a `ping` on the attached probe connection. */
-    await expect(w.instance.runtimeInfo()).rejects.toThrow(/daemon/i)
+    /* [F5] held that `list_sessions`/`peek_session`/`archive_session`/`set_retention_policy` are
+     * answered from disk and stay green while the daemon is gone, so liveness needed a ping
+     * naming an attached session. Re-tested against 0.67.0: none of them survive. The bridge
+     * closes every attached connection and fails everything afterwards. */
+    await expect(w.instance.listSessions()).rejects.toThrow(/closed/i)
+    await expect(w.session.tail(4)).rejects.toThrow(/closed/i)
+    await expect(w.instance.runtimeInfo()).rejects.toThrow(/closed/i)
     await w.harness.dispose()
   })
 
-  it('an UNATTACHED ping is answered bridge-locally and proves nothing', async () => {
+  it('a plain `ping()` IS the liveness signal — there is no session-scoped ping to make', async () => {
     const w = await wire()
-    w.harness.bridge.killDaemon()
     const client = await w.harness.transport.connect('ignored')
-    /* Resolves with a dead daemon — so a health check built on it would stay green forever. */
     await expect(client.ping()).resolves.toBeUndefined()
+    w.harness.bridge.killDaemon()
+    /* `ping` takes no session id in protocol v1 at all, and it is a real round trip: it fails the
+     * moment the daemon is gone, which is the whole of what [F5]'s expensive mitigation bought. */
+    await expect(client.ping()).rejects.toThrow(/closed/i)
+    await w.harness.dispose()
+  })
+
+  it('the daemon death is announced on the STREAM before the connection closes', async () => {
+    const w = await wire()
+    const events = w.session.events()
+    w.harness.bridge.killDaemon()
+    const seen = []
+    for (let i = 0; i < 10; i++) {
+      const next = await events.next()
+      if (next.done === true) break
+      seen.push(next.value)
+      if (next.value.k === 'closed') break
+    }
+    /* `error{code:'internal', message:'daemon connection closed'}` reaches every attached
+     * connection, so a dead daemon is observable without polling at all. */
+    expect(seen).toContainEqual({
+      k: 'error',
+      code: 'internal',
+      message: 'daemon connection closed',
+    })
     await w.harness.dispose()
   })
 })
@@ -297,22 +349,81 @@ describe('§5.2 the declared jcode capability row', () => {
     })
   })
 
-  it('`tail()` routes to `peekSession` — never the read whose name suggests it ([F8], #45)', async () => {
+  it("`tail()` merges the stored tail with the live one, on this session's own connection", async () => {
     const w = await wire()
     w.harness.scriptTurn(w.session, { ack: true, text: 'the answer' })
     await w.session.submit({ text: 'the question', awaitAckMs: 60 }, w.fence)
-    await new Promise((resolve) => setTimeout(resolve, 20))
-    const tail = await w.session.tail(4)
+    await w.harness.bridge.quiesce()
+    const tail = await w.session.tail(8)
+
+    /* Both reads, every time. `peek_session` is the stored tail and — verified against 0.67.0 —
+     * never carries what this session sent: a `noReply` message was still absent 3 s later while
+     * `get_history` already had it. Pinning `tail()` to `peekSession` alone ([F8], #45) would
+     * therefore match §5.5's digest against a transcript the prompt is never in, failing closed
+     * on every turn. */
     expect(w.harness.bridge.callsOf('peek_session')).toHaveLength(1)
+    expect(w.harness.bridge.callsOf('get_history')).toHaveLength(1)
     expect(tail.some((row) => row.content.includes('the question'))).toBe(true)
+
+    /* And it is this session's connection, not the probe's: `get_history` is attachment-scoped
+     * and answers `unknown_session` for anything else. */
+    expect(w.harness.bridge.callsOf('get_history')[0]!.sessionId).toBe(w.session.sessionId)
     await w.harness.dispose()
   })
 
-  it('`background` is carried with `provenance:"scraped"` and nothing depends on it (#16)', () => {
+  it("`tail()` drops the `''` rows [F8] warned about rather than merging them", async () => {
+    const w = await wire()
+    /* `get_history` does `content.as_str().unwrap_or("")`, so a block-array message arrives as an
+     * empty string. A digest match against `''` makes every `unknown` turn look un-landed — the
+     * one direction Q5 says must never auto-act — so an empty row is never merged in. */
+    const session = w.harness.bridge.sessions.get(w.session.sessionId)!
+    session.history.push({ role: 'assistant', content: '' })
+    session.history.push({ role: 'assistant', content: 'real content' })
+    const tail = await w.session.tail(8)
+    expect(tail.every((row) => row.content !== '')).toBe(true)
+    expect(tail.some((row) => row.content === 'real content')).toBe(true)
+    await w.harness.dispose()
+  })
+
+  it('`background_progress` is a FIRST-CLASS event on protocol v1, carried as `native`', () => {
+    const normalized = normalizeJcodeEvent(
+      {
+        ev: 'background_progress',
+        session_id: 's',
+        task_id: 't-1',
+        label: 'indexing',
+        summary: 'indexing the repo',
+        percent: 42,
+        done: false,
+      },
+      { lastToolStart: null },
+    )
+    /* [B7] reverse-engineered this out of a markdown header in a `notification` body. There is no
+     * `notification` event kind on 0.67.0 at all, so the scrape is dead and the signal is real —
+     * but it still feeds no state, no budget and no completion (§6.4). */
+    expect(normalized).toMatchObject({
+      k: 'background',
+      provenance: 'native',
+      taskId: 't-1',
+      percent: 42,
+      done: false,
+    })
+  })
+
+  it('the [B7] scrape survives as a rule for backends that still need it (#16)', () => {
     const scraped = scrapeBackgroundProgress('**Background task progress** indexing 42%', 'index')
     expect(scraped).toMatchObject({ k: 'background', provenance: 'scraped', percent: 42 })
     /* Any TUI copy change kills it silently, so its disappearance must not be an error. */
     expect(scrapeBackgroundProgress('some other notification body')).toBeNull()
+  })
+
+  it('`session_renamed` is dropped: it is not a turn event and §5.1 has no member for it', () => {
+    expect(
+      normalizeJcodeEvent(
+        { ev: 'session_renamed', session_id: 's', title: 't', display_title: 't' },
+        { lastToolStart: null },
+      ),
+    ).toBeNull()
   })
 
   it('`session_status` is carried with `trusted:false` and feeds no machine (#18)', () => {

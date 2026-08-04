@@ -53,6 +53,15 @@ export interface ExecutorHarness {
   scriptTurn(session: ExecutorSessionHandle, turn: ConformanceTurn): void
   /** Kill the transport under a session, outside a turn (C12). */
   disconnect(session: ExecutorSessionHandle): void
+  /**
+   * Resolve once the backend has finished playing everything it is going to play.
+   *
+   * Optional, and the suite degrades to `settle()` without it — but a harness that *can* answer
+   * this should, because it is the difference between a negative claim ("no second turn ever
+   * ran") resting on a fact about the backend and resting on a wall-clock window that a loaded
+   * CI box will eventually lose. Both in-repo harnesses implement it.
+   */
+  quiesce?(): Awaitable<void>
   dispose(): Awaitable<void>
 }
 
@@ -233,6 +242,35 @@ export function executorConformance(factory: () => Awaitable<ExecutorHarness>): 
         'a refused field must never appear as applied',
       )
     }
+  })
+
+  test('applyConfig({reasoningEffort:null}) is refused no_effort_to_set, never applied', async (c) => {
+    /* `null` is "no effort is driven" (§4.1's `default|auto → null`), and **no** backend has an
+     * unset: `effort` is a required non-empty string on the wire and the bridge refuses an empty
+     * one before any provider lookup. An adapter that reports `applied:['reasoningEffort']` for a
+     * `null` patch is claiming a call it never made — exactly §4.3.4's forbidden lie.
+     *
+     * This case exists because that divergence was real and cost a CRITICAL bug: the jcode adapter
+     * refused `null`, `MockExecutor` accepted it, and so a delegation whose default effort is
+     * `null` had every turn refused pre-flight on the real adapter while 853 mock-backed tests
+     * stayed green. It is pinned at the seam both adapters share, so no future adapter can be
+     * kinder here than the wire it speaks for. */
+    const report = await c.session.applyConfig({ reasoningEffort: null }, c.fence)
+    assertEqual(
+      report.applied.includes('reasoningEffort'),
+      false,
+      'a `null` effort MUST NOT be reported as applied — there is nothing to send',
+    )
+    assertEqual(
+      report.confirmed.includes('reasoningEffort'),
+      false,
+      'a `null` effort MUST NOT be reported as confirmed',
+    )
+    const refusal = report.refused.find((r) => r.field === 'reasoningEffort')
+    assert(
+      refusal !== undefined && refusal.reason === 'no_effort_to_set',
+      `a \`null\` effort MUST be refused \`no_effort_to_set\`, got ${show(report.refused)}`,
+    )
   })
 
   test('a config change while a turn is in flight is refused with turn_in_flight (§4.3.3)', async (c) => {
@@ -460,9 +498,19 @@ export function executorConformance(factory: () => Awaitable<ExecutorHarness>): 
       )
       return
     }
-    /* Give a second turn time to play, then end the stream: "no second turn ever ran" is then a
-     * claim about a bounded window plus the whole remainder, not about scheduling luck. */
-    await settle()
+    /*
+     * Wait for the backend to go quiet, then end the stream: "no second turn ever ran" is then a
+     * claim about everything the backend ever played, not about a window.
+     *
+     * This used to be a 40 ms `settle()`. The mock emits each step behind `sleep(0)`, so a turn
+     * needs several macrotask hops to finish; under a loaded runner those hops can outlast 40 ms,
+     * the `turn_done` lands *after* `disconnect()` has ended the fan-out, and the case then
+     * passes an adapter that overstates `idempotentSubmit` — a false green, which is the one
+     * direction a conformance suite must never fail in. `quiesce()` removes the window rather
+     * than widening it; `settle()` remains only for a foreign harness that cannot answer.
+     */
+    if (c.harness.quiesce === undefined) await settle()
+    else await c.harness.quiesce()
     c.harness.disconnect(c.session)
     const seen = await drain(events, (e) => e.k === 'closed')
     assert(

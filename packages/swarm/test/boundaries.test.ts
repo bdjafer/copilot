@@ -331,8 +331,6 @@ describe('§5.4 the never-call list, grep-enforced', () => {
     const forbidden = [
       /detachSession/,
       /globalEvents/,
-      /getHistory/,
-      /waitForAccept/,
       /comment-core|comment-ui|browser-copilot|temporal-memory/,
       /chrome\.|wxt\//,
     ]
@@ -356,14 +354,70 @@ describe('§5.4 the never-call list, grep-enforced', () => {
     expect(offenders).toEqual([])
   })
 
-  it('never calls getHistory — the safe read is peekSession ([F8], #45)', () => {
-    const offenders = FILES.filter((f) => /getHistory/.test(f.code)).map((f) => f.rel)
+  /**
+   * §5.4 banned `getHistory` outright ([F8], #45): it does `content.as_str().unwrap_or("")`, so a
+   * block-array message reads as `''`, and a digest match against `''` makes every `unknown` turn
+   * look un-landed — the one direction Q5 says must never auto-act.
+   *
+   * That hazard is unchanged. What changed is the alternative: verified against jcode 0.67.0,
+   * `peek_session` is the *stored* tail and never carries what swarm sends (a `noReply` message
+   * was still absent after 3 s while `get_history` already had it). `peekSession` alone would
+   * match the digest against a transcript the prompt is never in — failing closed on every turn,
+   * which is not the safe direction, just a different wrong one.
+   *
+   * So the ban becomes a pairing rule: `getHistory` may be called, but never alone. Recorded as an
+   * amendment in SPEC §5.2, §5.4 #12, §12 #13/#45 and §13 — the gate and the locked contract now
+   * say the same thing, which is the whole point of a locked contract.
+   *
+   * **File scope is not enough.** The first version of this asserted `/getHistory/ && /peekSession/`
+   * per file, which `sdk-transport.ts` satisfied merely because the *word* `peekSession` appears in
+   * a neighbouring method — a pass that carries no information about the call that matters. The
+   * rule is about a **read**, so it is asserted at the two places a read can exist: the transport
+   * pass-throughs, which are declarations rather than reads, are enumerated by name; and the one
+   * real consumer must pair the two calls **inside the same function body**.
+   */
+  it('reads getHistory in exactly one place, and never without peekSession in the same function', () => {
+    /* `sdk.ts` declares the port, `sdk-transport.ts` forwards it and `fake-jcode.ts` implements it
+     * for the tests: a method that exists is not a read. Enumerated rather than pattern-matched, so
+     * a third forwarder has to be argued for. */
+    const DECLARERS = [
+      'server/executor/sdk.ts',
+      'server/executor/sdk-transport.ts',
+      'testing/node/fake-jcode.ts',
+    ]
+    const mentions = FILES.filter((f) => /getHistory/.test(f.code)).map((f) => f.rel)
+    expect(mentions.filter((rel) => !DECLARERS.includes(rel))).toEqual(['server/executor/jcode.ts'])
+
+    /* The consumer: `tail()` must call both, and the pairing is asserted over the function body,
+     * not the file. A `getHistory` added to any other method of the same class fails here. */
+    const jcode = FILES.find((f) => f.rel === 'server/executor/jcode.ts')!
+    const bodies = jcode.code.split(/\n\s*(?:async\s+)?[a-zA-Z_$][\w$]*\s*(?:<[^>]*>)?\s*\(/)
+    const paired = bodies.filter((body) => /getHistory/.test(body) && /peekSession/.test(body))
+    const lonely = bodies.filter((body) => /getHistory/.test(body) && !/peekSession/.test(body))
+    expect(lonely).toEqual([])
+    expect(paired).toHaveLength(1)
+  })
+
+  /**
+   * §13 required `waitForAccept` to be ABSENT, on `@1jehuang/jcode-sdk@1.0.1`'s default of "do
+   * not wait". The installed 1.1.0 reads `options.waitForAccept ?? true` with
+   * `acceptTimeoutMs ?? 10_000`, so absence now means up to ten seconds of blocking on exactly
+   * the un-acked send — and the SDK's `waitForEvent` still *resolves* on timeout, so the wait
+   * cannot even tell `accepted` from `unknown` ([F2]). The rule that survives the version bump is
+   * the one that always mattered: never `true`.
+   */
+  it('never passes waitForAccept: true — the ack comes from the stream, never the call (#42)', () => {
+    const offenders = FILES.filter((f) => /waitForAccept\s*:\s*true/.test(f.code)).map((f) => f.rel)
     expect(offenders).toEqual([])
   })
 
-  it('never passes waitForAccept: it resolves on timeout and would report every ack accepted (#42)', () => {
-    const offenders = FILES.filter((f) => /waitForAccept/.test(f.code)).map((f) => f.rel)
-    expect(offenders).toEqual([])
+  it('and the only places that PASS one are the two executor files', () => {
+    /* `waitForAccept?:` (the port's own declaration) and the name quoted inside a message string
+     * are not call sites; `waitForAccept:` followed by a value is. */
+    const sites = FILES.filter((f) => /waitForAccept\s*:\s*[^?]/.test(f.code))
+      .map((f) => f.rel)
+      .sort()
+    expect(sites).toEqual(['server/executor/jcode.ts', 'server/executor/sdk-transport.ts'])
   })
 })
 

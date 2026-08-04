@@ -50,6 +50,9 @@ export interface TestClientOptions {
   readonly clientName?: string
   readonly startAtMs?: number
   readonly autoAccept?: boolean
+  /** S10/S8 inputs for the honesty surface (§10 gate 10); absent means "not claimed". */
+  readonly inheritedLogins?: boolean
+  readonly sensitiveWorkspace?: boolean
 }
 
 export function createTestClock(startAtMs = 1_000): TestClock {
@@ -101,6 +104,10 @@ export function createTestClient(options: TestClientOptions = {}): TestClient {
     head: options.head ?? 'test',
     now: () => clock.now(),
     onError: (error) => errors.push(error),
+    ...(options.inheritedLogins === undefined ? {} : { inheritedLogins: options.inheritedLogins }),
+    ...(options.sensitiveWorkspace === undefined
+      ? {}
+      : { sensitiveWorkspace: options.sensitiveWorkspace }),
   })
 
   return {

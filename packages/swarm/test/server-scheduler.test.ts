@@ -188,9 +188,10 @@ describe('§7.1/D2 — an attempt is admitted by D2 or D19, and by nothing else'
 describe('§3.3 D5 — provisioning fails after three bounded retries, and not before', () => {
   /** An adapter that refuses to hand out an instance, counting how often it was asked. */
   class RefusingExecutor extends MockExecutor {
-    calls = 0
+    /* Not `calls`: the base class owns that name for its ordered call log (`MockExecutorCall[]`). */
+    acquisitions = 0
     override acquireInstance(key: InstanceKey, opts: InstanceOptions): Promise<ExecutorInstance> {
-      this.calls += 1
+      this.acquisitions += 1
       void opts
       return Promise.reject(new Error(`no instance for ${key}`))
     }
@@ -210,7 +211,7 @@ describe('§3.3 D5 — provisioning fails after three bounded retries, and not b
     expect(after.state).toBe('queued')
     expect(after.liveAttempts).toHaveLength(0)
     expect(after.attempts).toHaveLength(0)
-    expect(adapter.calls).toBeGreaterThan(0)
+    expect(adapter.acquisitions).toBeGreaterThan(0)
     /* Bounded: the counter is the only thing that decides when D5 fires. */
     expect(h.server.engine.store.read((tx) => tx.counter(`provision_failures:${id}`))).toBeLessThan(
       SERVER_POLICY.provisionRetries,
@@ -240,7 +241,7 @@ describe('§3.3 D5 — provisioning fails after three bounded retries, and not b
       await h.server.engine.tick()
       await settle(4)
     }
-    expect(adapter.calls).toBeGreaterThanOrEqual(SERVER_POLICY.provisionRetries)
+    expect(adapter.acquisitions).toBeGreaterThanOrEqual(SERVER_POLICY.provisionRetries)
     expect(deleg(h, id).state).toBe('failed')
 
     const audit = h.server.engine.store.read((tx) => tx.readAudit(0, 100))

@@ -29,7 +29,49 @@
 > input briefing disagreed with reality, reality won; §12 rows tagged **[B*n*]** correct briefing
 > limitation *n*. Rows **[R*n*]** record changes forced by the first (2026-08-04) adversarial review;
 > rows **[F*n*]** record changes forced by the second (2026-08-04, feasibility), which read the
-> bridge, daemon and SDK sources the first review had only inferred from.
+> bridge, daemon and SDK sources the first review had only inferred from. Rows **[E*n*]** record
+> changes forced by the first execution against a **live** jcode 0.67.0 bridge (commit
+> `156ae4092`) — the gap the "not runtime-observed" caveat above named — and by the SDK bump to
+> `@1jehuang/jcode-sdk@1.1.0` that run required. Source-read beats inference; an observation beats
+> a source read.
+>
+> **[E3] — `waitForAccept` must be written `false`, not omitted.** §13's gate said the flag must
+> never *appear* in `src/server`, which was correct against `@1jehuang/jcode-sdk@1.0.1`: its
+> default was "do not wait". 1.1.0 reads `options.waitForAccept ?? true` with
+> `acceptTimeoutMs ?? 10_000`, so an omitted flag now blocks the send for up to ten seconds on
+> precisely the un-acked case V5 exists for — and, per [F2], the SDK's `waitForEvent` *resolves* on
+> timeout, so the wait cannot even tell `accepted` from `unknown`. The gate is therefore "never
+> `true`", plus an enumeration of the only two files allowed to pass the flag at all.
+>
+> **[E1] — `tail()` reads both history calls, paired.** §5.4 #12, §12 #13 and §12 #45 pinned
+> `tail()` to `peekSession` **alone** and banned `getHistory` outright, grep-enforced. The hazard
+> that motivated the ban is unchanged and confirmed: `get_history` does
+> `content.as_str().unwrap_or("")` with no flattening, and a §5.5 digest match against `""` makes
+> every `unknown` turn look un-landed — the one direction Q5 says must never auto-act. What the
+> live run falsified is the **alternative**: `peek_session` is the *stored* tail and does not carry
+> what swarm sends. A `noReply` message was still absent from it three seconds after the send while
+> `get_history` already had it, and a fresh session's stored tail holds jcode's own injected
+> session-context reminder instead. `peekSession` alone therefore matches the digest against a
+> transcript the prompt is never in — failing **closed on every turn**, which is not the safe
+> direction, only a different wrong one. So the ban becomes a **pairing rule**: the stored tail is
+> read first, then any live row it has not yet flushed is merged, and a `''` row is **dropped**
+> rather than merged, because an empty row is exactly the false negative [F8] warned about.
+> `getHistory` is never read alone, and never outside `JcodeSession.tail()`. The §13 gate below is
+> amended to match, at call-site scope rather than file scope. Evidence:
+> `test/real-bridge.test.ts` (`SWARM_REAL_BRIDGE=1`).
+>
+> **[E2] — the shipped `origins` allowlist admits `chrome-extension://*`.** §2.1 locked the
+> allowlist to `chrome-extension://<id>` plus dev `http://localhost:*`. An extension id is not
+> knowable before the extension is packed, and the shipped default carried loopback entries only,
+> so a real MV3 head was refused `403: forbidden origin` and could never pair — observed in Chrome,
+> kept as `bench/ux-shots/swarm/02-pair-refused-403-BEFORE-FIX.png`. The default therefore admits
+> the `<scheme>://*` form, which matches **any authority on that scheme** and nothing else:
+> `chrome-extension-evil://` fails, and prefix confusion is excluded by construction. This widens
+> the origin check to *every extension installed in the user's browser*, and it is a deliberate,
+> bounded concession, not an oversight — an `Origin` header is a browser-enforced statement of
+> **provenance**, never of authorisation, and the pairing code (S2) remains the actual
+> authentication. An operator who can enumerate the id SHOULD narrow `origins` to
+> `chrome-extension://<id>`; the shipped default is what makes first-run possible.
 >
 > **One deliberate deviation from the briefing's bones, called out rather than hidden:** its
 > `DelegationState` (`queued/provisioning/active/verifying/waiting/reconciling/succeeded/failed/
@@ -751,7 +793,7 @@ interface ExecutorSubmission { text: string; contextOnly?: boolean; awaitAckMs?:
 /** `ack` is derived from a `message_accepted{session_id}` observed on the session's own `events()`
  *  stream within `awaitAckMs`, NEVER from `sendMessage` returning ([F2]): the SDK's
  *  `waitForAccept:true` resolves on timeout, so the call cannot distinguish these two values.
- *  `tail(limit)` — i.e. `peekSession` — is what proves delivery afterwards, not `getHistory`. */
+ *  `tail(limit)` — the paired stored+live read of **[E1]** — is what proves delivery afterwards. */
 interface SubmitReceipt { ack: 'accepted' | 'unknown'; ackAtMs: number | null
   correlated: boolean }                                // always false for jcode
 type ExecutorEvent =
@@ -783,7 +825,7 @@ type ExecutorEvent =
 | `programmaticApprovals` / `perTurnToolRestriction` | **false / false** — and *no* tool restriction at any scope on this topology, per turn or per instance ([F4]) | configurable |
 | `structuredOutput` / `contextOnlyMessage` / `softInterrupt` | true / true (`noReply`) / true | configurable |
 | `interruptLandingObservable` | **false** (event untranslated) | configurable |
-| `history` | **`'text-only'`** — and only via `peekSession`; `getHistory` is `'none'` for any block-array message ([F8]) | configurable |
+| `history` | **`'text-only'`** — `peekSession` first, then the live rows it has not flushed, merged and `''`-filtered (**[E1]**); `getHistory` alone is `'none'` for any block-array message ([F8]), and `peekSession` alone does not carry what swarm just sent | configurable |
 | `sessionsPerConnection` / `usageEvents` | **1** / true | configurable |
 
 There is **no `claude-agent-sdk` column and no such `AdapterId`** (#27). §10 rules out "pluggable
@@ -913,7 +955,7 @@ adapter fails CI.
 | 9 | `detachSession()` is a client-side no-op — the daemon is never told, `session_id` is never cleared | **Never called.** `close()` is the sole lease release; a grep test enforces it |
 | 10 | Soft-interrupt landing invisible (`soft_interrupt_injected` untranslated) | `deliveryDetail.landing='unconfirmed'`, surfaced verbatim |
 | 11 | Applied effort discarded; no getter; absent from `runtime_info` and `model_info` | `effortConfirmed:false` is a literal type; no code path may claim otherwise |
-| 12 | The two history reads are **not** equally lossy ([F8]): `getHistory` does `m["content"].as_str().unwrap_or("")` with **no** flattening (`translate.rs:865`), so any message stored as a content-block array comes back as an **empty string**; only `peekSession`/`stored_tail` calls `flatten_content` (`translate.rs:1805`), which keeps text and drops the rest | Swarm's normalized transcript is authoritative. **`tail()` is pinned normatively to `peekSession`** and used **only** for prompt-digest matching — never to rebuild a transcript or seed a fork (A6 forks from swarm's log). `getHistory` is **never called**; a grep test enforces it, because switching `tail()` to it would turn §5.5's digest match into a comparison against `""` and make every `unknown` turn look un-landed |
+| 12 | The two history reads are **not** equally lossy ([F8]): `getHistory` does `m["content"].as_str().unwrap_or("")` with **no** flattening (`translate.rs:865`), so any message stored as a content-block array comes back as an **empty string**; only `peekSession`/`stored_tail` calls `flatten_content` (`translate.rs:1805`), which keeps text and drops the rest | Swarm's normalized transcript is authoritative, and `tail()` is used **only** for prompt-digest matching — never to rebuild a transcript or seed a fork (A6 forks from swarm's log). **Amended by [E1]:** `tail()` reads `peekSession` **first** and merges only the live rows the stored tail has not flushed, dropping every `''` row. Switching `tail()` to `getHistory` *alone* would turn §5.5's digest match into a comparison against `""`; pinning it to `peekSession` *alone* — which is what this row said before the live run — matches the digest against a stored tail the prompt is not in yet, failing closed on every turn. Neither read is sufficient by itself; the §13 gate enforces the pairing at call-site scope |
 | 13 | `compact()` refuses below **10 %** context usage (`MANUAL_COMPACT_MIN_THRESHOLD = 0.10`, `crates/jcode-compaction-core/src/lib.rs:16`) with `invalid_request` + usage text | Surfaced as information, not an error. **[F15]** Note the refusal is not the only readout: `request_manual_compaction` prefixes **both** its refusal and its success with `Token usage: ~Xk / Yk (Z.Z%)` (`agent/compaction.rs:33-88`), so context pressure *is* obtainable — as unstructured prose, from a call with a side effect. W14 stays **W** on that basis, not on "unavailable" |
 | 14 | `launchInstance()`'s `env` is additive (`{...process.env, ...options.env}`) and its argv is a literal | Swarm spawns `api-bridge` itself with a **complete** env map and its own argv (§5.3). A test asserts a sentinel variable present in the server's environment is **absent** from the child's |
 | 15 | `launchInstance()` spawns `detached: false`, leaving the bridge in the caller's process group | Swarm spawns `detached: true` and records the pgid; `hardKill` signals that group and refuses when it has none. A test asserts the swarm server survives a hard kill and still answers an intent |
@@ -922,7 +964,7 @@ adapter fails CI.
 
 ### 5.5 Reconciliation — the `unknown` protocol
 
-Take the `delegation:*` lease → reattach → `tail(12)` — **`peekSession`, never `getHistory`**
+Take the `delegation:*` lease → reattach → `tail(12)` — **the paired read of [E1], never `getHistory` alone**
 ([F8]) → compare against the persisted `promptDigest` → read workspace revision and
 `git status --porcelain` against the post-dispatch snapshot → run non-mutating acceptance criteria →
 decide:
@@ -1735,7 +1777,7 @@ if (r.ok) console.log(r.value.alsoRetracted)   // every other pending interrupt 
 | 10 | `detachSession` | **Never called**; `close()` on the dedicated connection is the only lease release, enforced by grep | using it as a lease release, as the briefing's topology implies | **[B1]** Verified no-op: the daemon is never told and `session_id` is never cleared. It would produce a lease that appears released and is not — the worst failure mode for a one-writer invariant. |
 | 11 | `globalEvents()` | **Banned**; one dedicated connection per session drained by a pump that never awaits head IO | using it for fleet-wide streaming | It spawns child connections outside lease accounting, polls ~1 s for discovery, and *fails the iterator* at 10 000 buffered events rather than dropping. Banning it removes X7's failure mode at the source and deletes X15's discovery latency. |
 | 12 | Durable store | `node:sqlite` (built-in), WAL, one writer, one `log` table | JSONL + a side index; LevelDB; an ORM | R8 forbids extra runtime requirements. The atomicity we need is "record mutation + log rows + head bump in one transaction, before the ack" — one `BEGIN IMMEDIATE`. A JSONL log cannot provide it without reimplementing a WAL. |
-| 13 | History as truth | Swarm's normalized log is authoritative; `tail()` — pinned to **`peekSession`** — only for prompt-digest matching; `getHistory` **never called**, grep-enforced | rebuilding a transcript from `getHistory`; seeding forks from it; treating the two reads as equivalent | **[Bnew]** `flatten_content` drops every non-text block — tool calls and images contribute nothing, not even a placeholder. A fork seeded from it silently loses the work. **Corrected and worsened [F8]:** the two reads are not equally lossy, and the *worse* one is the one the name suggests you would use. `getHistory` does `m["content"].as_str().unwrap_or("")` with **no** flattening, so a block-array message returns `""` — not text-only, *empty*. `flatten_content` is used at exactly one site, serving `peekSession`. §5.5's digest match is only sound because `tail()` is `peekSession`; the pin is now normative rather than incidental. |
+| 13 | History as truth | Swarm's normalized log is authoritative; `tail()` only for prompt-digest matching; **[E1]** `peekSession` then the unflushed live rows, merged, `''` dropped — `getHistory` **never read alone and never outside `tail()`**, gate-enforced at call-site scope | rebuilding a transcript from `getHistory`; seeding forks from it; treating the two reads as equivalent; **and — the [E1] correction — reading either one alone** | **[Bnew]** `flatten_content` drops every non-text block — tool calls and images contribute nothing, not even a placeholder. A fork seeded from it silently loses the work. **Corrected and worsened [F8]:** the two reads are not equally lossy, and the *worse* one is the one the name suggests you would use. `getHistory` does `m["content"].as_str().unwrap_or("")` with **no** flattening, so a block-array message returns `""` — not text-only, *empty*. `flatten_content` is used at exactly one site, serving `peekSession`. §5.5's digest match is only sound because `tail()` is `peekSession`; the pin is now normative rather than incidental. |
 | 14 | Approvals | Built, shipped **dark**, gated on `supports('permissions')` probed every connect | shipping an approvals UI now; deleting the surface | **[B8]** Confirmed verbatim: the bridge replies `invalid_request` to every `permission_response`, never emits a request, and `autoApprove` is a dead branch. A gate that does not gate is worse than an honest statement (S8); the dark surface makes shipping day a probe flip, not a redesign. |
 | 15 | Authority model | Structural: allowlist + worktree + scrubbed env + launch-time tool profile + process-group kill | container/VM sandboxing; enforced network allowlists; read-only default | Q6, S11. A container is a different product and R8 forbids requiring one; network allowlisting without one is unenforceable and must not be claimed. Read-only default makes the agent unable to do the job. |
 | 16 | `background_progress` | Carried with `provenance:'scraped'`; never feeds state or budget | treating it as a task API; hiding it | **[B7]** jcode derives it by string-matching the literal header `"**Background task progress** "` in a notification body. Any TUI copy change kills it silently. Rendering it is useful; depending on it is a time bomb. |
@@ -1785,7 +1827,7 @@ The first review reasoned about jcode from the SDK's surface and the briefing. T
 | 42 | How `accepted` is observed | **[F2]** `sendMessage(..., {waitForAccept:false})`; the adapter watches `message_accepted{session_id}` on the session's own `events()` under swarm's `acceptTimeoutMs` | `waitForAccept:true` + `acceptTimeoutMs` as §4.2 specified | The SDK's `waitForEvent` **resolves** on timeout by design (`client.js:342`: "Resolving on timeout rather than rejecting keeps a missing ack from failing an otherwise healthy turn"), so `sendMessage` returns `undefined` whether or not the ack came. `SubmitReceipt.ack` and V5 — the whole `unknown`-delivery machinery, which is X4, Q5 and success criterion 5 — were being derived from a value that carries no information. The ack timer is also `.unref()`'d, so in an idle process the await can never settle. |
 | 43 | Tool-flag delivery | **[F4]** Impossible on this topology, permanently. `bridgeArgv` is documented bridge-process-only; T17's "promoted the day a run observes it" is withdrawn | keeping the escape hatch open pending an empirical run | `--tools`/`--tool-profile`/`--disable-base-tools` are `global = true`, so they *parse* on `api-bridge` — which is why a run would have been read as encouraging. They are inert: the agent lives in the daemon, and `spawn_server` forwards only `--provider`/`--provider-profile`/`--model` to `jcode serve`. A knob that accepts input and does nothing is worse than a missing knob, and "we will promote it when a test observes it" was a promise no test on this path can keep. |
 | 44 | Connection topology | **[F5]** Probe connection attached to a long-lived probe session, which also creates sessions and re-attaches; liveness only from a `ping` on an **attached** connection | a permanently unattached "admin" connection | `create_session` and `attach_session` are the same bridge branch and both `subscribe`, so the admin connection silently became attached to whatever it last created — and `detach_session` cannot release it (#10). Worse for health: an unattached `ping` is answered *bridge-locally*, and `list_sessions`/`peek_session`/`archive_session`/`set_retention_policy` are answered from disk, so the admin connection stayed green with a dead daemon. `HealthVM.instances[].ok` was measuring the bridge. |
-| 45 | Which history read is safe | **[F8]** `tail()` pinned to `peekSession`; `getHistory` never called, grep-enforced | "both flatten to text-only", the assumption in #13 and §5.4 #12 | `getHistory` does not flatten at all — a block-array message becomes `""`. §5.5's `unknown` protocol compares a prompt digest against that tail; against `""` every turn looks un-landed, which is the one direction Q5 says must never auto-act. The safe read is the one with the less obvious name. |
+| 45 | Which history read is safe | **[F8]**, amended by **[E1]**: *neither, alone*. `tail()` reads `peekSession` then merges the live rows it has not flushed, dropping `''`; `getHistory` is never read alone and never outside `tail()`, gate-enforced at call-site scope | "both flatten to text-only", the assumption in #13 and §5.4 #12; **and [F8]'s own answer, "just use `peekSession`"** | `getHistory` does not flatten at all — a block-array message becomes `""`, and §5.5's `unknown` protocol comparing a prompt digest against `""` makes every turn look un-landed, the one direction Q5 says must never auto-act. That half stands. The other half did not survive contact: against a live 0.67.0 bridge `peek_session` is the **stored** tail, a `noReply` message was still absent from it after 3 s while `get_history` already had it, and a fresh session's stored tail holds jcode's injected session-context reminder instead — so `peekSession` alone fails **closed** on every turn. [F8] correctly identified the unsafe read and wrongly assumed the other one was sufficient. |
 | 46 | Startup success detection | **[F9]** A child exit **before the connect handshake completes, including exit 0**, is `blocked:'socket_dir'`; `child.pid` liveness is asserted after `hello_ok` before the pgid is recorded | "exit code 0 means the bridge is up" | The bridge `flock`s `<api_socket>.lock` and, if another bridge holds it, prints a message and **exits 0**. Swarm would find the incumbent's socket, connect, and record a pgid for a dead child — then `hardKill` signals a group serving nothing while the real bridge and daemon keep running. The `home:*` lease does not cover this: the lock is keyed on the socket path, not the home. |
 | 47 | Honest citations | **[F3][F7][F11][F12][F13][F14][F16][F17]** Unknown efforts are **rejected**, not logged-and-ignored (the ladder decision survives on the `swarm`/`swarm-deep`-are-accepted reason instead); the 10 000-event kill is the SDK's banned `globalEvents()`, not jcode, and the real backpressure path is `write_all` on the bridge's select loop; `tool_input.callId` is always `''`; `setRetentionPolicy` is defence-in-depth because auto-archive defaults off; 0.67.1 is the latest tag and the SDK enforces **no** version floor; `ExecutorRuntimeInfo` is a deliberate subset of `RuntimeInfo`, not shape-for-shape; `listSessions()` is a disk inventory; `setCredential` takes one of six fixed provider ids | the previous wordings | None of these changes a decision; each was a load-bearing *reason* that an implementer would have coded against. Three were actively misleading: "logs and ignores" says error handling on `setReasoningEffort` is pointless; "jcode's buffer kills the stream" points the mitigation at a component that has no such buffer; "shape-for-shape `RuntimeInfo`" invites a cast that drops `healthy`/`sessionId` and, worse, invites treating the cached `routes` as a health signal. |
 
@@ -1916,11 +1958,21 @@ recorded for it (#46).
 * **`sendMessage` is called with `waitForAccept:false`** and a `SubmitReceipt.ack` of `'accepted'` is
   produced only by an observed `message_accepted` on the session's `events()` stream. Driven over
   `fakeJcodeTransport()`: a transport that never emits the ack yields `ack:'unknown'` and V5 at
-  `acceptTimeoutMs`; one that emits it yields `ack:'accepted'`. A grep asserts `waitForAccept` never
-  appears in `src/server` (#42) — with it set true the SDK resolves either way and both cases would
-  report `accepted`.
-* `getHistory` is never called: `grep -rn "getHistory" packages/swarm/src` returns nothing, and
-  `tail()` is asserted to route to `peekSession` (#45).
+  `acceptTimeoutMs`; one that emits it yields `ack:'accepted'`. The gate asserts `waitForAccept` is
+  never passed **`true`** (#42) — with it true the SDK resolves either way and both cases would
+  report `accepted` — and that the only two files passing one at all are `server/executor/jcode.ts`
+  and `server/executor/sdk-transport.ts`. **[E3]** The original wording, "never *appears* in
+  `src/server`", was written against `@1jehuang/jcode-sdk@1.0.1`, whose default was "do not wait".
+  The installed 1.1.0 reads `options.waitForAccept ?? true` with `acceptTimeoutMs ?? 10_000`, so
+  **absence** now means up to ten seconds of blocking on exactly the un-acked send this rule exists
+  to protect — the flag must be written, and written `false`. The rule that survives the version
+  bump is the one that always mattered.
+* `getHistory` is never **read alone** (**[E1]**, superseding "never called"): the only file that
+  reads it is `server/executor/jcode.ts` — `server/executor/sdk.ts` declares the port,
+  `server/executor/sdk-transport.ts` forwards it and `testing/node/fake-jcode.ts` implements it,
+  all three enumerated by name — and within that file `getHistory` and `peekSession` must appear in
+  the **same function body**, of which there is exactly one (`tail()`). File-scoped `&&` is not
+  enough: it passes on the mere presence of the word elsewhere in the file (#45).
 * A mid-turn `setReasoningEffort` is **never issued**: with `ChannelState:'streaming'` the refusal
   produces zero executor calls (already asserted above) — plus a `fakeJcodeTransport()` case proving
   why, in which the reply is withheld until turn end and the SDK raises `HarnessError('timeout')`

@@ -54,6 +54,17 @@ export type SwarmErrorCode =
   | 'verification_failed'
   | 'landing_conflict'
   | 'capability_absent'
+  /**
+   * A sent `req` that was never answered, reaped by the client at `requestTimeoutMs` (§2.5, §6.3).
+   *
+   * Client-generated and never on the wire: no server sends it, and the codec would reject it if
+   * one tried. It exists because the alternative was `internal`, and a wedged handler on the
+   * server is not an internal error in the client — a head that cannot tell "we never heard back"
+   * from "something broke here" cannot offer the one action that helps, which is to retry.
+   * `retryable` is `true` on every instance: §2.5 rule 3's idempotency cache makes the re-send
+   * safe by construction.
+   */
+  | 'timeout'
   | 'internal'
 
 /**
@@ -96,6 +107,7 @@ export const SWARM_ERROR_CODES = [
   'verification_failed',
   'landing_conflict',
   'capability_absent',
+  'timeout',
   'internal',
 ] as const satisfies readonly SwarmErrorCode[]
 
@@ -152,6 +164,7 @@ const MESSAGES: Record<SwarmErrorCode, string> = {
   verification_failed: 'verification failed',
   landing_conflict: 'landing conflicts with the target',
   capability_absent: 'the capability this requires is absent',
+  timeout: 'The server did not answer in time; whether the request was applied is unknown.',
   internal: 'internal error',
 }
 

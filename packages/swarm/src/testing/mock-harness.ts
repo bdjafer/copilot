@@ -49,6 +49,17 @@ export function mockExecutorHarness(options: MockExecutorOptions = {}): Executor
     disconnect(session: ExecutorSessionHandle) {
       adapter.disconnect(session)
     },
+    /**
+     * Deliberately resolved through `this.adapter`, not the one closed over above.
+     *
+     * `test/executor-mock.test.ts` builds a lying harness as `{ ...honest, adapter: lying }`, so a
+     * `quiesce` bound to the honest adapter would drain an adapter that owns no sessions and
+     * return instantly — a barrier that barriers nothing, which is worse than the wall-clock
+     * window it replaced because it looks deterministic.
+     */
+    quiesce(this: { readonly adapter: { quiesce?: () => Promise<void> } }) {
+      return this.adapter.quiesce?.() ?? Promise.resolve()
+    },
     dispose() {
       /* Nothing to release: the mock owns no process, no socket and no file. */
     },

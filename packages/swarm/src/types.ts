@@ -1151,6 +1151,20 @@ export interface SwarmClientOptions {
   readonly now?: () => number
   readonly contextProviders?: readonly ContextProvider[]
   readonly onError?: (error: SwarmError) => void
+  /**
+   * S10 (release gate 10): the head declares that instances were started with `inheritLogins`.
+   *
+   * It is an option rather than a wire field because it is a deployment fact the client cannot
+   * observe — and because a default would be exactly the silent `true` §5.3 refuses to have.
+   * Absent means "not claimed", and the honesty surface then says nothing about inherited logins
+   * rather than saying something unverified.
+   */
+  readonly inheritedLogins?: boolean
+  /**
+   * S8 (release gate 10, [R3]): a workspace marked `sensitive` pins the tool-authority admission
+   * open — non-dismissible on every delegation created against it.
+   */
+  readonly sensitiveWorkspace?: boolean
 }
 
 export interface SwarmClient extends SwarmClientIntents {

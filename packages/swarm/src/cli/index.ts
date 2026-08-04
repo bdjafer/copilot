@@ -92,7 +92,7 @@ const USAGE = `swarm — a server-scheduled fleet of coding-agent delegations
   swarm doctor  [--json]                       # 0 healthy / 1 blocked / 2 degraded
   swarm pair    [--name <label>]
   swarm tokens  ls | revoke <id>
-  swarm status | ls | new | say | watch | verify | land | logs | gc
+  swarm status | ls | new | say | cancel | watch | verify | land | logs | gc
 
 Every verb but \`serve\` is a head over ws://127.0.0.1:<port>/swarm, authenticating from
 $SWARM_HOME/cli-token. --in-process runs the same code against an embedded server.`

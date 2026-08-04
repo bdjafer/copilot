@@ -16,7 +16,12 @@ export type { Awaitable, ConformanceCase } from './types.ts'
 export { assert, assertDeepEqual, assertEqual, assertRejects, show } from './assert.ts'
 
 export { MOCK_DEFAULT_CAPABILITIES, MockExecutor, mockInstanceOptions } from './mock-executor.ts'
-export type { MockExecutorOptions, MockStep, MockTurnScript } from './mock-executor.ts'
+export type {
+  MockExecutorCall,
+  MockExecutorOptions,
+  MockStep,
+  MockTurnScript,
+} from './mock-executor.ts'
 
 export { mockExecutorHarness, toMockScript } from './mock-harness.ts'
 
@@ -110,3 +115,27 @@ export { jcodeExecutorHarness } from './node/jcode-harness.ts'
 export type { JcodeHarness, JcodeHarnessOptions } from './node/jcode-harness.ts'
 export { createInMemoryTransport, createTestServer } from './node/in-memory-transport.ts'
 export type { InMemoryTransportOptions, TestServerOptions } from './node/in-memory-transport.ts'
+
+/**
+ * The seeded demo scenario (§10, release gate 10) — a scratch repo, a real failing test, two
+ * acceptance criteria and a scripted three-attempt run, so a first delegation is never against
+ * the user's own work. Data and the scripted run only; `createDemoRepo` needs `node:fs` and
+ * therefore lives under `./node`.
+ */
+export {
+  DEMO_ATTEMPTS,
+  DEMO_CRITERIA,
+  DEMO_FILES,
+  DEMO_FIX,
+  DEMO_OBJECTIVE,
+  DEMO_SCENARIO,
+  demoTurns,
+  runDemoAttempts,
+} from './demo/index.ts'
+export type {
+  DemoAttempt,
+  DemoAttemptResult,
+  DemoCriterion,
+  DemoFile,
+  DemoRunOptions,
+} from './demo/index.ts'

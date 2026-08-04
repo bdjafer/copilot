@@ -86,7 +86,12 @@ function lyingAdapter(
     capabilities: { ...real.capabilities, ...lie },
     preflight: () => real.preflight(),
     acquireInstance: (key, opts) => real.acquireInstance(key, opts),
-  }
+    /* The lie is about capabilities and nothing else. `quiesce` is the harness's barrier for a
+     * negative claim about the stream, and a proxy that dropped it would hand every such case an
+     * instantly-resolving barrier — turning "no second turn ran" into a false green for exactly
+     * the adapters this suite exists to catch. */
+    quiesce: () => real.quiesce(),
+  } as ExecutorAdapter
 }
 
 function lyingHarness(truth: MockExecutorOptions, lie: Partial<ExecutorCapabilities>) {
@@ -135,6 +140,28 @@ describe('§5.2 a lying adapter fails CI — the claim, asserted', () => {
 
   it('and passes the honest row it was derived from, so the proof is not vacuous', async () => {
     expect(await failuresUnder({}, {})).toEqual([])
+  })
+
+  /**
+   * The regression test for the barrier itself.
+   *
+   * `idempotentSubmit` is caught by one case, and that case has to prove a **negative** — "no
+   * second turn ever ran". It used to do so by waiting a fixed 40 ms and then ending the stream.
+   * The mock emits every step behind `sleep(0)`, so a turn costs several macrotask hops; on a
+   * loaded runner those hops outlast the window, the second `turn_done` lands after the stream
+   * has been ended, and the lie goes uncaught. That is a false green in a suite whose entire job
+   * is catching this exact lie, and it is why the case was flaky rather than merely slow.
+   *
+   * `quiesce()` replaced the window with the backend's own completion. Driving the mock with a
+   * sleep far slower than any window would have been reproduces the original conditions
+   * deterministically: with a wall clock this fails, with a barrier it does not.
+   */
+  it('catches the lie even when every step is slower than any wall-clock window would be', async () => {
+    const slow = { sleep: (ms: number) => new Promise<void>((r) => setTimeout(r, ms + 30)) }
+    const failed = await failuresUnder(slow, { idempotentSubmit: true })
+    expect(failed).toContain(
+      'executor: idempotentSubmit decides whether a repeated submission runs a second turn (§5.2)',
+    )
   })
 
   it('rejects an adapter that UNDERSTATES a capability it actually has', async () => {

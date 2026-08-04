@@ -14,6 +14,7 @@ import { afterEach, describe, expect, it } from 'vitest'
 import type { ServerHarness } from './support/server-harness.ts'
 
 import { CLOSE_CODES } from '../src/protocol/constants.ts'
+import { defaultServerConfig } from '../src/server/config.ts'
 import { CLI_TOKEN_ID, sha256Hex } from '../src/server/tokens.ts'
 import { hostAllowed, originAllowed } from '../src/server/ws.ts'
 import { createServerHarness, openRawSocket } from './support/server-harness.ts'
@@ -123,6 +124,39 @@ describe('§2.1 the admission table, in its order', () => {
     expect(originAllowed('http://localhost:5173', ['http://localhost:*'])).toBe(true)
     expect(originAllowed('http://localhost', ['http://localhost:*'])).toBe(true)
     expect(originAllowed('http://localhost.evil.test', ['http://localhost:*'])).toBe(false)
+  })
+
+  /**
+   * The regression a real browser found and no fake could.
+   *
+   * `origins` shipped with the two loopback entries and nothing else, so a freshly installed
+   * extension — the product's *primary* head — sent `Origin: chrome-extension://<id>` to
+   * `POST /pair` and got `403 forbidden origin`. There was no first-run route to pairing that did
+   * not involve hand-editing `config.json` with an id the user first has to go and look up. The
+   * case above covers the mechanism with an explicit id; nothing covered the **default**, which is
+   * the only list a first run actually has.
+   */
+  it('the DEFAULT allowlist admits an extension origin — a head that cannot pair is not a head', () => {
+    const { origins } = defaultServerConfig()
+    expect(originAllowed('chrome-extension://gciijahjlpkkapcdfmpoanepfadnolgg', origins)).toBe(true)
+    /* And the concession is scoped to that one scheme. A web page is still refused, which is the
+     * threat the origin check exists for: "any web page in the user's browser reaching a localhost
+     * port". */
+    expect(originAllowed('https://evil.test', origins)).toBe(false)
+    expect(originAllowed('http://evil.test', origins)).toBe(false)
+    expect(originAllowed('moz-extension://anything', origins)).toBe(false)
+  })
+
+  it('`<scheme>://*` matches any authority on that scheme, and never a bare scheme or another one', () => {
+    const list = ['chrome-extension://*']
+    expect(originAllowed('chrome-extension://abc', list)).toBe(true)
+    expect(originAllowed('chrome-extension://abc/', list)).toBe(true)
+    /* No authority at all is not an origin, and must not be admitted by the wildcard. */
+    expect(originAllowed('chrome-extension://', list)).toBe(false)
+    expect(originAllowed('chrome-extension', list)).toBe(false)
+    /* Prefix confusion: a scheme that merely starts the same way is a different scheme. */
+    expect(originAllowed('chrome-extension-evil://abc', list)).toBe(false)
+    expect(originAllowed('https://chrome-extension://abc', list)).toBe(false)
   })
 
   it('an unpaired client with a stale `Host` is refused 4001, not 4003 (§2.1s order)', async () => {

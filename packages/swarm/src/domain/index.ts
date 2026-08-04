@@ -48,6 +48,15 @@ export {
 export type { AttentionInput, BucketInput } from './rollup.ts'
 
 export {
+  AMBIENT_AUTH_METHODS,
+  HONESTY_IDS,
+  ambientRoutesOf,
+  honestyNotices,
+  honestyStatements,
+} from './honesty.ts'
+export type { HonestyInput, HonestyStatement } from './honesty.ts'
+
+export {
   ANTHROPIC_EXTENDED_EFFORT_MODELS,
   BANNED_EFFORTS,
   BASE_EFFORT_LADDER,

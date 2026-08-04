@@ -1,0 +1,39 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>swarm</title>
+    <style>
+      /*
+        The page is a frame and nothing else: the head mounts into a shadow root that carries the
+        whole glass design system (`src/swarm/ui/styles.ts`), so this file must not style anything
+        the head draws — it only supplies the surface behind it and the page's polarity.
+      */
+      :root {
+        color-scheme: light dark;
+        --page: oklch(96.8% 0.004 264);
+      }
+      @media (prefers-color-scheme: dark) {
+        :root {
+          --page: oklch(18.5% 0.01 264);
+        }
+      }
+      html,
+      body {
+        block-size: 100%;
+      }
+      body {
+        margin: 0;
+        background: var(--page);
+      }
+      #swarm {
+        block-size: 100%;
+      }
+    </style>
+  </head>
+  <body>
+    <div id="swarm"></div>
+    <script type="module" src="./main.ts"></script>
+  </body>
+</html>

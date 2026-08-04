@@ -204,6 +204,21 @@
         <div id="kinds"></div>
       </section>
 
+      <section>
+        <h2>Swarm</h2>
+        <!--
+          The swarm head is its own page, not a section of this one: it holds a long-lived
+          WebSocket and renders a live fleet, and a settings form is neither. The ruling and its
+          reasons live in `entrypoints/swarm/main.ts`. This link is the only thing the options page
+          knows about swarm — no state, no token, no client.
+        -->
+        <p class="hint">
+          Delegate work to coding agents on this machine. Pairing happens on the console itself,
+          with the code <code>swarm serve</code> prints.
+        </p>
+        <p><a href="./swarm.html">Open the swarm console</a></p>
+      </section>
+
       <footer>
         <button id="save" type="button">Save</button>
         <button id="reset" class="secondary" type="button">Restore defaults</button>

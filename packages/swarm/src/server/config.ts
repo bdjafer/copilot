@@ -139,10 +139,26 @@ export function defaultServerConfig(overrides: DeepPartialConfig = {}): SwarmSer
     configVersion: 1,
     port: SERVER_POLICY.defaultPort,
     bind: '127.0.0.1',
-    /* §2.1's "dev `http://localhost:*`", as data. It has to be *in* the list, because the list is
-     * now authoritative: the loopback origin space used to be allowed unconditionally, which made
-     * `origins` advisory for exactly the clients it was written to constrain. */
-    origins: ['http://localhost:*', 'http://127.0.0.1:*'],
+    /* §2.1's allowlist, as data. It has to be *in* the list, because the list is authoritative:
+     * the loopback origin space used to be allowed unconditionally, which made `origins` advisory
+     * for exactly the clients it was written to constrain.
+     *
+     * `chrome-extension://*` is here because the extension is the primary head and its id cannot
+     * be written down in advance — an unpacked extension's id is derived by the browser from its
+     * install path, so it differs per machine and changes when the path does. Shipping only the
+     * loopback entries made §2.1's own example unreachable: a freshly installed extension sends
+     * `Origin: chrome-extension://<id>`, `POST /pair` answered `403 forbidden origin`, and there
+     * was no first-run route to pairing that did not involve hand-editing this file with an id the
+     * user first has to go and look up. The admission test covered the mechanism with an explicit
+     * id and never covered the default, so nothing failed until a real browser tried it.
+     *
+     * What this concedes is narrow and deliberate. The pairing code is the authentication (S2):
+     * 8 characters, 300 s, single use, 5 attempts, 20/min per connection, printed on the server's
+     * own stdout — which an extension cannot read. The origin check is defence in depth against
+     * the threat this product actually has, "any **web page** in the user's browser reaching a
+     * localhost port", and a `chrome-extension://` origin is by construction not a web page.
+     * Narrow it to the exact id once you know it: an exact entry still matches first. */
+    origins: ['http://localhost:*', 'http://127.0.0.1:*', 'chrome-extension://*'],
     workspaces: [],
     defaults: {
       model: { provider: 'anthropic', model: 'claude-opus-5', reasoningEffort: 'medium' },

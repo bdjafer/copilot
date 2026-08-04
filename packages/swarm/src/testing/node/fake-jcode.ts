@@ -2,26 +2,40 @@
  * `fakeJcodeTransport()` — an in-process bridge that reproduces the **verified** SDK and bridge
  * behaviours, so §13's jcode rows can be asserted with no binary (SPEC-swarm §13, [F2]–[F17]).
  *
- * The local jcode is 0.64.2 and has no `api-bridge` at all, so the real executor cannot run here.
- * That makes the fake load-bearing rather than convenient: every behaviour below is one the spec
- * cites a source line for, and each is the *reason* a rule exists.
+ * Every behaviour below was re-derived on 2026-08-04 from `@1jehuang/jcode-sdk@1.1.0` and a live
+ * `jcode v0.67.0 (156ae4092)` `api-bridge` — throwaway `JCODE_HOME`, no credentials, no model
+ * turn. `test/real-bridge.test.ts` runs the same assertions against the real binary under
+ * `SWARM_REAL_BRIDGE=1`; this file is what makes them runnable in a hermetic CI. Where the two
+ * can diverge, the fake is the one that is wrong, so each rule names what it is imitating:
  *
- *  - **`sendMessage` resolves whether or not the ack arrives** ([F2]). The fake never rejects on a
- *    missing ack, which is what makes `ack:'unknown'` derivable only from the observed event.
+ *  - **`sendMessage` resolves whether or not the ack arrives** ([F2]) — the SDK's `waitForEvent`
+ *    resolves on timeout, so `ack:'unknown'` is derivable only from the observed event.
  *  - **`error` frames carry no `session_id`** ([F6]) — attributable only per-connection.
- *  - **`tool_input_delta` always carries `call_id: ''`** ([F11]), including with two tools running.
- *  - **`create_session` attaches the creating connection** ([F5]); there is no way to detach.
- *  - **An unattached `ping` is answered bridge-locally** and the five disk-served requests answer
- *    happily with a dead daemon ([F5]) — so a fake daemon death must be invisible to all of them
- *    and visible **only** to a ping naming an attached session.
+ *  - **`create_session` on an already-attached connection creates nothing** and returns the
+ *    attached session. This is the one that collapses a fleet onto one agent if the adapter
+ *    creates on a shared connection.
+ *  - **`attach_session` never fails on an unknown id**: it returns the current attachment, or
+ *    **manufactures a session** on a connection that has none.
+ *  - **Session-scoped requests are attachment-scoped** and refuse with the bridge's verbatim
+ *    `unknown_session: …` — except `peek_session` and `archive_session`, which answer for any
+ *    session from any connection.
+ *  - **`peek_session` is the stored tail and lags without bound**: it never carries what this
+ *    session sent, only jcode's injected session-context reminder, while `get_history` has the
+ *    message immediately — and flattens block content to `''` ([F8], #45).
+ *  - **A dead daemon kills everything**: an `error{internal,'daemon connection closed'}` on every
+ *    attached connection, then every request fails. [F5]'s "five disk-served requests stay green"
+ *    does not hold, so the fake must not pretend it does.
  *  - **A mid-turn config change parks on the agent mutex** and the SDK rejects at
  *    `requestTimeoutMs` **while the setting still lands at turn end** ([F10]).
+ *  - **`events()` on a closed client yields a closed iterator**, matching the mitigation
+ *    `sdk-transport.ts` has to make because the real one hangs.
  *
  * DOM-free; lives under `src/testing/node/**` because that is where §1.2 puts the jcode tape.
  */
 
 import type {
   JcodeApiEvent,
+  JcodeErrorCode,
   JcodeRuntimeInfo,
   JcodeSdkClient,
   JcodeSendOptions,
@@ -46,6 +60,8 @@ export interface FakeJcodeOptions {
   readonly now?: () => number
   readonly runtimeInfo?: JcodeRuntimeInfo
   readonly capabilities?: readonly string[]
+  /** The bridge's cwd — where `attach_session` puts a session it had to manufacture. */
+  readonly bridgeCwd?: string
 }
 
 const defaultSleep = (ms: number): Promise<void> =>
@@ -53,14 +69,44 @@ const defaultSleep = (ms: number): Promise<void> =>
     setTimeout(resolve, ms).unref?.()
   })
 
+/** The bridge's own words, verbatim from 0.67.0. */
+const unknownSession = (attached: string | null, requested: string): Error =>
+  Object.assign(
+    new Error(
+      `unknown_session: this connection is attached to \`${attached ?? ''}\`, not ` +
+        `\`${requested}\`; attach to it first or use another connection`,
+    ),
+    { code: 'unknown_session' as JcodeErrorCode },
+  )
+
+const invalidRequest = (message: string): Error =>
+  Object.assign(new Error(`invalid_request: ${message}`), {
+    code: 'invalid_request' as JcodeErrorCode,
+  })
+
+/** What every request throws once the daemon is gone — including the "disk-served" ones. */
+const daemonGone = (): Error => new Error('harness connection closed')
+
 interface FakeSession {
   readonly sessionId: string
-  readonly workingDir: string
+  workingDir: string
   title: string | null
+  /** The generated title `rename_session(undefined)` restores. */
+  readonly generatedTitle: string
   archived: boolean
   turnInFlight: boolean
   readonly scripts: ConformanceTurn[]
-  readonly transcript: { role: string; content: string }[]
+  /**
+   * The **live** transcript — what `get_history` answers. Separate from `stored` because the two
+   * genuinely disagree on the real bridge, which is the whole point of the peek/history merge.
+   */
+  readonly history: { role: string; content: string }[]
+  /**
+   * The **stored** tail — what `peek_session` answers. Seeded with jcode's injected
+   * session-context reminder and never written to by a send, because that is what was observed:
+   * a `noReply` message was still absent 3 s later.
+   */
+  readonly stored: { role: string; content: string }[]
   /** The config change the daemon parked on, applied at turn end ([F10]). */
   pendingApply: (() => void) | null
   effort: string | null
@@ -81,13 +127,25 @@ export class FakeJcodeBridge {
   daemonAlive = true
   /** [F10]: hold every config reply until the in-flight turn ends. */
   parkConfigMidTurn = true
-  retentionPolicy: { archiveAfterDays?: number } | undefined | 'unset' = 'unset'
+  retentionPolicy: number | undefined | 'unset' = 'unset'
   readonly credentials = new Map<string, string>()
+  /** In-flight `play()` calls, so a harness can await quiescence instead of a wall clock. */
+  private readonly playing = new Set<Promise<void>>()
 
-  constructor(readonly options: FakeJcodeOptions = {}) {}
+  readonly options: FakeJcodeOptions
+
+  /* Declared, not a TypeScript parameter property: Node ≥ 24 runs `.ts` strip-only and cannot
+   * erase one, which would break `node src/cli.ts` and the spawned demo server. */
+  constructor(options: FakeJcodeOptions = {}) {
+    this.options = options
+  }
 
   readonly now = (): number => (this.options.now ?? Date.now)()
   readonly sleep = (ms: number): Promise<void> => (this.options.sleep ?? defaultSleep)(ms)
+
+  get bridgeCwd(): string {
+    return this.options.bridgeCwd ?? '/'
+  }
 
   record(type: string, sessionId: string | null, params: Record<string, unknown> = {}): void {
     this.calls.push({ type, sessionId, params, at: this.now() })
@@ -97,16 +155,22 @@ export class FakeJcodeBridge {
     return this.calls.filter((c) => c.type === type)
   }
 
-  createSession(workingDir: string, title?: string): FakeSession {
+  createSession(workingDir: string): FakeSession {
+    const generatedTitle = `fake-title-${this.counter + 1}`
     const sessionId = `fake-session-${++this.counter}`
     const session: FakeSession = {
       sessionId,
       workingDir,
-      title: title ?? null,
+      title: null,
+      generatedTitle,
       archived: false,
       turnInFlight: false,
       scripts: [],
-      transcript: [],
+      history: [],
+      /* jcode injects one of these on creation; it is what a fresh `peek_session` returns. */
+      stored: [
+        { role: 'user', content: '<system-reminder>\n# Session Context\n</system-reminder>' },
+      ],
       pendingApply: null,
       effort: null,
       model: null,
@@ -117,7 +181,7 @@ export class FakeJcodeBridge {
 
   require(sessionId: string): FakeSession {
     const session = this.sessions.get(sessionId)
-    if (session === undefined) throw new Error(`invalid_request: no session ${sessionId}`)
+    if (session === undefined) throw invalidRequest(`no session ${sessionId}`)
     return session
   }
 
@@ -153,28 +217,63 @@ export class FakeJcodeBridge {
     this.require(sessionId).scripts.push(turn)
   }
 
-  /** C12: kill the transport under a session. The stream ends; there is no replay (§5.4 #2). */
-  disconnect(sessionId: string, reason = 'instance died'): void {
+  /**
+   * C12: kill the transport under a session. The stream ends; there is no replay (§5.4 #2).
+   *
+   * There is **no `closed` event** on protocol v1 — the iterator simply ends — so the fake ends
+   * it rather than inventing a frame the real bridge never sends.
+   */
+  disconnect(sessionId: string, _reason = 'instance died'): void {
     const session = this.sessions.get(sessionId)
     if (session !== undefined) session.turnInFlight = false
-    this.emit(sessionId, { ev: 'closed', reason })
     for (const close of Array.from(this.closers.get(sessionId) ?? [])) close()
   }
 
   /** [F6]: an error frame with **no** `session_id`, delivered on one session's connection. */
-  emitError(sessionId: string, code: string, message: string): void {
+  emitError(sessionId: string, code: JcodeErrorCode, message: string): void {
     this.emit(sessionId, { ev: 'error', code, message })
   }
 
   /**
-   * The daemon dies while the bridge stays up ([F5], §13). Disk-served requests keep answering;
-   * only a `ping` naming an attached session may notice.
+   * The daemon dies while the bridge process stays up.
+   *
+   * Verified shape: `error{code:'internal', message:'daemon connection closed'}` on **every**
+   * attached connection, each connection then closed, and every subsequent request — including
+   * the ones [F5] believed were served from disk — failing. Nothing stays green.
    */
   killDaemon(): void {
     this.daemonAlive = false
+    for (const sessionId of Array.from(this.subscribers.keys())) {
+      this.emit(sessionId, { ev: 'error', code: 'internal', message: 'daemon connection closed' })
+    }
+    for (const sessionId of Array.from(this.closers.keys())) {
+      for (const close of Array.from(this.closers.get(sessionId) ?? [])) close()
+    }
   }
 
-  async play(sessionId: string, turn: ConformanceTurn): Promise<void> {
+  assertDaemon(): void {
+    if (!this.daemonAlive) throw daemonGone()
+  }
+
+  /**
+   * Resolves once every scripted turn this bridge is playing has finished.
+   *
+   * A **negative** claim about a stream ("no second turn ever ran") otherwise has to be made
+   * against a wall-clock window, which is a race the moment CI is loaded. This is the barrier
+   * that replaces it.
+   */
+  async quiesce(): Promise<void> {
+    while (this.playing.size > 0) await Promise.all(Array.from(this.playing))
+  }
+
+  play(sessionId: string, turn: ConformanceTurn): void {
+    const run = this.playTurn(sessionId, turn).finally(() => {
+      this.playing.delete(run)
+    })
+    this.playing.add(run)
+  }
+
+  private async playTurn(sessionId: string, turn: ConformanceTurn): Promise<void> {
     const session = this.sessions.get(sessionId)
     if (session === undefined) return
     await this.sleep(0)
@@ -182,18 +281,20 @@ export class FakeJcodeBridge {
     if (turn.text !== undefined) {
       await this.sleep(0)
       this.emit(sessionId, { ev: 'text_delta', session_id: sessionId, text: turn.text })
-      session.transcript.push({ role: 'assistant', content: turn.text })
+      session.history.push({ role: 'assistant', content: turn.text })
     }
     for (const tool of turn.tools ?? []) {
       await this.sleep(0)
       this.emit(sessionId, {
         ev: 'tool_start',
         session_id: sessionId,
-        id: tool.callId,
+        call_id: tool.callId,
         name: tool.name,
       })
       if (tool.input !== undefined) {
-        /* [F11]: the bridge hard-codes an EMPTY call id here, always. */
+        /* [F11]: the bridge was verified to hard-code an EMPTY call id here. Whether 0.67.0 still
+         * does is unreachable without a model turn, so the fake keeps emitting the empty one —
+         * the case the adapter's attribution exists for. */
         this.emit(sessionId, {
           ev: 'tool_input_delta',
           session_id: sessionId,
@@ -204,25 +305,20 @@ export class FakeJcodeBridge {
       this.emit(sessionId, {
         ev: 'tool_exec',
         session_id: sessionId,
-        id: tool.callId,
+        call_id: tool.callId,
         name: tool.name,
       })
       this.emit(sessionId, {
         ev: 'tool_done',
         session_id: sessionId,
-        id: tool.callId,
+        call_id: tool.callId,
         name: tool.name,
         output: '',
       })
     }
     if (turn.usage === true) {
       await this.sleep(0)
-      this.emit(sessionId, {
-        ev: 'usage',
-        session_id: sessionId,
-        input_tokens: 10,
-        output_tokens: 20,
-      })
+      this.emit(sessionId, { ev: 'token_usage', session_id: sessionId, input: 10, output: 20 })
     }
     if (turn.disconnectMidTurn === true) {
       await this.sleep(0)
@@ -247,6 +343,14 @@ export class FakeJcodeBridge {
   }
 }
 
+const infoOf = (session: FakeSession, status: string): JcodeSessionInfo => ({
+  sessionId: session.sessionId,
+  workingDir: session.workingDir,
+  status,
+  archived: session.archived,
+  /* Verified: 0.67.0 never populates `title` on `SessionInfo`, even right after a rename. */
+})
+
 /** One connection. `attachedSessionId` is the whole of §5.3's topology, made observable. */
 class FakeJcodeClient implements JcodeSdkClient {
   attachedSessionId: string | null = null
@@ -256,7 +360,13 @@ class FakeJcodeClient implements JcodeSdkClient {
   private ended = false
   private release: (() => void) | null = null
 
-  constructor(private readonly bridge: FakeJcodeBridge) {}
+  private readonly bridge: FakeJcodeBridge
+
+  /* Declared, not a TypeScript parameter property: Node ≥ 24 runs `.ts` strip-only and cannot
+   * erase one, which would break `node src/cli.ts` and the spawned demo server. */
+  constructor(bridge: FakeJcodeBridge) {
+    this.bridge = bridge
+  }
 
   private attach(sessionId: string): void {
     this.release?.()
@@ -274,7 +384,22 @@ class FakeJcodeClient implements JcodeSdkClient {
     )
   }
 
+  /**
+   * The attachment gate every session-scoped request but `peek_session` and `archive_session`
+   * passes through, with the bridge's verbatim refusal.
+   */
+  private scoped(sessionId: string): FakeSession {
+    this.bridge.assertDaemon()
+    if (this.attachedSessionId !== sessionId) {
+      throw unknownSession(this.attachedSessionId, sessionId)
+    }
+    return this.bridge.require(sessionId)
+  }
+
   events(): AsyncIterableIterator<JcodeApiEvent> {
+    /* The real SDK's `events()` registers `once('close')`, so on an already-closed client the
+     * iterator never settles. `sdk-transport.ts` mitigates that by returning a done iterator, and
+     * the fake matches the mitigated shape so both sides of the port behave alike. */
     const iterator: AsyncIterableIterator<JcodeApiEvent> = {
       [Symbol.asyncIterator]: () => iterator,
       next: async (): Promise<IteratorResult<JcodeApiEvent>> => {
@@ -296,55 +421,84 @@ class FakeJcodeClient implements JcodeSdkClient {
     return iterator
   }
 
-  createSession(req: { workingDir: string; title?: string }): Promise<{ sessionId: string }> {
+  /**
+   * On an **unattached** connection this creates a session. On an attached one it creates
+   * nothing and returns the attachment — verified, and the reason the adapter must never create
+   * on a shared connection.
+   */
+  createSession(req: { workingDir: string }): Promise<JcodeSessionInfo> {
     this.bridge.record('create_session', null, { ...req })
-    const session = this.bridge.createSession(req.workingDir, req.title)
-    /* [F5]: `create_session` and `attach_session` are the same branch — the creating connection
-     * becomes attached, and nothing can undo it. */
+    this.bridge.assertDaemon()
+    if (this.attachedSessionId !== null) {
+      const current = this.bridge.require(this.attachedSessionId)
+      return Promise.resolve(infoOf(current, 'idle'))
+    }
+    const session = this.bridge.createSession(req.workingDir)
+    /* [F5]: `create_session` attaches the creating connection, and nothing can undo it. */
     this.attach(session.sessionId)
-    return Promise.resolve({ sessionId: session.sessionId })
+    return Promise.resolve(infoOf(session, 'idle'))
   }
 
-  attachSession(sessionId: string): Promise<void> {
+  /**
+   * Never fails on an unknown id. With an attachment it answers the attachment; without one it
+   * **manufactures** a session in the bridge's cwd. Both look like success, which is why the
+   * adapter compares the returned id with the requested one.
+   */
+  attachSession(sessionId: string): Promise<JcodeSessionInfo> {
     this.bridge.record('attach_session', sessionId)
-    this.bridge.require(sessionId)
-    this.attach(sessionId)
-    return Promise.resolve()
+    this.bridge.assertDaemon()
+    const known = this.bridge.sessions.get(sessionId)
+    if (known !== undefined) {
+      this.attach(sessionId)
+      return Promise.resolve(infoOf(known, 'idle'))
+    }
+    if (this.attachedSessionId !== null) {
+      const current = this.bridge.require(this.attachedSessionId)
+      return Promise.resolve(infoOf(current, 'idle'))
+    }
+    const manufactured = this.bridge.createSession(this.bridge.bridgeCwd)
+    this.attach(manufactured.sessionId)
+    return Promise.resolve(infoOf(manufactured, 'idle'))
   }
 
   /** Resolves whether or not the ack arrives — the whole of [F2] in one line. */
   sendMessage(sessionId: string, text: string, options?: JcodeSendOptions): Promise<void> {
     this.bridge.record('send_message', sessionId, { text, ...(options ?? {}) })
-    const session = this.bridge.require(sessionId)
-    session.transcript.push({ role: 'user', content: text })
+    const session = this.scoped(sessionId)
+    /* The live transcript has it immediately; the stored tail never gets it (verified). */
+    session.history.push({ role: 'user', content: text })
     const script = session.scripts.shift() ?? {
       ack: true,
       text: 'ok',
       turnDone: options?.noReply !== true,
     }
     if (options?.noReply !== true) session.turnInFlight = true
-    /* A `noReply` message never starts a turn and never produces `turn_done` (#32). */
-    void this.bridge.play(sessionId, options?.noReply === true ? { ack: script.ack } : script)
+    /* A `noReply` message never starts a turn: no `message_accepted`, no `turn_done` (#32). */
+    if (options?.noReply !== true) this.bridge.play(sessionId, script)
     return Promise.resolve()
   }
 
   setModel(sessionId: string, model: string): Promise<void> {
     this.bridge.record('set_model', sessionId, { model })
-    const session = this.bridge.require(sessionId)
+    const session = this.scoped(sessionId)
+    if (model === '') return Promise.reject(invalidRequest('set_model needs a non-empty `model`'))
     return this.applyOrPark(session, () => {
       session.model = model
-      this.bridge.emit(sessionId, {
-        ev: 'model_info',
-        session_id: sessionId,
-        model,
-        solicited: true,
-      })
+      this.bridge.emit(sessionId, { ev: 'model_info', session_id: sessionId, model })
     })
   }
 
-  setReasoningEffort(sessionId: string, effort: string | null): Promise<void> {
+  /**
+   * `effort` is a required non-empty string on the wire — there is no "unset" — and the empty
+   * check is bridge-side, ahead of any provider lookup, so it is the one rejection reachable
+   * without credentials.
+   */
+  setReasoningEffort(sessionId: string, effort: string): Promise<void> {
     this.bridge.record('set_reasoning_effort', sessionId, { effort })
-    const session = this.bridge.require(sessionId)
+    const session = this.scoped(sessionId)
+    if (effort === '') {
+      return Promise.reject(invalidRequest('set_reasoning_effort needs a non-empty `effort`'))
+    }
     return this.applyOrPark(session, () => {
       session.effort = effort
     })
@@ -372,7 +526,7 @@ class FakeJcodeClient implements JcodeSdkClient {
 
   softInterrupt(sessionId: string, text: string, urgent?: boolean): Promise<void> {
     this.bridge.record('soft_interrupt', sessionId, { text, urgent: urgent === true })
-    this.bridge.require(sessionId)
+    this.scoped(sessionId)
     /* §5.4 #10: `soft_interrupt_injected` is NOT translated, so nothing is emitted and the
      * landing is permanently `'unconfirmed'`. */
     return Promise.resolve()
@@ -380,12 +534,14 @@ class FakeJcodeClient implements JcodeSdkClient {
 
   cancel(sessionId: string): Promise<void> {
     this.bridge.record('cancel', sessionId)
+    this.scoped(sessionId)
     this.bridge.endTurn(sessionId)
     return Promise.resolve()
   }
 
   cancelSoftInterrupts(sessionId: string): Promise<void> {
     this.bridge.record('cancel_soft_interrupts', sessionId)
+    this.scoped(sessionId)
     return Promise.resolve()
   }
 
@@ -395,8 +551,8 @@ class FakeJcodeClient implements JcodeSdkClient {
     options: { schema: unknown; maxRetries?: number },
   ): Promise<JcodeStructuredOutcome<T>> {
     this.bridge.record('run_structured', sessionId, { text, maxRetries: options.maxRetries ?? 2 })
-    const session = this.bridge.require(sessionId)
-    session.transcript.push({ role: 'user', content: text })
+    const session = this.scoped(sessionId)
+    session.history.push({ role: 'user', content: text })
     const raw = JSON.stringify({ score: 1, rationale: 'fake judge', failures: [] })
     return Promise.resolve({
       value: JSON.parse(raw) as T,
@@ -406,57 +562,92 @@ class FakeJcodeClient implements JcodeSdkClient {
     })
   }
 
-  /** Answered from disk — happily, with a dead daemon ([F5]). */
+  /**
+   * The **stored** tail: connection-agnostic, answers `[]` for an unknown id rather than failing,
+   * and does not carry what this session sent. Verified — and the reason `tail()` merges.
+   */
   peekSession(
     sessionId: string,
     limit: number,
   ): Promise<readonly { role: string; content: string }[]> {
     this.bridge.record('peek_session', sessionId, { limit })
-    const session = this.bridge.require(sessionId)
-    return Promise.resolve(session.transcript.slice(-limit).map((row) => ({ ...row })))
+    this.bridge.assertDaemon()
+    const session = this.bridge.sessions.get(sessionId)
+    if (session === undefined) return Promise.resolve([])
+    return Promise.resolve(session.stored.slice(-limit).map((row) => ({ ...row })))
+  }
+
+  /**
+   * The **live** transcript: attachment-scoped, and it flattens a block-array message to `''`
+   * ([F8], #45) — modelled here by carrying through whatever was pushed, including the `''` rows
+   * a test injects to exercise the flattening.
+   */
+  getHistory(sessionId: string): Promise<readonly { role: string; content: string }[]> {
+    this.bridge.record('get_history', sessionId)
+    const session = this.scoped(sessionId)
+    return Promise.resolve(session.history.map((row) => ({ ...row })))
   }
 
   listSessions(): Promise<readonly JcodeSessionInfo[]> {
     this.bridge.record('list_sessions', null)
+    this.bridge.assertDaemon()
     return Promise.resolve(
-      [...this.bridge.sessions.values()].map((session) => ({
-        sessionId: session.sessionId,
-        workingDir: session.workingDir,
-        /* The vocabulary lies: a running session reports `idle` (#18, §5.4 #4). */
-        status: 'idle',
-        archived: session.archived,
-        ...(session.title === null ? {} : { title: session.title }),
-      })),
+      [...this.bridge.sessions.values()].map((session) =>
+        /* The vocabulary lies: `list_sessions` says `attached` for a held session and never says
+         * whether a turn is running (#18, §5.4 #4). */
+        infoOf(session, session.sessionId === this.attachedSessionId ? 'attached' : 'idle'),
+      ),
     )
   }
 
+  /** Connection-agnostic, like `peekSession` (verified). */
   archiveSession(sessionId: string): Promise<void> {
     this.bridge.record('archive_session', sessionId)
+    this.bridge.assertDaemon()
     this.bridge.require(sessionId).archived = true
     return Promise.resolve()
   }
 
-  renameSession(sessionId: string, title: string | null): Promise<void> {
-    this.bridge.record('rename_session', sessionId, { title })
-    this.bridge.require(sessionId).title = title
+  /** `undefined` restores the generated title, and every rename emits `session_renamed`. */
+  renameSession(sessionId: string, title?: string): Promise<void> {
+    this.bridge.record('rename_session', sessionId, { title: title ?? null })
+    const session = this.scoped(sessionId)
+    session.title = title ?? null
+    this.bridge.emit(sessionId, {
+      ev: 'session_renamed',
+      session_id: sessionId,
+      ...(title === undefined ? {} : { title }),
+      display_title: title ?? session.generatedTitle,
+    })
     return Promise.resolve()
   }
 
-  setRetentionPolicy(policy: { archiveAfterDays?: number } | undefined): Promise<void> {
-    this.bridge.record('set_retention_policy', null, { policy: policy ?? null })
-    this.bridge.retentionPolicy = policy
+  setRetentionPolicy(archiveAfterDays?: number): Promise<void> {
+    this.bridge.record('set_retention_policy', null, { archiveAfterDays: archiveAfterDays ?? null })
+    this.bridge.assertDaemon()
+    if (archiveAfterDays !== undefined && (archiveAfterDays < 1 || archiveAfterDays > 36_500)) {
+      return Promise.reject(
+        invalidRequest('archive_after_days must be 1..=36500, or null to disable'),
+      )
+    }
+    this.bridge.retentionPolicy = archiveAfterDays
     return Promise.resolve()
   }
 
   setApiKey(provider: string, apiKey: string): Promise<void> {
     this.bridge.record('set_api_key', null, { provider })
-    if (!JCODE_PROVIDER_SET.has(provider)) return Promise.reject(new Error('invalid_request'))
+    this.bridge.assertDaemon()
+    if (!JCODE_PROVIDER_SET.has(provider)) {
+      return Promise.reject(invalidRequest(JCODE_UNSUPPORTED_PROVIDER_MESSAGE))
+    }
     this.bridge.credentials.set(provider, apiKey)
     return Promise.resolve()
   }
 
-  getRuntimeInfo(): Promise<JcodeRuntimeInfo> {
-    this.bridge.record('get_runtime_info', this.attachedSessionId)
+  /** Takes a session id and is attachment-scoped, like every other session-scoped request. */
+  getRuntimeInfo(sessionId: string): Promise<JcodeRuntimeInfo> {
+    this.bridge.record('get_runtime_info', sessionId)
+    this.scoped(sessionId)
     return Promise.resolve(
       this.bridge.options.runtimeInfo ?? {
         server: 'fake-bridge',
@@ -472,21 +663,19 @@ class FakeJcodeClient implements JcodeSdkClient {
             detail: 'fake',
           },
         ],
-        /* Hard-coded on the real one too, which is why [F14] drops it at the seam. */
+        /* Typed `healthy: true` on the real one too, which is why [F14] drops it at the seam. */
         healthy: true,
       },
     )
   }
 
   /**
-   * With **no** session id this is answered bridge-locally and proves nothing ([F5]) — it must
-   * keep resolving with a dead daemon, or a test could not tell the two pings apart. With one, it
-   * is a round trip to the daemon and fails when the daemon is gone.
+   * No session argument exists in protocol v1, and it is a real round trip: it fails once the
+   * daemon is gone, which is what makes it swarm's liveness probe.
    */
-  ping(sessionId?: string): Promise<void> {
-    this.bridge.record('ping', sessionId ?? null)
-    if (sessionId === undefined) return Promise.resolve()
-    if (!this.bridge.daemonAlive) return Promise.reject(new Error('daemon is not responding'))
+  ping(): Promise<void> {
+    this.bridge.record('ping', null)
+    if (!this.bridge.daemonAlive) return Promise.reject(daemonGone())
     return Promise.resolve()
   }
 
@@ -511,6 +700,9 @@ const JCODE_PROVIDER_SET: ReadonlySet<string> = new Set([
   'gemini',
   'jcode',
 ])
+
+const JCODE_UNSUPPORTED_PROVIDER_MESSAGE =
+  'unsupported API-key provider; supported: claude-api, openai-api, openrouter, cursor, gemini, jcode'
 
 export interface FakeJcodeTransport extends JcodeTransport {
   readonly bridge: FakeJcodeBridge

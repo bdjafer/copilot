@@ -56,6 +56,7 @@ import type { StreamEventDelivery, StreamSnapshotEvent } from './streams.ts'
 
 import { emptySpendCounters } from '../domain/budget.ts'
 import { checkEffortOnLadder, normalizeEffort, validateTurnDirective } from '../domain/directive.ts'
+import { ambientRoutesOf, honestyNotices } from '../domain/honesty.ts'
 import { bucketOf } from '../domain/rollup.ts'
 import { createEmitter } from '../emitter.ts'
 import { SwarmError } from '../errors.ts'
@@ -186,8 +187,38 @@ export function createSwarmClient(options: SwarmClientOptions): SwarmClient {
     const changed = projection.drain()
     if (changed.delegationsChanged) delegationsStore.set(projection.delegations())
     if (changed.fleetChanged) fleetStore.set(projection.fleet())
-    if (changed.healthChanged) healthStore.set(projection.health())
+    if (changed.healthChanged) {
+      healthStore.set(projection.health())
+      publishHonesty()
+    }
     if (changed.noticesChanged) noticesStore.set(projection.notices())
+  }
+
+  /**
+   * The in-product honesty surface (§10, release gate 10).
+   *
+   * Raised from health rather than from the handshake because two of the five statements are
+   * conditional on what the server actually reports — an ambient route like `chatgpt-web` can
+   * spend the user's quota from a home that inherited no credentials at all, and they should
+   * learn that from the product rather than from a bill. The ids are stable, so re-publishing on
+   * every health change replaces rather than accumulates.
+   */
+  const publishHonesty = (): void => {
+    const health = projection.health()
+    const notices = honestyNotices({
+      at: now(),
+      ambientRoutes: ambientRoutesOf(health.routes),
+      anyInheritedLogins: honestyOptions.anyInheritedLogins,
+      anySensitiveWorkspace: honestyOptions.anySensitiveWorkspace,
+    })
+    for (const notice of notices) projection.pushNotice(deepFreeze(notice))
+    noticesStore.set(projection.notices())
+  }
+
+  /* S8/S10/S11 inputs the client cannot read off the wire; a head supplies what it knows. */
+  const honestyOptions = {
+    anyInheritedLogins: options.inheritedLogins === true,
+    anySensitiveWorkspace: options.sensitiveWorkspace === true,
   }
 
   const pushNotice = (notice: NoticeVM): void => {
@@ -306,6 +337,30 @@ export function createSwarmClient(options: SwarmClientOptions): SwarmClient {
             { intent: 'sendTurn', label: 'Send anyway' },
             { intent: 'dismiss', label: 'Discard' },
           ],
+          dismissible: true,
+        }),
+      )
+    },
+    onRequestTimeout: (info) => {
+      /*
+       * The visible half of the reaper. Settling the promise stops the spinner; this is what
+       * tells the user *why* it stopped and offers the one action that helps. `delivery-unknown`
+       * is the honest kind: the request left, nothing came back, and whether the server acted on
+       * it is exactly what nobody knows — which is also why the retry is offered rather than
+       * performed (§2.5 rule 3 makes it safe, but §6.6's rule is that swarm does not decide for
+       * the user what to re-send).
+       */
+      pushNotice(
+        deepFreeze({
+          id: `request-timeout-${info.idempotencyKey}`,
+          kind: 'delivery-unknown',
+          severity: 'warn',
+          title: 'The server did not answer',
+          detail:
+            `\`${info.intent}\` was sent but nothing came back within ` +
+            `${Math.round(info.ageMs / 1000)}s. Whether it was applied is unknown.`,
+          at: now(),
+          actions: [{ intent: 'dismiss', label: 'Dismiss' }],
           dismissible: true,
         }),
       )

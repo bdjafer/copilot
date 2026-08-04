@@ -6,8 +6,9 @@
  * declares **and** against the jcode adapter over `fakeJcodeTransport()`". That second half is
  * the one that matters: the mock is a fiction swarm wrote, while the adapter is the code that
  * will meet the real bridge, and the fake reproduces the behaviours the spec cites source lines
- * for. The local jcode is 0.64.2 and has no `api-bridge`, so this is the only executable evidence
- * available until the version floor is crossed.
+ * for — every one of them re-verified against a live `jcode v0.67.0` `api-bridge` on 2026-08-04.
+ * This is the hermetic half of that evidence; `test/real-bridge.test.ts` is the half that runs
+ * against the binary itself under `SWARM_REAL_BRIDGE=1`.
  *
  * Node ≥ 24 (temp dirs for `JCODE_HOME`); testing-only.
  */
@@ -75,6 +76,9 @@ export function jcodeExecutorHarness(options: JcodeHarnessOptions = {}): JcodeHa
     },
     disconnect(session: ExecutorSessionHandle) {
       transport.bridge.disconnect(session.sessionId)
+    },
+    quiesce() {
+      return transport.bridge.quiesce()
     },
     dispose() {
       rmSync(home, { recursive: true, force: true })

@@ -16,6 +16,7 @@
     "@astrale-os/browser-copilot": "workspace:*",
     "@astrale-os/comment-core": "workspace:*",
     "@astrale-os/comment-ui": "workspace:*",
+    "@astrale-os/swarm": "workspace:*",
     "@webext-core/messaging": "^4.0.0",
     "zod": "^4.4.3"
   },

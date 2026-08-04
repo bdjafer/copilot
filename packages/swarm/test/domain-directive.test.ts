@@ -274,33 +274,62 @@ describe('§4.3.1–4.3.2 the cascade is non-sticky (Q4)', () => {
   })
 })
 
-describe('§4.1 the Anthropic effort ladder — deviation D3, pinned in both directions', () => {
+describe("§4.1 the Anthropic effort ladder — deviation D3, now filled from jcode's own table", () => {
   /*
-   * SPEC §11's worked example sends `{reasoningEffort:'max'}` to a delegation declared
-   * `provider:'anthropic', model:'claude-opus-5'` and reads back `effective.reasoningEffort ===
-   * 'max'`. This build refuses it in the client core with `unknown_effort` and ZERO frames,
-   * because `ANTHROPIC_EXTENDED_EFFORT_MODELS` is empty until an id is read from jcode's
-   * capability table rather than guessed (D3).
+   * D3 shipped `ANTHROPIC_EXTENDED_EFFORT_MODELS` **empty**, which made §11's worked example
+   * (`{reasoningEffort:'max'}` on `claude-opus-5`) fail in the client core with `unknown_effort`
+   * and zero frames. That was the safe direction while the table was a guess, and the note said
+   * so: filling it is the whole fix.
    *
-   * The divergence is deliberate and it is the safe direction — the alternative accepts an
-   * unverified effort through three layers of validation on the strength of a guess — but it was
-   * untested in EITHER direction, so nothing said whether a future change to the table was a fix
-   * or a regression. These two cases are that statement.
+   * It is now filled from the shipped `jcode v0.67.0 (156ae4092)` binary — see the four quoted
+   * source strings on the constant. These cases pin both halves: what the table grants, and what
+   * it deliberately withholds.
    */
-  it("refuses §11's `max` on claude-opus-5 while the extension table is empty (D3)", () => {
-    expect(ANTHROPIC_EXTENDED_EFFORT_MODELS).toEqual([])
-    expect(effortLadder('anthropic', 'claude-opus-5')).toEqual(['none', 'low', 'medium', 'high'])
-    expect(checkEffortOnLadder('anthropic', 'claude-opus-5', 'max')?.code).toBe('unknown_effort')
-    /* And `minimal` too: the Anthropic ladder notably has none (§4.1). */
+  it("accepts §11's `max` on claude-opus-5, which is what filling the table was for", () => {
+    expect(ANTHROPIC_EXTENDED_EFFORT_MODELS).toContain('claude-opus-5')
+    expect(effortLadder('anthropic', 'claude-opus-5')).toEqual([
+      'none',
+      'low',
+      'medium',
+      'high',
+      'xhigh',
+      'max',
+    ])
+    expect(checkEffortOnLadder('anthropic', 'claude-opus-5', 'max')).toBeNull()
+    expect(checkEffortOnLadder('anthropic', 'claude-opus-5', 'xhigh')).toBeNull()
+  })
+
+  it('still has no `minimal`: the Anthropic ladder never gains one (§4.1)', () => {
+    /* jcode's own config template: "Anthropic reasoning effort for Claude reasoning models
+     * (none|low|medium|high|xhigh|max)" — no `minimal` anywhere in it. */
     expect(checkEffortOnLadder('anthropic', 'claude-opus-5', 'minimal')?.code).toBe(
       'unknown_effort',
     )
+    expect(EFFORT_LADDERS.anthropic).not.toContain('minimal')
   })
 
-  it('accepts it the moment the model is added to the table, so filling it is the whole fix', () => {
-    /* The table is data precisely so this is a one-line change and not a code change. */
-    const extended = [...EFFORT_LADDERS.anthropic, 'xhigh', 'max']
-    expect(extended).toContain('max')
-    expect(checkEffortOnLadder('anthropic', 'claude-opus-5', 'high')).toBeNull()
+  it('grants the extension to exactly the four attested ids, and no others', () => {
+    /* "available on Opus 4.7+, Sonnet 5+, and Fable 5+" — the runtime refusal string. */
+    expect([...ANTHROPIC_EXTENDED_EFFORT_MODELS].sort()).toEqual([
+      'claude-fable-5',
+      'claude-opus-4-8',
+      'claude-opus-5',
+      'claude-sonnet-5',
+    ])
+  })
+
+  it('withholds it from 4.6, which gets `max` from jcode but NOT `xhigh` (the intersection rule)', () => {
+    /*
+     * The template splits the two: "xhigh needs Opus 4.7/4.8 or Fable 5; max needs an
+     * output_config effort model (Opus/Sonnet 4.6+)". One constant grants both, so it can only
+     * hold the intersection. Including 4.6 would hand `xhigh` to a model whose own error message
+     * says it is unsupported — and D3's bias is to refuse a value jcode might accept rather than
+     * to send one it will certainly refuse.
+     */
+    for (const model of ['claude-opus-4-6', 'claude-sonnet-4-6', 'claude-opus-4-5']) {
+      expect(effortLadder('anthropic', model)).toEqual(['none', 'low', 'medium', 'high'])
+      expect(checkEffortOnLadder('anthropic', model, 'xhigh')?.code).toBe('unknown_effort')
+      expect(checkEffortOnLadder('anthropic', model, 'max')?.code).toBe('unknown_effort')
+    }
   })
 })

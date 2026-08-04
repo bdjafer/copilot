@@ -75,7 +75,13 @@ export interface ResolvedWorkspace {
 }
 
 export class WorkspaceGuard {
-  constructor(private registrations: readonly WorkspaceRegistration[]) {}
+  private registrations: readonly WorkspaceRegistration[]
+
+  /* Declared, not a TypeScript parameter property: Node ≥ 24 runs `.ts` strip-only and cannot
+   * erase one, which would break `node src/cli.ts` and the spawned demo server. */
+  constructor(registrations: readonly WorkspaceRegistration[]) {
+    this.registrations = registrations
+  }
 
   update(registrations: readonly WorkspaceRegistration[]): void {
     this.registrations = registrations

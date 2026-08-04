@@ -48,11 +48,12 @@ describe('package wiring — the root gate must see this package', () => {
     expect(pkg.scripts.build).toBe('wxt build')
   })
 
-  it('depends on all three workspace packages plus the provider', () => {
+  it('depends on all four workspace packages plus the provider', () => {
     for (const name of [
       '@astrale-os/comment-core',
       '@astrale-os/comment-ui',
       '@astrale-os/browser-copilot',
+      '@astrale-os/swarm',
     ]) {
       expect(pkg.dependencies[name]).toBe('workspace:*')
     }
@@ -80,7 +81,15 @@ describe('manifest', () => {
   })
 
   it('grants the Anthropic host permission that makes the direct call CORS-free', () => {
-    expect(manifest.host_permissions).toEqual(['https://api.anthropic.com/*'])
+    expect(manifest.host_permissions).toContain('https://api.anthropic.com/*')
+  })
+
+  it('grants both loopback spellings, which is what `POST /pair` needs to bypass CORS', () => {
+    // SPEC-swarm §2.1 accepts a `Host` of exactly `127.0.0.1:<port>` or `localhost:<port>`, and
+    // the server sends no `Access-Control-Allow-Origin`. Declaring one spelling and not the other
+    // leaves half the users staring at a CORS failure with no visible cause.
+    expect(manifest.host_permissions).toContain('http://127.0.0.1/*')
+    expect(manifest.host_permissions).toContain('http://localhost/*')
   })
 
   it('declares the two placement commands, since a command cannot bind a bare letter', () => {
@@ -109,7 +118,8 @@ describe('the built extension (when a build is present)', () => {
     })
     expect(built!.options_ui).toBeTruthy()
     expect(built!.permissions).toContain('alarms')
-    expect(built!.host_permissions).toEqual(['https://api.anthropic.com/*'])
+    expect(built!.host_permissions).toContain('https://api.anthropic.com/*')
+    expect(built!.host_permissions).toContain('http://127.0.0.1/*')
   })
 })
 
@@ -133,6 +143,16 @@ describe('platform boundary', () => {
       .filter((file) =>
         /\b(chrome|browser)\s*\.\s*(storage|runtime|tabs|alarms|commands)\b/.test(code(file)),
       )
+    expect(offenders).toEqual([])
+  })
+
+  it('the swarm head names no DOM global either — the Document arrives as a parameter', () => {
+    // The renderer builds nodes from `host.root.ownerDocument` (SPEC-swarm §6.8's `SwarmHost`),
+    // which is what lets the whole head — pairing, projection, every surface — run in vitest with
+    // nothing stubbed. `entrypoints/swarm/main.ts` is the one place allowed to reach for a global.
+    const offenders = walk('src/swarm').filter((file) =>
+      /(^|[^.\w])(document|window|WebSocket|fetch)\s*[.(]/.test(code(file)),
+    )
     expect(offenders).toEqual([])
   })
 

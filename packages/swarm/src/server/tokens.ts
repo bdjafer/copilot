@@ -103,7 +103,12 @@ export class TokenStore {
   private readonly random: (n: number) => Uint8Array
   private readonly ratePerMinute: number
 
-  constructor(private readonly options: TokenStoreOptions) {
+  private readonly options: TokenStoreOptions
+
+  /* Declared, not a TypeScript parameter property: Node ≥ 24 runs `.ts` strip-only and cannot
+   * erase one, which would break `node src/cli.ts` and the spawned demo server. */
+  constructor(options: TokenStoreOptions) {
+    this.options = options
     this.now = options.now ?? Date.now
     this.random = options.random ?? randomBytes
     this.ratePerMinute = options.pairRatePerMinute ?? 20

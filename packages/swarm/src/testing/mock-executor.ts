@@ -89,6 +89,35 @@ export interface MockTurnScript {
   readonly steps?: readonly MockStep[]
 }
 
+/**
+ * One ordered entry per call that actually reached the backend, appended by `MockSession`.
+ *
+ * This exists because the *order* of `applyConfig` and `submit` is §4.2's normative submission
+ * sequence — "`setModel` → `setReasoningEffort` → persist → send" — and nothing in the suite could
+ * see it. A mutation that deleted the `applyConfig` call from the engine outright left 853 tests
+ * green: the effort beats all read `turn.effective.reasoningEffort` off the projected `TurnVM`,
+ * which is `effectiveTurnConfig`'s pure output over `(directive, delegation defaults)` — the
+ * record, never the executor. A record is what swarm *declared*; this log is what it *did*.
+ */
+export type MockExecutorCall =
+  | {
+      readonly k: 'applyConfig'
+      readonly sessionId: string
+      readonly patch: SessionConfigPatch
+    }
+  | {
+      readonly k: 'submit'
+      readonly sessionId: string
+      readonly text: string
+      readonly contextOnly: boolean
+    }
+  | { readonly k: 'structured'; readonly sessionId: string; readonly text: string }
+  | {
+      readonly k: 'interrupt'
+      readonly sessionId: string
+      readonly kind: 'soft' | 'urgent' | 'cancel' | 'retract'
+    }
+
 export interface MockExecutorOptions {
   readonly capabilities?: Partial<ExecutorCapabilities>
   readonly preflight?: PreflightReport
@@ -127,7 +156,13 @@ class EventChannel {
   }>()
   private ended = false
 
-  constructor(private readonly replay: boolean) {}
+  private readonly replay: boolean
+
+  /* Declared, not a TypeScript parameter property: Node ≥ 24 runs `.ts` strip-only and cannot
+   * erase one, which would break `node src/cli.ts` and the spawned demo server. */
+  constructor(replay: boolean) {
+    this.replay = replay
+  }
 
   emit(event: ExecutorEvent): void {
     if (this.ended) return
@@ -219,14 +254,21 @@ class MockSession implements ExecutorSessionHandle {
   closed = false
   archived = false
   title: string | null
+  readonly workingDir: string
+  private readonly instance: MockInstance
 
+  /* Declared fields rather than TypeScript parameter properties: Node ≥ 24 runs `.ts` strip-only,
+   * and a parameter property cannot be erased — one of them anywhere in the graph breaks
+   * `node src/testing/node/serve-mock.ts`, which is what the demo and the spawned e2e run. */
   constructor(
     sessionId: string,
-    readonly workingDir: string,
+    workingDir: string,
     title: string | undefined,
-    private readonly instance: MockInstance,
+    instance: MockInstance,
   ) {
     this.sessionId = sessionId
+    this.workingDir = workingDir
+    this.instance = instance
     this.title = title ?? null
     this.channel = new EventChannel(instance.capabilities.nativeReplay)
   }
@@ -266,6 +308,9 @@ class MockSession implements ExecutorSessionHandle {
        */
       return Promise.reject(new SwarmError('turn_in_flight', 'a turn is in flight'))
     }
+    /* Recorded only once the guards pass: a refused mid-turn set is a call the backend never
+     * received, and §13's "ZERO executor calls" gate means exactly that. */
+    this.instance.calls.push({ k: 'applyConfig', sessionId: this.sessionId, patch })
     const applied: ('model' | 'reasoningEffort')[] = []
     const confirmed: ('model' | 'reasoningEffort')[] = []
     const refused: { field: string; reason: string }[] = []
@@ -284,7 +329,16 @@ class MockSession implements ExecutorSessionHandle {
       }
     }
     if (patch.reasoningEffort !== undefined) {
-      if (refusals.includes('reasoningEffort')) {
+      /* Byte-for-byte the jcode adapter's rule (executor/jcode.ts): there is no "unset" on the
+       * wire — `effort` is a required non-empty string and the bridge refuses an empty one before
+       * any provider lookup — so `null` ("no effort is driven") is refused `no_effort_to_set`.
+       * Accepting it here is how the CRITICAL pre-flight refusal of a `reasoningEffort: null`
+       * delegation stayed invisible to 853 mock-backed tests: the mock claimed `applied` for a
+       * call the real adapter refuses. A mock that is kinder than the thing it stands in for is
+       * not a mock. */
+      if (patch.reasoningEffort === null) {
+        refused.push({ field: 'reasoningEffort', reason: 'no_effort_to_set' })
+      } else if (refusals.includes('reasoningEffort')) {
         refused.push({ field: 'reasoningEffort', reason: 'invalid_request' })
       } else {
         this.shadow.reasoningEffort = patch.reasoningEffort
@@ -324,6 +378,12 @@ class MockSession implements ExecutorSessionHandle {
       if (previous !== undefined) return previous
     }
 
+    this.instance.calls.push({
+      k: 'submit',
+      sessionId: this.sessionId,
+      text: msg.text,
+      contextOnly: msg.contextOnly === true,
+    })
     this.transcript.push({ role: 'user', content: msg.text })
     const script = this.scripts.shift() ?? this.defaultScript(msg)
     const awaitAckMs = msg.awaitAckMs ?? DEFAULT_TIMEOUTS.acceptTimeoutMs
@@ -337,7 +397,12 @@ class MockSession implements ExecutorSessionHandle {
     )
 
     if (msg.contextOnly !== true) this.turnInFlight = true
-    void this.play(script, msg)
+    /* Tracked, not fire-and-forget: `quiesce()` is what lets a negative claim about this stream
+     * be made without a wall-clock window. */
+    const run = this.play(script, msg).finally(() => {
+      this.instance.playing.delete(run)
+    })
+    this.instance.playing.add(run)
 
     const ack = await observed
     const receipt: SubmitReceipt =
@@ -468,6 +533,7 @@ class MockSession implements ExecutorSessionHandle {
     if ((kind === 'soft' || kind === 'urgent') && !this.capabilities.softInterrupt) {
       return Promise.reject(new SwarmError('capability_absent', 'no soft interrupt'))
     }
+    this.instance.calls.push({ k: 'interrupt', sessionId: this.sessionId, kind })
     if (kind === 'cancel') {
       this.turnInFlight = false
       this.channel.emit({ k: 'turn_done' })
@@ -494,6 +560,7 @@ class MockSession implements ExecutorSessionHandle {
     if (!this.capabilities.structuredOutput) {
       throw new SwarmError('capability_absent', 'this executor has no structured output')
     }
+    this.instance.calls.push({ k: 'structured', sessionId: this.sessionId, text: msg.text })
     this.transcript.push({ role: 'user', content: msg.text })
     const raw = [JSON.stringify({ ok: true })]
     return {
@@ -534,17 +601,34 @@ class MockSession implements ExecutorSessionHandle {
 class MockInstance implements ExecutorInstance {
   readonly adapterId: AdapterId = 'mock'
   readonly sessions = new Map<string, MockSession>()
+  /** In-flight `play()` calls; drained by `MockExecutor.quiesce()`. */
+  readonly playing = new Set<Promise<void>>()
   private readonly fences = new Map<string, number>()
   private sessionCounter = 0
   private disposed = false
   readonly credentials = new Map<InstanceCredentialProvider, string>()
 
+  readonly key: InstanceKey
+  readonly options: MockExecutorOptions
+  readonly capabilities: ExecutorCapabilities
+  readonly instanceOptions: InstanceOptions
+  /** Shared with the owning `MockExecutor`, so the order across instances is one timeline. */
+  readonly calls: MockExecutorCall[]
+
+  /* Not parameter properties — see `MockSession`. */
   constructor(
-    readonly key: InstanceKey,
-    readonly options: MockExecutorOptions,
-    readonly capabilities: ExecutorCapabilities,
-    readonly instanceOptions: InstanceOptions,
-  ) {}
+    key: InstanceKey,
+    options: MockExecutorOptions,
+    capabilities: ExecutorCapabilities,
+    instanceOptions: InstanceOptions,
+    calls: MockExecutorCall[],
+  ) {
+    this.key = key
+    this.options = options
+    this.capabilities = capabilities
+    this.instanceOptions = instanceOptions
+    this.calls = calls
+  }
 
   get pgid(): number | null {
     return this.options.pgid === undefined ? 4242 : this.options.pgid
@@ -668,7 +752,36 @@ export class MockExecutor implements ExecutorAdapter {
   readonly capabilities: ExecutorCapabilities
   private readonly instances = new Map<InstanceKey, MockInstance>()
 
-  constructor(readonly options: MockExecutorOptions = {}) {
+  /**
+   * Resolves once no scripted turn is in flight anywhere on this adapter.
+   *
+   * A **negative** claim about a stream — "no second turn ever ran" — otherwise has to be made
+   * against a wall-clock window, and a window is a race the moment CI is loaded. This is the
+   * barrier that replaces it: it settles on a fact about the backend rather than on scheduling
+   * luck.
+   */
+  async quiesce(): Promise<void> {
+    for (;;) {
+      const inFlight = [...this.instances.values()].flatMap((i) => [...i.playing])
+      if (inFlight.length === 0) return
+      await Promise.all(inFlight)
+    }
+  }
+
+  readonly options: MockExecutorOptions
+
+  /**
+   * Every call that reached this adapter, in order, across all its instances and sessions.
+   *
+   * Test-only and not part of the `ExecutorAdapter` seam. Read it to assert what swarm **did** —
+   * §4.2's config-before-send sequence in particular — rather than what it recorded.
+   */
+  readonly calls: MockExecutorCall[] = []
+
+  /* Declared, not a TypeScript parameter property: Node ≥ 24 runs `.ts` strip-only and cannot
+   * erase one, which would break `node src/cli.ts` and the spawned demo server. */
+  constructor(options: MockExecutorOptions = {}) {
+    this.options = options
     this.capabilities = { ...MOCK_DEFAULT_CAPABILITIES, ...options.capabilities }
   }
 
@@ -687,7 +800,7 @@ export class MockExecutor implements ExecutorAdapter {
   acquireInstance(key: InstanceKey, opts: InstanceOptions): Promise<ExecutorInstance> {
     const existing = this.instances.get(key)
     if (existing !== undefined) return Promise.resolve(existing)
-    const instance = new MockInstance(key, this.options, this.capabilities, opts)
+    const instance = new MockInstance(key, this.options, this.capabilities, opts, this.calls)
     this.instances.set(key, instance)
     return Promise.resolve(instance)
   }

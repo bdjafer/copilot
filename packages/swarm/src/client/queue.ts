@@ -16,6 +16,14 @@
  *     instruction to be wrong; sending it silently is the one failure the notice exists to stop.
  *     The intent is refused rather than left pending, because `NoticeVM.actions` is how a head
  *     offers "send it anyway" and that action *is* a fresh `sendTurn`.
+ *  4. **A sent `req` that is never answered is reaped at `requestTimeoutMs`.** Rules 1–3 all
+ *     assume a frame eventually arrives; nothing settled the case where one never does. A server
+ *     that accepts the frame and then answers neither `res` nor `err` — a wedged handler, a
+ *     dropped reply, a crash between write and flush — left the promise pending forever, the head
+ *     spinning, and `inspect().pending` holding a row that no surface could explain. The reaper
+ *     settles it with a visible `timeout` error and counts it, so "nothing happened" becomes
+ *     something the user and the counters can both see. It is `retryable`: rule 1's idempotency
+ *     key makes the re-send safe by construction.
  *
  * A `bye{retryAfterMs}` suppresses rule 1 until the next `hello_ok` (§2.5 rule 3): re-sending
  * into a server that is closing is how a mutation is attempted twice.
@@ -32,6 +40,7 @@ import { SERVER_POLICY } from '../domain/constants.ts'
 import { SwarmError as SwarmErrorClass, swarmErrorFromWire } from '../errors.ts'
 import { SWARM_PROTOCOL, SWARM_PROTOCOL_VERSION } from '../protocol/frames.ts'
 import { decodeIntentResponse } from '../protocol/intents.ts'
+import { type CancelTimer, NOOP_CANCEL, scheduleAfter } from './timers.ts'
 
 const envelope = { p: SWARM_PROTOCOL, v: SWARM_PROTOCOL_VERSION } as const
 
@@ -57,6 +66,8 @@ interface PendingRequest {
   readonly idempotencyKey: string
   readonly expectedVersion: number | undefined
   sentAt: number
+  /** Cleared on every settle path, so a reaped id can never be settled twice. */
+  cancelReaper: CancelTimer
   readonly settle: (result: IntentResult<unknown>) => void
 }
 
@@ -77,6 +88,17 @@ export interface IntentQueueOptions {
   onUnattributedError(error: SwarmError): void
   /** A queued turn aged past `staleQueuedTurnMs` at flush time (§6.6). */
   onStaleQueuedTurn(info: { readonly idempotencyKey: string; readonly ageMs: number }): void
+  /**
+   * A sent request went unanswered past `requestTimeoutMs`. The head gets a notice; the promise
+   * is already settled with the same error by the time this runs.
+   */
+  onRequestTimeout?(info: {
+    readonly intent: IntentName
+    readonly idempotencyKey: string
+    readonly ageMs: number
+  }): void
+  /** Overridable so a test can drive the reaper without waiting a real minute. */
+  readonly requestTimeoutMs?: number
   /** `pendingIntents` or `queuedOffline` changed. */
   onChange(): void
 }
@@ -103,7 +125,66 @@ export interface IntentQueue {
 export function createIntentQueue(options: IntentQueueOptions): IntentQueue {
   const pending = new Map<number, PendingRequest>()
   const offline: QueuedRequest[] = []
-  const counters = { sent: 0, resent: 0, queued: 0, drained: 0, held: 0, answered: 0, refused: 0 }
+  const counters = {
+    sent: 0,
+    resent: 0,
+    queued: 0,
+    drained: 0,
+    held: 0,
+    answered: 0,
+    refused: 0,
+    /** Rule 4: sent, never answered, reaped. Visible in `inspect().counters`. */
+    timedOut: 0,
+  }
+  const requestTimeoutMs = options.requestTimeoutMs ?? SERVER_POLICY.requestTimeoutMs
+
+  /** Settle a pending request exactly once, cancelling its reaper first. */
+  const resolvePending = (request: PendingRequest, result: IntentResult<unknown>): void => {
+    request.cancelReaper()
+    request.cancelReaper = NOOP_CANCEL
+    pending.delete(request.id)
+    request.settle(result)
+  }
+
+  /**
+   * Arm the deadline for one request.
+   *
+   * Re-armed on every (re-)send rather than measured from the first: a resend after a reconnect is
+   * a fresh attempt at a fresh server, and reaping it on the original clock would time out a
+   * request that had barely been asked.
+   */
+  const armReaper = (request: PendingRequest): void => {
+    request.cancelReaper()
+    request.cancelReaper = scheduleAfter(requestTimeoutMs, () => {
+      /* Already answered — the reaper lost the race, which is the normal case. */
+      if (pending.get(request.id) !== request) return
+      const ageMs = options.now() - request.sentAt
+      counters.timedOut += 1
+      resolvePending(request, {
+        ok: false,
+        error: new SwarmErrorClass(
+          'timeout',
+          `${request.intent} was not answered within ${Math.round(requestTimeoutMs / 1000)}s`,
+          {
+            /* Safe by construction: §2.5 rule 3's cache replays the original response for this
+             * same `idempotencyKey`, so a retry cannot become a second mutation. */
+            retryable: true,
+            details: {
+              intent: request.intent,
+              idempotencyKey: request.idempotencyKey,
+              ageMs,
+            },
+          },
+        ),
+      })
+      options.onRequestTimeout?.({
+        intent: request.intent,
+        idempotencyKey: request.idempotencyKey,
+        ageMs,
+      })
+      options.onChange()
+    })
+  }
 
   const writeReq = (request: PendingRequest): boolean => {
     const frame: ClientFrame = {
@@ -126,7 +207,7 @@ export function createIntentQueue(options: IntentQueueOptions): IntentQueue {
     raw: unknown,
   ): void => {
     if (body === null) {
-      request.settle({
+      resolvePending(request, {
         ok: false,
         error: new SwarmErrorClass(
           'internal',
@@ -136,7 +217,7 @@ export function createIntentQueue(options: IntentQueueOptions): IntentQueue {
       })
       return
     }
-    request.settle({ ok: true, value: body.value, version: body.version })
+    resolvePending(request, { ok: true, value: body.value, version: body.version })
   }
 
   return {
@@ -151,11 +232,13 @@ export function createIntentQueue(options: IntentQueueOptions): IntentQueue {
             idempotencyKey: request.idempotencyKey,
             expectedVersion: request.expectedVersion,
             sentAt: at,
+            cancelReaper: NOOP_CANCEL,
             settle: resolve,
           }
           if (writeReq(entry)) {
             pending.set(entry.id, entry)
             counters.sent += 1
+            armReaper(entry)
             options.onChange()
             return
           }
@@ -179,7 +262,6 @@ export function createIntentQueue(options: IntentQueueOptions): IntentQueue {
     handleRes(frame) {
       const request = pending.get(frame.id)
       if (!request) return false
-      pending.delete(frame.id)
       counters.answered += 1
       settleFromResponse(request, decodeIntentResponse(frame.data), frame.data)
       options.onChange()
@@ -193,9 +275,8 @@ export function createIntentQueue(options: IntentQueueOptions): IntentQueue {
       }
       const request = pending.get(frame.id)
       if (!request) return false
-      pending.delete(frame.id)
       counters.refused += 1
-      request.settle({ ok: false, error: swarmErrorFromWire(frame) })
+      resolvePending(request, { ok: false, error: swarmErrorFromWire(frame) })
       options.onChange()
       return true
     },
@@ -204,7 +285,11 @@ export function createIntentQueue(options: IntentQueueOptions): IntentQueue {
       if (!resendSuppressed) {
         for (const request of [...pending.values()].sort((a, b) => a.id - b.id)) {
           request.sentAt = options.now()
-          if (writeReq(request)) counters.resent += 1
+          if (writeReq(request)) {
+            counters.resent += 1
+            /* A resend is a fresh ask: the deadline restarts with it. */
+            armReaper(request)
+          }
         }
       }
 
@@ -241,6 +326,7 @@ export function createIntentQueue(options: IntentQueueOptions): IntentQueue {
           idempotencyKey: head.idempotencyKey,
           expectedVersion: head.expectedVersion,
           sentAt: options.now(),
+          cancelReaper: NOOP_CANCEL,
           settle: head.settle,
         }
         if (!writeReq(entry)) break
@@ -248,12 +334,16 @@ export function createIntentQueue(options: IntentQueueOptions): IntentQueue {
         pending.set(entry.id, entry)
         counters.drained += 1
         counters.sent += 1
+        armReaper(entry)
       }
       options.onChange()
     },
 
     abortAll(error) {
       const outstanding = [...pending.values()]
+      /* Every reaper dies with its request, or a destroyed client keeps a timer alive and fires
+       * a timeout into a promise that was already settled by the abort. */
+      for (const request of outstanding) request.cancelReaper()
       pending.clear()
       const queued = offline.splice(0, offline.length)
       for (const request of outstanding) request.settle({ ok: false, error })

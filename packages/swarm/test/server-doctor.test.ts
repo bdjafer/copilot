@@ -9,7 +9,7 @@
  * injected probe would assert the parser, which `server-jcode.test.ts` already does.
  */
 
-import { chmodSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
+import { chmodSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, describe, expect, it } from 'vitest'
@@ -117,5 +117,34 @@ describe('§13 `swarm doctor` — exit 0 healthy / 1 blocked / 2 degraded', () =
     expect(code).toBe(1)
     expect(Date.now() - started).toBeLessThan(2_000)
     expect(lines.join('\n')).toContain('jcode update')
+  })
+})
+
+describe('`swarm help` names every verb the CLI actually implements', () => {
+  /*
+   * The usage block is the only discovery surface the binary has, and it drifts silently: `cancel`
+   * has been a real verb since the intent existed and was missing from `--help` the whole time, so
+   * the one destructive-adjacent command in the product was undiscoverable from the product.
+   *
+   * Read out of the source rather than a hand-kept list, so a verb added tomorrow is covered by
+   * this test on the day it is added.
+   */
+  it('lists every `case` in the verb switch, and invents none', async () => {
+    const source = readFileSync(new URL('../src/cli/index.ts', import.meta.url).pathname, 'utf8')
+    const body = source.slice(source.indexOf('switch (parsed.verb)'))
+    const implemented = new Set(
+      [...body.matchAll(/^\s{4}case '([a-z]+)':/gm)].map((match) => match[1]!),
+    )
+    implemented.delete('help')
+    expect(implemented.size).toBeGreaterThan(10)
+
+    const { io: sink, lines } = io()
+    expect(await runCli(['help'], { io: sink })).toBe(0)
+    const usage = lines.join('\n')
+
+    const missing = [...implemented]
+      .filter((verb) => !new RegExp(`(^|[\\s|])${verb}([\\s|]|$)`, 'm').test(usage))
+      .sort()
+    expect(missing).toEqual([])
   })
 })

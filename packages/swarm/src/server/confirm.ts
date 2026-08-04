@@ -45,7 +45,12 @@ export class ConfirmationRegistry {
   private readonly now: () => number
   private readonly ttlMs: number
 
-  constructor(private readonly options: ConfirmationRegistryOptions = {}) {
+  private readonly options: ConfirmationRegistryOptions
+
+  /* Declared, not a TypeScript parameter property: Node ≥ 24 runs `.ts` strip-only and cannot
+   * erase one, which would break `node src/cli.ts` and the spawned demo server. */
+  constructor(options: ConfirmationRegistryOptions = {}) {
+    this.options = options
     this.now = options.now ?? Date.now
     this.ttlMs = options.ttlMs ?? DEFAULT_TIMEOUTS.confirmationTtlMs
   }

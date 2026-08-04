@@ -285,7 +285,12 @@ export class SwarmEngine {
   private readonly ids: () => string
   private readonly sleep: (ms: number) => Promise<void>
 
-  constructor(private readonly options: SwarmEngineOptions) {
+  private readonly options: SwarmEngineOptions
+
+  /* Declared, not a TypeScript parameter property: Node ≥ 24 runs `.ts` strip-only and cannot
+   * erase one, which would break `node src/cli.ts` and the spawned demo server. */
+  constructor(options: SwarmEngineOptions) {
+    this.options = options
     this.store = options.store
     this.config = options.config
     this.adapter = options.adapter
@@ -345,6 +350,7 @@ export class SwarmEngine {
     this.dispatchPausedFleet =
       this.store.read((tx) => tx.getRecord<ServerFlags>('server_flags', 'dispatch')?.value)
         ?.dispatchPausedFleet ?? false
+    this.recoverChannelsFromBoot()
     if (options.autoTick !== false) {
       this.timer = setInterval(() => {
         void this.tick()
@@ -354,6 +360,54 @@ export class SwarmEngine {
       }, 1_000)
       this.timer.unref?.()
     }
+  }
+
+  /**
+   * The crash analogue of `sampleClock`'s asleep branch: a channel record that outlived the
+   * process that was driving it is a **claim about a connection that does not exist**.
+   *
+   * `this.live` is memory. After a `SIGKILL` the durable record still says whatever the channel
+   * was at the instant of the kill — `submitting`, `accepted`, `streaming` — and nothing moved it,
+   * because the only movers are executor events on a stream that died with the process. A head
+   * reconnecting to the restarted server therefore read "sending…" for a session no process holds,
+   * which is the precise shape of the "did my message land?" spinner §5.5 exists to abolish.
+   *
+   * The rules are the same ones the sleep path already applies, for the same reason: every live
+   * channel goes to `disconnected` (C12), an in-flight turn becomes `unknown` — never `failed`,
+   * which would assert a non-delivery swarm cannot observe (V8, Q5) — and the phase records the
+   * executor disconnect. Reconciliation then resolves `unknown` the way it always does, on
+   * reattach, from the prompt digest.
+   *
+   * Idempotent by construction: `moveChannel` is a machine transition, so a channel already
+   * `disconnected`, `closed`, `idle` or `detached` is left exactly where it is, and a boot with
+   * nothing live writes nothing at all.
+   */
+  private recoverChannelsFromBoot(): void {
+    const actor = this.serverActor('recovered from a crash')
+    this.store.commit((tx) => {
+      for (const stored of tx.listRecords<DelegationRecord>('delegation')) {
+        let touched = false
+        for (const attemptId of stored.value.liveAttempts) {
+          const attempt = readAttempt(tx, attemptId)
+          if (attempt === null) continue
+          if (attempt.channel === 'detached' || attempt.channel === 'closed') continue
+          this.moveChannel(tx, attempt, 'socket_closed', actor)
+          const turn = currentTurn(tx, attempt)
+          if (turn !== null && ['sent', 'accepted', 'running'].includes(turn.delivery)) {
+            this.moveDelivery(
+              tx,
+              turn,
+              turn.delivery === 'running' ? 'disconnect_before_turn_done' : 'disconnect_before_ack',
+              actor,
+              { detail: { reason: 'the server process died; the executor stream is gone' } },
+            )
+          }
+          this.movePhase(tx, attemptId, 'executor_disconnect')
+          touched = true
+        }
+        if (touched) this.refreshDelegationState(tx, stored.value.id, actor)
+      }
+    })
   }
 
   /** §7.4's counters, read by `/metrics`. */
@@ -1555,7 +1609,26 @@ export class SwarmEngine {
         const patch: { model?: string; reasoningEffort?: ReasoningEffort | null } = {}
         if (target.model !== runtime.shadow.model) patch.model = target.model
         if (target.reasoningEffort !== runtime.shadow.effort) {
-          patch.reasoningEffort = target.reasoningEffort
+          /* `null` is "the delegation default applies and **no effort is driven**" (§4.1's
+           * `default|auto → null`), and no wire has an unset: the bridge refuses an empty `effort`
+           * before any provider lookup, so the jcode adapter refuses a `null` patch with
+           * `no_effort_to_set` rather than claim it applied (executor/jcode.ts).
+           *
+           * `shadow.effort === undefined` is "nothing has been driven on this session" — the state
+           * after every open and after every reattach (§4.2 invalidation). Reconciling *nothing* to
+           * `null` is a no-op, not a config call: issuing it would refuse **every** turn of a
+           * `reasoningEffort: null` delegation pre-flight, on the first turn and again after each
+           * reconnect. So the shadow simply records "none driven" and no call is made.
+           *
+           * When an effort **was** driven and the target is `null`, §4.3.2's reconciliation is
+           * genuinely impossible on this transport. The patch goes out, the adapter refuses it, and
+           * V3 refuses the turn — running it under an effort the turn's own record denies is the
+           * one lie §4.3.4 exists to prevent. */
+          if (target.reasoningEffort === null && runtime.shadow.effort === undefined) {
+            runtime.shadow.effort = null
+          } else {
+            patch.reasoningEffort = target.reasoningEffort
+          }
         }
         if (patch.model !== undefined || patch.reasoningEffort !== undefined) {
           const report = await session.applyConfig(patch, fence)
@@ -2750,12 +2823,15 @@ export class SwarmEngine {
       for (const attemptId of record.attempts)
         this.endAttempt(tx, attemptId, 'cancelled', 'cancelled')
       const fresh = this.requireDelegation(tx, delegationId)
-      this.putDelegation(tx, {
-        ...fresh,
-        state: 'cancelled',
-        liveAttempts: [],
-        version: fresh.version + 1,
-      })
+      /* `liveAttempts` here, `state` in the refresh below — and the split is not a style choice.
+       * `refreshDelegationState` is the only writer that also EMITS `fleet.delegation_state` and
+       * the summary, and it returns early when the state it would write is already the state on
+       * the record. Writing `cancelled` here first made that early return fire every time: the
+       * cancellation was durable and completely invisible, so every connected head went on
+       * showing the delegation as queued or running until some unrelated event happened to emit
+       * a summary. The intent still answered `ok`, which is the worst version of the bug — the
+       * user is told the fleet stopped and watches it not stop. */
+      this.putDelegation(tx, { ...fresh, liveAttempts: [], version: fresh.version + 1 })
       this.refreshDelegationState(tx, delegationId, ctx.actor, 'cancelled')
       tx.appendAudit({
         intent: 'cancel',

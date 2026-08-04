@@ -73,13 +73,41 @@ export const EFFORT_LADDERS = {
 } as const satisfies Record<string, readonly ReasoningEffort[]>
 
 /**
- * The Anthropic model ids whose capability row adds `xhigh`/`max` (§4.1). The list is data
- * because it is a *table*, and it is **empty** until an id is read from jcode's capability table
- * rather than guessed: an empty extension set makes the client-core gate strict, which refuses a
- * value jcode might accept — the safe direction. The opposite default would let an unverified
- * effort through three layers of validation on the strength of a guess. (Deviation D3.)
+ * The Anthropic model ids whose capability row adds **both** `xhigh` and `max` (§4.1).
+ *
+ * Deviation D3 left this empty until an id could be read from jcode's own capability table rather
+ * than guessed. It has now been read, from the shipped `jcode v0.67.0 (156ae4092)` binary, and
+ * these are the four source strings it was derived from — quoted so the derivation is checkable
+ * and so the day jcode changes its mind the constant is falsifiable rather than folklore:
+ *
+ *  1. `"Anthropic xhigh effort is not supported by this model (available on Opus 4.7+, Sonnet 5+,
+ *     and Fable 5+)"` — the runtime refusal, and the authority for the `xhigh` set.
+ *  2. `"# xhigh needs Opus 4.7/4.8 or Fable 5; max needs an output_config effort model
+ *     (Opus/Sonnet 4.6+)."` — the shipped config template, and the authority for `max`.
+ *  3. `"# Anthropic reasoning effort for Claude reasoning models (none|low|medium|high|xhigh|max)"`
+ *     — confirming the Anthropic ladder has **no `minimal`**, as `EFFORT_LADDERS.anthropic` says.
+ *  4. `"Reasoning effort is only supported for Claude 3.7 reasoning models and Claude 4.5+ models
+ *     that expose Anthropic thinking/output_config"` — the floor below which no effort applies.
+ *
+ * The two extensions do **not** have the same membership: `max` reaches down to Opus/Sonnet 4.6
+ * while `xhigh` starts at Opus 4.7. This constant grants both at once, so it holds only the
+ * intersection — the models where both are attested. `claude-opus-4-6` and `claude-sonnet-4-6`
+ * are therefore **deliberately excluded** even though jcode would likely accept `max` for them:
+ * including them would hand `xhigh` to a model whose own error message says it is unsupported,
+ * and D3's stated bias is to refuse a value jcode might accept rather than to send one it will
+ * refuse. Widening this is a table edit with a source line, which is exactly the point.
+ *
+ * The ids are the wire ids from the live route catalog (`get_runtime_info`), not marketing names.
  */
-export const ANTHROPIC_EXTENDED_EFFORT_MODELS: readonly string[] = []
+export const ANTHROPIC_EXTENDED_EFFORT_MODELS: readonly string[] = [
+  /* Opus 4.7+ — "Opus 4.7/4.8" in the template, and 5 is above 4.8. */
+  'claude-opus-4-8',
+  'claude-opus-5',
+  /* Sonnet 5+. */
+  'claude-sonnet-5',
+  /* Fable 5+. */
+  'claude-fable-5',
+]
 
 /**
  * The values every declared ladder contains. Used for a provider this table does not know:

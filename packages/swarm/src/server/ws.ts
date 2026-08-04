@@ -104,7 +104,12 @@ export class SwarmConnection {
   /** Counters `/debug/streams` and `/metrics` report (§7.4). */
   readonly counters = { dropped: 0, lagged: 0, sent: 0, errors: 0 }
 
-  constructor(private readonly options: ConnectionOptions) {
+  private readonly options: ConnectionOptions
+
+  /* Declared, not a TypeScript parameter property: Node ≥ 24 runs `.ts` strip-only and cannot
+   * erase one, which would break `node src/cli.ts` and the spawned demo server. */
+  constructor(options: ConnectionOptions) {
+    this.options = options
     this.id = options.id
     this.socket = options.socket
     this.engine = options.engine
@@ -629,15 +634,28 @@ export function hostAllowed(host: string | undefined, port: number): boolean {
 /**
  * Absent is allowed (a CLI or Node head sends none); present must be **on the list**.
  *
- * An entry may end in `:*` to allow any port on that scheme+hostname — that is how §2.1's
- * "dev `http://localhost:*`" is expressed as data. What is no longer true is that the whole
- * loopback origin space is allowed unconditionally: that made `config.origins` advisory, and an
- * allowlist that does not exclude is a gate that does not gate (S8).
+ * Two wildcard forms, and the second one exists because the first silently was not enough:
+ *
+ *  - **`<scheme>://<host>:*`** allows any *port* on that scheme and host — how §2.1's
+ *    "dev `http://localhost:*`" is expressed as data.
+ *  - **`<scheme>://*`** allows any *authority* on that scheme. This is the only way
+ *    `chrome-extension://` can be written down at all, because an unpacked extension's id is
+ *    assigned by the browser from its install path and is therefore unknowable when the config is
+ *    written. Before this form existed, §2.1's own example (`chrome-extension://<id>`) worked as
+ *    an exact entry and every attempt to generalize it silently matched nothing.
+ *
+ * What is *not* true is that the loopback origin space is allowed unconditionally: that made
+ * `config.origins` advisory, and an allowlist that does not exclude is a gate that does not gate.
  */
 export function originAllowed(origin: string | undefined, allowed: readonly string[]): boolean {
   if (origin === undefined || origin.length === 0) return true
   return allowed.some((entry) => {
     if (entry === origin) return true
+    /* `scheme://*` — any authority on that scheme, and only on that scheme. */
+    if (entry.endsWith('://*')) {
+      const scheme = entry.slice(0, -1)
+      return origin.startsWith(scheme) && origin.length > scheme.length
+    }
     if (!entry.endsWith(':*')) return false
     const prefix = entry.slice(0, -1)
     return (

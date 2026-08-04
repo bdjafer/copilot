@@ -91,6 +91,23 @@ export const SERVER_POLICY = {
   provisionRetries: 3,
   /** A queued turn older than this at flush is held behind `notice{kind:'stale-queued-turn'}`. */
   staleQueuedTurnMs: 10 * 60_000,
+  /**
+   * How long a **sent** `req` may go without a `res` or an `err` before the client settles it as
+   * a timeout (§2.5, §6.3).
+   *
+   * A pending request has no deadline of its own: the promise `dispatch()` returns is settled by
+   * a frame, and a frame that never comes leaves an intent pending forever — a head spinner that
+   * never resolves and an `inspect().pending` row that never clears, with nothing on any surface
+   * saying why. The close paths (`abortAll`) only cover a socket that *noticed*; a server that
+   * accepts the frame and never answers is exactly the case they miss.
+   *
+   * Sixty seconds is chosen against the server's own slowest intent rather than against a
+   * feeling: it is comfortably above the executor's 30 s request budget ([F10]) so a legitimately
+   * slow intent is never reaped, and far below any human's patience for a dead spinner. The error
+   * is `retryable` because §2.5 rule 3's idempotency cache makes a re-send safe: the same
+   * `idempotencyKey` replays the original response, including the original error.
+   */
+  requestTimeoutMs: 60_000,
   /** §2.1 pairing code: 8 chars Crockford base32, one use, 5 attempts. */
   pairingCodeTtlMs: 300_000,
   pairingCodeAttempts: 5,

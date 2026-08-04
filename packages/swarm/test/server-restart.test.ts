@@ -19,6 +19,7 @@ import type { ServerHarness } from './support/server-harness.ts'
 
 import { LEASES } from '../src/domain/constants.ts'
 import { sessionLease } from '../src/domain/leases.ts'
+import { createSqliteStore } from '../src/server/store.ts'
 import {
   createScratchRepo,
   createServerHarness,
@@ -113,6 +114,74 @@ describe('§13 a head resuming after a restart receives every record exactly onc
     expect(new Set(replayed).size).toBe(replayed.length)
     after.close()
   }, 30_000)
+
+  it('a channel left mid-flight by a crash comes back `disconnected`, never still `submitting`', async () => {
+    /*
+     * `this.live` is memory; the channel record is disk. Nothing moves a channel except executor
+     * events, and after a kill there is no executor and no stream — so the durable record went on
+     * saying `submitting` (or `accepted`, or `streaming`) about a connection that no process held,
+     * and a head reconnecting to the restarted server read "sending…" indefinitely. That is the
+     * exact shape of the "did my message land?" spinner §5.5 exists to abolish, and it survived
+     * the whole delivery because the crash-resume test above asserts `(stream, seq)` and the
+     * journey asserted cursors on `fleet` alone.
+     *
+     * The rules are the sleep path's, for the same physics: `disconnected` (C12), and an in-flight
+     * turn to `unknown` — never `failed`, which asserts a non-delivery swarm cannot observe
+     * (V8, Q5).
+     */
+    const repo = createScratchRepo()
+    repos.push(repo)
+    home = mkdtempSync(join(tmpdir(), 'swarm-boot-channel-'))
+    const dbPath = join(home, 'swarm.db')
+
+    let harness = await createServerHarness({ repo, home, dbPath, listen: false })
+    live = harness
+    const created = await harness.server.engine.dispatch(
+      'createDelegation',
+      { spec: specFor(repo) },
+      ctx('boot-channel'),
+    )
+    expect(created.ok).toBe(true)
+    if (!created.ok) return
+    await drain(harness)
+
+    const id = created.value as string
+    const attemptId = harness.server.engine.store.read(
+      (tx) => tx.getRecord<{ liveAttempts: string[] }>('delegation', id)!.value.liveAttempts[0],
+    )
+    expect(attemptId).toBeDefined()
+    const channelOf = (h: ServerHarness): string =>
+      h.server.engine.store.read(
+        (tx) => tx.getRecord<{ channel: string }>('attempt', attemptId!)!.value.channel,
+      )
+
+    /*
+     * The forced write happens with **no server running**, which is what makes this a crash rather
+     * than a shutdown: `close()` walks `this.live` and closes each session, and the `closed` event
+     * that produces moves the channel by itself. A record written between the two boots is the
+     * only way to express "the process died holding this".
+     */
+    await harness.dispose()
+    live = null
+
+    const between = createSqliteStore(dbPath)
+    between.commit((tx) => {
+      const stored = tx.getRecord<Record<string, unknown>>('attempt', attemptId!)!
+      tx.putRecord('attempt', attemptId!, stored.version, {
+        ...stored.value,
+        channel: 'submitting',
+      })
+    })
+    expect(
+      between.read((tx) => tx.getRecord<{ channel: string }>('attempt', attemptId!)!.value.channel),
+    ).toBe('submitting')
+    between.close()
+
+    harness = await createServerHarness({ repo, home, dbPath, listen: false })
+    live = harness
+
+    expect(channelOf(harness)).toBe('disconnected')
+  }, 20_000)
 
   it('the fencing counter is monotonic across a restart, so an old writer is `stale_fence`', async () => {
     const repo = createScratchRepo()

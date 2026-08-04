@@ -409,3 +409,81 @@ describe('§6.3 `killSwitch` is a brake, not a delete (Q16, #31)', () => {
     if (!refused.ok) expect(refused.error.code).toBe('dispatch_paused')
   }, 20_000)
 })
+
+describe("§3.3 D17 — `cancel{scope:'delegation'}` is the only path to `cancelled` (#31)", () => {
+  /**
+   * The regression these exist for: the cancellation was written onto the record **before** the
+   * forced refresh that emits it, so `refreshDelegationState` found the state it was about to
+   * write already there and returned early. The delegation really was cancelled, the intent
+   * really answered `ok`, and no `fleet.delegation_state` and no summary were ever emitted — so
+   * every connected head went on showing it as queued or running, indefinitely.
+   *
+   * A durable write nobody is told about is the worst shape a bug can take here. §2.3's contract
+   * is that the log IS the notification, so the user is not looking at a stale view they could
+   * refresh: they are looking at a fleet that is telling them the brake did not work.
+   */
+  const cancelStates = (h: ServerHarness): { states: string[]; stop: () => void } => {
+    const states: string[] = []
+    const stop = h.server.engine.store.onCommit((result) => {
+      for (const record of result.emitted) {
+        if (record.ev.k === 'fleet.delegation_state') states.push(record.ev.state)
+      }
+    })
+    return { states, stop }
+  }
+
+  it('emits the state change, not only the record — a cancel no head hears is not a cancel', async () => {
+    const h = await serve()
+    const id = await create(h)
+    const watch = cancelStates(h)
+
+    const cancelled = await h.server.engine.dispatch(
+      'cancel',
+      { delegationId: id, scope: 'delegation' },
+      ctx(),
+    )
+    watch.stop()
+    expect(cancelled.ok).toBe(true)
+    expect(delegation(h, id).state).toBe('cancelled')
+    /* The observable half. Without it the assertion above passes and the product is broken. */
+    expect(watch.states).toContain('cancelled')
+  }, 20_000)
+
+  it('cancels a REOPENED delegation with live attempts the same way', async () => {
+    const h = await serve()
+    const id = await create(h, withCriteria)
+    await drain(h)
+    /* A terminal delegation cannot be cancelled — D17 is scoped to `*non-terminal` — so the
+     * running case is reached the way a user reaches it: by reopening (D19) and cancelling the
+     * attempt that reopen started. */
+    expect((await h.server.engine.dispatch('retry', { delegationId: id }, ctx())).ok).toBe(true)
+    expect(delegation(h, id).attempts.length).toBeGreaterThan(0)
+
+    const watch = cancelStates(h)
+    const cancelled = await h.server.engine.dispatch(
+      'cancel',
+      { delegationId: id, scope: 'delegation' },
+      ctx(),
+    )
+    watch.stop()
+    expect(cancelled.ok).toBe(true)
+    expect(delegation(h, id).state).toBe('cancelled')
+    expect(delegation(h, id).liveAttempts).toEqual([])
+    expect(watch.states).toContain('cancelled')
+  }, 20_000)
+
+  it('refuses to cancel a delegation that already reached a terminal state', async () => {
+    const h = await serve()
+    const id = await create(h, withCriteria)
+    await drain(h)
+    expect(delegation(h, id).state).toBe('succeeded')
+    const refused = await h.server.engine.dispatch(
+      'cancel',
+      { delegationId: id, scope: 'delegation' },
+      ctx(),
+    )
+    expect(refused.ok).toBe(false)
+    /* And it stays `succeeded`: a refusal that half-applied would be worse than either answer. */
+    expect(delegation(h, id).state).toBe('succeeded')
+  }, 20_000)
+})
