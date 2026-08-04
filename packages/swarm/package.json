@@ -1,0 +1,84 @@
+{
+  "name": "@astrale-os/swarm",
+  "version": "0.0.0",
+  "description": "Server-scheduled fleet of coding-agent delegations: durable event log, per-turn control, swarm-owned verification. Headless — the client core is DOM-free and Node-free.",
+  "keywords": [
+    "agent",
+    "delegation",
+    "durable-log",
+    "fleet",
+    "headless",
+    "jcode",
+    "state-machine",
+    "typescript",
+    "websocket"
+  ],
+  "homepage": "https://github.com/astrale-os/exp-spec/tree/main/packages/swarm#readme",
+  "bugs": {
+    "url": "https://github.com/astrale-os/exp-spec/issues"
+  },
+  "license": "Apache-2.0",
+  "author": "Astrale",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/astrale-os/exp-spec.git",
+    "directory": "packages/swarm"
+  },
+  "bin": {
+    "swarm": "./dist/cli.js"
+  },
+  "files": [
+    "dist",
+    "src",
+    "README.md",
+    "LICENSE"
+  ],
+  "type": "module",
+  "sideEffects": false,
+  "exports": {
+    ".": "./src/index.ts",
+    "./presentation": "./src/presentation.ts",
+    "./server": "./src/server/index.ts",
+    "./testing": "./src/testing/index.ts"
+  },
+  "publishConfig": {
+    "exports": {
+      ".": {
+        "types": "./dist/types/index.d.ts",
+        "import": "./dist/index.js"
+      },
+      "./presentation": {
+        "types": "./dist/types/presentation.d.ts",
+        "import": "./dist/presentation.js"
+      },
+      "./server": {
+        "types": "./dist/types/server/index.d.ts",
+        "import": "./dist/server.js"
+      },
+      "./testing": {
+        "types": "./dist/types/testing/index.d.ts",
+        "import": "./dist/testing.js"
+      }
+    }
+  },
+  "scripts": {
+    "build": "vite build && tsgo -p tsconfig.build.json",
+    "typecheck": "tsgo --noEmit",
+    "lint": "oxlint .",
+    "test": "vitest run",
+    "test:watch": "vitest"
+  },
+  "dependencies": {
+    "ulid": "^3.0.1",
+    "ws": "^8.19.0"
+  },
+  "devDependencies": {
+    "@types/node": "^26.1.2",
+    "@types/ws": "^8.18.1",
+    "vite": "^8.2.0",
+    "vitest": "^4.1.10"
+  },
+  "engines": {
+    "node": ">=24"
+  }
+}
