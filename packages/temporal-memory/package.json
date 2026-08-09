@@ -1,0 +1,80 @@
+{
+  "name": "@astrale-os/temporal-memory",
+  "version": "0.1.0-alpha.1",
+  "description": "Headless, local-first temporal memory with scoped provenance, SurrealDB WASM, and resumable replica sync.",
+  "keywords": [
+    "browser",
+    "knowledge-graph",
+    "local-first",
+    "provenance",
+    "replication",
+    "surrealdb",
+    "temporal-memory"
+  ],
+  "homepage": "https://github.com/astrale-os/exp-spec/tree/main/packages/temporal-memory#readme",
+  "bugs": {
+    "url": "https://github.com/astrale-os/exp-spec/issues"
+  },
+  "license": "Apache-2.0",
+  "author": "Astrale",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/astrale-os/exp-spec.git",
+    "directory": "packages/temporal-memory"
+  },
+  "files": [
+    "dist",
+    "README.md",
+    "LICENSE",
+    "CHANGELOG.md"
+  ],
+  "type": "module",
+  "sideEffects": false,
+  "exports": {
+    ".": "./src/index.ts",
+    "./surreal": "./src/surreal/index.ts",
+    "./testing": "./src/testing/index.ts"
+  },
+  "publishConfig": {
+    "exports": {
+      ".": {
+        "types": "./dist/types/index.d.ts",
+        "import": "./dist/index.js"
+      },
+      "./surreal": {
+        "types": "./dist/types/surreal/index.d.ts",
+        "import": "./dist/surreal.js"
+      },
+      "./testing": {
+        "types": "./dist/types/testing/index.d.ts",
+        "import": "./dist/testing.js"
+      }
+    },
+    "access": "public"
+  },
+  "scripts": {
+    "build": "vite build && tsgo -p tsconfig.build.json && node scripts/generate-sbom.mjs",
+    "prepack": "pnpm build",
+    "typecheck": "tsgo --noEmit",
+    "lint": "oxlint .",
+    "test": "vitest run",
+    "test:browser": "vitest run test/browser-surreal.test.ts",
+    "test:watch": "vitest",
+    "verify:sbom": "node scripts/generate-sbom.mjs --check",
+    "verify:package": "node scripts/verify-package.mjs",
+    "verify:package:node": "node scripts/verify-package.mjs --node-only"
+  },
+  "dependencies": {
+    "@astrale-os/surrealdb-wasm": "https://github.com/astrale-os/surrealdb.js/releases/download/surrealdb-wasm-v3.0.4-astrale.1/astrale-os-surrealdb-wasm-3.0.4-astrale.1.tgz",
+    "surrealdb": "2.0.8"
+  },
+  "devDependencies": {
+    "playwright": "^1.59.0",
+    "vite": "^8.2.0",
+    "vitest": "^4.1.10"
+  },
+  "engines": {
+    "node": ">=20"
+  },
+  "packageManager": "pnpm@10.28.0"
+}

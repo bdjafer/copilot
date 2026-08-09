@@ -4,6 +4,9 @@ on:
   push:
     branches: [main]
   pull_request:
+  schedule:
+    - cron: '15 5 * * 1'
+  workflow_dispatch:
 
 permissions:
   contents: read
@@ -14,30 +17,90 @@ concurrency:
 
 jobs:
   gate:
-    name: lint · typecheck · test · build
+    name: lint · format · typecheck · test · build · package
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    timeout-minutes: 25
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
 
       # No `version:` — the action reads it from the root `packageManager` field, so the
       # workflow can never drift from the pnpm the repo actually pins.
-      - uses: pnpm/action-setup@v4
+      - uses: pnpm/action-setup@f40ffcd9367d9f12939873eb1018b921a783ffaa # v4
 
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
         with:
           node-version: 22
           cache: pnpm
 
       - run: pnpm install --frozen-lockfile
 
+      # The temporal-memory acceptance suite launches real Chromium against both direct and
+      # module-worker SurrealDB WASM engines.
+      - run: pnpm --filter @astrale-os/temporal-memory exec playwright install --with-deps chromium
+
       # oxlint / tsgo / vitest — never eslint, prettier or tsc.
       - run: pnpm lint
+      - run: pnpm format:check
       - run: pnpm typecheck
+
+      # The workspace contains DOM suites, real browser/database suites, and a 100,000-event
+      # backpressure case. The root script runs packages serially so their independent internal
+      # Vitest pools do not turn host contention into false timeouts.
       - run: pnpm test
 
       # Build LAST, and that order matters: the bundle DoD tests build into each package's own
       # `dist/` with `emptyOutDir: false` (so concurrent suites cannot wipe a directory another
       # one is reading), which can leave stale hashed chunks behind. Only `pnpm build` empties
-      # `dist/` first, so the artifact a publish would pack is the one produced here.
+      # `dist/` first, so the artifact a publish would pack is the one produced here. The build also
+      # emits the exact production npm plus embedded-WASM Cargo inventory as a deterministic SBOM.
       - run: pnpm build
+      - run: pnpm --filter @astrale-os/temporal-memory verify:sbom
+
+      # npm audit covers the installed JavaScript graph. OSV Scanner then checks every npm and
+      # locked Cargo package in the emitted SBOM against locally downloaded advisory databases;
+      # `--offline` prevents the candidate inventory from being sent to a query service. The
+      # package-local config contains short-lived, documented release blockers for the inherited
+      # Cargo findings and fails closed when an exception expires or a new advisory appears.
+      - run: pnpm audit --prod --audit-level high
+      - name: Install pinned OSV Scanner
+        env:
+          OSV_SCANNER_VERSION: v2.5.0
+          OSV_SCANNER_SHA256: edcfc41d257db36148f065055655fe3fcfc434b0b423ea67468a84c207524e0c
+        run: |
+          curl --fail --location --silent --show-error \
+            --output "${RUNNER_TEMP}/osv-scanner" \
+            "https://github.com/google/osv-scanner/releases/download/${OSV_SCANNER_VERSION}/osv-scanner_linux_amd64"
+          echo "${OSV_SCANNER_SHA256}  ${RUNNER_TEMP}/osv-scanner" | sha256sum --check --strict -
+          chmod u+x "${RUNNER_TEMP}/osv-scanner"
+      - name: Scan deterministic SBOM with offline advisory databases
+        run: |
+          "${RUNNER_TEMP}/osv-scanner" scan source \
+            -L packages/temporal-memory/dist/sbom.cdx.json \
+            --config packages/temporal-memory/osv-scanner.toml \
+            --download-offline-databases \
+            --offline-vulnerabilities \
+            --offline
+
+      # Pack into a clean temporary consumer, verify publish-time exports and legal/docs files,
+      # byte-compare and inspect the CycloneDX SBOM, then execute archive round-trip, ingest/recall,
+      # and direct/worker browser smokes from it.
+      - run: pnpm --filter @astrale-os/temporal-memory verify:package
+
+  temporal-memory-node20:
+    name: temporal-memory · packed Node 20
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+
+      - uses: pnpm/action-setup@f40ffcd9367d9f12939873eb1018b921a783ffaa # v4
+
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: 20
+          cache: pnpm
+
+      - run: pnpm install --frozen-lockfile
+
+      # Prove the published Node runtime floor without duplicating the full Node 22/browser suite.
+      - run: pnpm --filter @astrale-os/temporal-memory verify:package:node

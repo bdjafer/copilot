@@ -10,7 +10,7 @@
     "lint:fix": "oxlint --fix .",
     "format": "pnpm exec oxfmt --write .",
     "format:check": "pnpm exec oxfmt --check .",
-    "test": "pnpm -r test"
+    "test": "pnpm -r --workspace-concurrency=1 test"
   },
   "devDependencies": {
     "@astrale-os/ox": ">=0.1.0 <1.0.0",

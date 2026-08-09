@@ -1,0 +1,375 @@
+{
+  "version": 1,
+  "cases": [
+    {
+      "id": "repeated-aliases",
+      "invariant": "Exact aliases resolve conservatively and retain every source episode.",
+      "coveredBy": "ingestion.test.ts"
+    },
+    {
+      "id": "same-name-distinct-identities",
+      "invariant": "Explicit identities with conflicting identifiers are never merged by name.",
+      "coveredBy": "contracts.test.ts"
+    },
+    {
+      "id": "late-arriving-fact",
+      "invariant": "Valid time, not arrival order, determines a cardinality-one fact sequence.",
+      "coveredBy": "ingestion.test.ts"
+    },
+    {
+      "id": "explicit-correction",
+      "invariant": "A correction changes the current view without rewriting its source fact.",
+      "coveredBy": "governance.test.ts"
+    },
+    {
+      "id": "bounded-entity-reconciliation",
+      "invariant": "Merge and recorded-merge reversal authorize and plan only an admitted indexed identity closure, fail before mutation at a caller ceiling, and never materialize an unrelated corpus.",
+      "coveredBy": "governance.test.ts"
+    },
+    {
+      "id": "bounded-destructive-reset",
+      "invariant": "Whole-space reset preflights exact report-row counts, streams only episode, entity, fact, and projection report rows through caller-bounded 16-row keysets, fails before deletion at exact row or byte N-1, never uses whole-space export, loses cleanly to a writer that commits first, and makes a delayed writer fail without resurrection when deletion commits first.",
+      "coveredBy": "management.test.ts + browser-surreal.test.ts"
+    },
+    {
+      "id": "known-transaction-rollback",
+      "invariant": "An engine-returned generated-transaction statement failure rolls back every earlier statement and all space revisions, identifies the outcome as rolled back, and leaves the same direct or worker connection reusable without residue.",
+      "coveredBy": "browser-surreal.test.ts"
+    },
+    {
+      "id": "unknown-transaction-reconciliation",
+      "invariant": "A transaction call with unknown outcome fences public and queued facade work without a secondary settlement write, rejects an in-flight direct read even when close/reopen completes before that read settles, and prevents later inspection from touching storage until explicit recovery rotates the owner incarnation; durable recovery then replays request-bound success, seals fresh-only identity, resumes interrupted ingestion, or requires explicit space recreation after reset.",
+      "coveredBy": "lifecycle.test.ts"
+    },
+    {
+      "id": "shared-connection-unknown-outcome",
+      "invariant": "An unknown generated-transaction or privileged raw-query outcome poisons its shared driver before queued database work can start; admin, paired facade, and cached open reject until every live reference closes, a failed pre-reference open cannot steal another owner's reference, and only a fresh physical open clears the poison. If the generated transaction committed a space deletion before completion was lost, ordinary reopen observes the deletion and only explicit creation restores revision zero.",
+      "coveredBy": "lifecycle.test.ts + browser-surreal.test.ts"
+    },
+    {
+      "id": "partial-connection-cleanup",
+      "invariant": "A driver acquires no shared reference until connection bootstrap completes. Failure after physical connect owns zero-reference cleanup; lost cleanup or final-close completion remains explicitly pending, blocks a new connection until idempotent close settles, keeps facade close retryable, and leaves the same direct or worker capability reusable.",
+      "coveredBy": "lifecycle.test.ts + browser-surreal.test.ts"
+    },
+    {
+      "id": "raw-query-post-response-reconciliation",
+      "invariant": "When privileged raw-query statement responses arrive but adapter result admission fails, the error is explicitly non-retryable and requires reconciliation because a mutation may already be durable; the healthy shared connection remains usable for a bounded inspection query rather than blind replay.",
+      "coveredBy": "browser-surreal.test.ts"
+    },
+    {
+      "id": "raw-query-request-snapshot",
+      "invariant": "A privileged raw query detaches admitted top-level fields and copies plus validates bindings in one bounded pre-scheduler traversal, so later mutation or changing accessors cannot alter dispatch and unreadable accessors fail before storage.",
+      "coveredBy": "contracts.test.ts + browser-surreal.test.ts"
+    },
+    {
+      "id": "closed-core-read-requests",
+      "invariant": "Point read, recall, search, neighborhood, browse, snapshot, analysis, semantic and signal feed, and export requests are closed bounded snapshots before their first await, so later authority, selector, seed, cursor, and limit mutation cannot retarget work and malformed input reaches no storage.",
+      "coveredBy": "management.test.ts + browser-surreal.test.ts"
+    },
+    {
+      "id": "closed-construction-options",
+      "invariant": "createMemory accepts one closed root, reads each supplied property once, detaches every JSON configuration value before returning, and retains only the exact explicitly behavior-bearing capability references; unknown, unreadable, malformed, or later-mutated configuration cannot reconfigure the facade.",
+      "coveredBy": "contracts.test.ts + browser-surreal.test.ts"
+    },
+    {
+      "id": "closed-facade-options",
+      "invariant": "Every public facade option boundary, including open, management, integrity, point access, retrieval, feed, archive, and journal lifecycle or compaction, captures one closed invocation-time value before storage or queueing; only explicitly behavior-bearing capabilities such as AbortSignal remain live.",
+      "coveredBy": "management.test.ts + browser-surreal.test.ts"
+    },
+    {
+      "id": "closed-mutation-control-plane",
+      "invariant": "Canonical mutation, destructive maintenance, projection rebuild, and materialized import requests plus JSON options are closed bounded invocation-time snapshots before queueing, purge recovery, hashing, providers, or storage; AbortSignal alone remains live and malformed input reaches no storage.",
+      "coveredBy": "management.test.ts + browser-surreal.test.ts"
+    },
+    {
+      "id": "closed-sync-control-plane",
+      "invariant": "Every checkpoint, inventory, pull, status, conflict, resolution, abort, and compaction request is a closed bounded invocation-time snapshot before queueing, local storage, or peer work; only the explicit peer and abort signal remain live capabilities.",
+      "coveredBy": "sync.test.ts + browser-surreal.test.ts"
+    },
+    {
+      "id": "bounded-point-reads",
+      "invariant": "Episode, entity, fact, and derivation point reads expose one revision-fenced value and exact work; provenance joins advance through caller-bounded 16-row keysets and exact row or byte N-1 returns no partial value.",
+      "coveredBy": "management.test.ts"
+    },
+    {
+      "id": "bounded-automatic-projection",
+      "invariant": "Automatic post-canonical projections expose independent exact scan work, assemble provenance through 16-row keysets, and fail partial without committing any projection at exact row or byte N-1 while canonical memory remains durable.",
+      "coveredBy": "ingestion.test.ts"
+    },
+    {
+      "id": "unresolved-conflict",
+      "invariant": "Insufficient temporal evidence leaves contradictory facts disputed.",
+      "coveredBy": "ingestion.test.ts"
+    },
+    {
+      "id": "shared-support-deletion",
+      "invariant": "A fact survives one source deletion and is removed after its final support.",
+      "coveredBy": "governance.test.ts"
+    },
+    {
+      "id": "prompt-and-query-injection",
+      "invariant": "Hostile content and query syntax remain data in the real Surreal adapter.",
+      "coveredBy": "browser-surreal.test.ts"
+    },
+    {
+      "id": "temporal-boundaries",
+      "invariant": "Current, valid-at, known-at, and history views remain distinct.",
+      "coveredBy": "retrieval.test.ts"
+    },
+    {
+      "id": "scoped-embeddings",
+      "invariant": "A disallowed scope is absent from semantic results and diagnostics.",
+      "coveredBy": "retrieval.test.ts"
+    },
+    {
+      "id": "dependency-derived-sensitivity",
+      "invariant": "Opaque sensitivity labels propagate as sorted unique sets through entity aliases, direct evidence, transitive active derivations, stored projections, inference context, reranking, and exact embedding disclosure partitions; pre-contract projection generations fail closed until rebuilt.",
+      "coveredBy": "providers.test.ts"
+    },
+    {
+      "id": "detached-public-outputs",
+      "invariant": "Every public facade JSON result is detached from caller input, storage, cached state, provider output, and durable replay data, while every event listener receives an independent payload that earlier listeners cannot rewrite.",
+      "coveredBy": "contracts.test.ts + browser-surreal.test.ts"
+    },
+    {
+      "id": "bounded-provider-disclosure",
+      "invariant": "Every original provider payload is exact-byte and token admitted before policy, every policy replacement is remeasured before provider execution, a provider-aware counter can include tokenizer and prompt overhead, and oversize or invalid counts fail without invoking the provider or retaining content diagnostics.",
+      "coveredBy": "providers.test.ts"
+    },
+    {
+      "id": "import-collisions",
+      "invariant": "Reject, identical, and remap collision policies are deterministic.",
+      "coveredBy": "governance.test.ts"
+    },
+    {
+      "id": "immutable-error-diagnostics",
+      "invariant": "MemoryError snapshots and recursively freezes JSON details and freezes its public fields, so mutating source diagnostics or a caught retained unknown-outcome error cannot change another observer's code, retryability, or reconciliation markers.",
+      "coveredBy": "contracts.test.ts + browser-surreal.test.ts"
+    },
+    {
+      "id": "interrupted-purge",
+      "invariant": "Reads fail closed behind a content-free purge marker; distinct same-revision starts have one residue-free winner, live-marker contenders fail before planning, and ownerless recovery first has one revision-CAS owner and survives page death after every durable application phase.",
+      "coveredBy": "governance.test.ts + browser-surreal.test.ts"
+    },
+    {
+      "id": "signal-target-action-contention",
+      "invariant": "A non-empty full-selection cursor authorizes one explicit canonical signal action; cross-client soft-delete and hard-purge races have one complete winner, residue-free losers require a new signal baseline, and disjoint unbound work can explicitly replan and retry.",
+      "coveredBy": "management.test.ts + browser-surreal.test.ts"
+    },
+    {
+      "id": "projection-generation-change",
+      "invariant": "A new embedding generation cannot reuse incompatible vectors and rebuilds cleanly.",
+      "coveredBy": "providers.test.ts"
+    },
+    {
+      "id": "atomic-projection-set-cutover",
+      "invariant": "A full rebuild keeps durable staged rows invisible, switches only complete kinds through one canonical-source-guarded active-set commit, serializes independent contenders before staging, and preserves the prior set across provider failure, concurrent canonical writes, or owner death until a later rebuild reclaims abandoned rows.",
+      "coveredBy": "providers.test.ts + browser-surreal.test.ts"
+    },
+    {
+      "id": "atomic-schema-migration-resume",
+      "invariant": "Explicit schema migration commits each ordered checksummed transition and its immutable audit checkpoint atomically, lets independent opted-in openers converge on and help one chain, resumes after owner death between steps, and rejects unknown or altered history.",
+      "coveredBy": "lifecycle.test.ts + browser-surreal.test.ts"
+    },
+    {
+      "id": "atomic-sync-apply-lifecycle",
+      "invariant": "Sync apply exposes no active session without its running owner operation, gives identical same-snapshot activation attempts exactly one durable winner and one residue-free retryable loser, persists every forward or inverse record with its continuation cursor, resumes owner-abandoned apply and rollback locally without the peer, and publishes its completed operation, guarded HEAD, and terminal session through one commit with replay convergence.",
+      "coveredBy": "sync.test.ts + browser-surreal.test.ts"
+    },
+    {
+      "id": "scoped-semantic-change-feed",
+      "invariant": "A durable semantic revision exposes only exact-scope affected targets and binds its cursor to access and space generation.",
+      "coveredBy": "changes.test.ts"
+    },
+    {
+      "id": "scoped-versioned-signals",
+      "invariant": "Non-epistemic signals bind visible basis and input revision, preserve immutable history, and never alter retrieval or factual support.",
+      "coveredBy": "signals.test.ts"
+    },
+    {
+      "id": "signal-dependency-purge",
+      "invariant": "Hard purge removes every revision of a signal key when any declared target or basis depends on erased memory.",
+      "coveredBy": "signals.test.ts"
+    },
+    {
+      "id": "purge-change-scrubbing",
+      "invariant": "Hard purge removes erased target identifiers from historical change records and emits only content-free scope invalidation.",
+      "coveredBy": "changes.test.ts"
+    },
+    {
+      "id": "purge-revision-fencing",
+      "invariant": "A purge that wins an exact-revision race cannot be followed by stale merge, canonical, or projection resurrection, while a new dependency invalidates an uncommitted purge selection.",
+      "coveredBy": "governance.test.ts"
+    },
+    {
+      "id": "purge-operation-diagnostics",
+      "invariant": "Hard purge replaces contaminated operation diagnostics with immutable content-free tombstones while preserving unrelated operations.",
+      "coveredBy": "governance.test.ts"
+    },
+    {
+      "id": "operation-identity-sealing",
+      "invariant": "A completed operation identity cannot be rebound to a different episode or overwrite its durable lineage.",
+      "coveredBy": "governance.test.ts"
+    },
+    {
+      "id": "runtime-owner-recovery",
+      "invariant": "Open-time recovery never interrupts or resumes an ordinary operation, marked hard purge, or sync apply while its private runtime-owner lease is live; after actual owning-page termination, accepted pre-canonical ingestion retries without duplicate acceptance, sync apply and rollback complete from pinned checkpoints without the peer, and hard purge claims exactly one new owner before resuming every durable application phase.",
+      "coveredBy": "governance.test.ts + sync.test.ts + browser-surreal.test.ts"
+    },
+    {
+      "id": "bounded-operation-diagnostics",
+      "invariant": "Durable operation diagnostics retain no raw provider warning, error, credential, or payload and keep deterministic fixed-size warning and provider-call samples with explicit truncation state.",
+      "coveredBy": "providers.test.ts"
+    },
+    {
+      "id": "bounded-sync-session-diagnostics",
+      "invariant": "Retained sync-session headers keep at most deterministic first/last warning samples and bounded error text, expose truncation explicitly, and fail integrity verification when privileged storage exceeds the contract.",
+      "coveredBy": "sync.test.ts"
+    },
+    {
+      "id": "bounded-sync-conflict-pages",
+      "invariant": "Conflict inventories use consumable fixed-size cursors, exact caller-bounded page bytes, fail-closed metadata validation, and explicit detail-expiry errors after terminal compaction.",
+      "coveredBy": "sync.test.ts"
+    },
+    {
+      "id": "bounded-change-compaction",
+      "invariant": "Bounded semantic- and signal-journal compaction preserves the acknowledged floor cursor, requires a fresh baseline for older consumers, rejects an acknowledgement that races a registry-derived plan without moving its floor, survives the acknowledging page's termination, and has one exact atomic winner with cross-journal non-interference when independent persistent clients read the same batch.",
+      "coveredBy": "changes.test.ts + signal-changes.test.ts + browser-surreal.test.ts"
+    },
+    {
+      "id": "maintained-derivation-support",
+      "invariant": "A fact remains current while independently supported by source evidence or a checked canonical rule derivation; independent persistent reasoners have one canonical winner, residue-free conflict, replay-stable bound identity, and duplicate-free explicit re-evaluation; format-v4 archives preserve current derivation closure plus recomputable episode identity.",
+      "coveredBy": "derivations.test.ts + browser-surreal.test.ts"
+    },
+    {
+      "id": "cascading-derivation-invalidation",
+      "invariant": "When a source premise disappears, invalidation propagates through dependent derivations to a fixpoint and retracts only conclusions with no remaining support; independent persistent withdrawals produce one atomic tombstone/cascade winner and one residue-free conflict.",
+      "coveredBy": "derivations.test.ts + browser-surreal.test.ts"
+    },
+    {
+      "id": "resumable-whole-memory-sync",
+      "invariant": "A receiver resumes at its first missing bounded chunk against the originally pinned remote checkpoint even after the source HEAD advances.",
+      "coveredBy": "sync.test.ts"
+    },
+    {
+      "id": "complete-sync-ancestry-retention",
+      "invariant": "A pull walks every remote ancestry branch until locally retained history, stores missing immutable headers parent-first in bounded batches, and keeps non-target payloads explicitly unavailable for later DAG operations.",
+      "coveredBy": "sync.test.ts"
+    },
+    {
+      "id": "coherent-sync-metadata-integrity",
+      "invariant": "Every facade driver commit advances a monotonic metadata revision; integrity verification rejects a concurrent metadata-only transition instead of certifying a cross-state mixture at one logical revision.",
+      "coveredBy": "sync.test.ts"
+    },
+    {
+      "id": "coherent-sync-snapshot-streams",
+      "invariant": "Checkpoint inventory and offline bundle pages and cursors bind one exact logical and private metadata snapshot; concurrent metadata-only transitions reject the page or require pagination to restart instead of mixing header or payload states.",
+      "coveredBy": "sync.test.ts"
+    },
+    {
+      "id": "cross-branch-semantic-conflict",
+      "invariant": "Different-key branch changes that form a derivation cycle or unreconciled cardinality-one union become explicit conflicts rather than corrupting the merged graph.",
+      "coveredBy": "sync.test.ts"
+    },
+    {
+      "id": "sync-purge-dominance",
+      "invariant": "Content-free hard-purge tombstones dominate concurrent additions and invalidate every older local checkpoint pack.",
+      "coveredBy": "sync.test.ts"
+    },
+    {
+      "id": "validated-sync-purge-tombstones",
+      "invariant": "Purge-dominance lookups accept only exact session/kind/digest-bound tombstones at their derived identity; privileged contamination fails closed and is reported by paged integrity verification instead of suppressing live records.",
+      "coveredBy": "sync.test.ts"
+    },
+    {
+      "id": "validated-sync-random-indexes",
+      "invariant": "Every random-access sync index is the exact deterministic projection of its chunk record; forged query fields fail integrity verification and cannot steer safe indexed reads.",
+      "coveredBy": "sync.test.ts"
+    },
+    {
+      "id": "validated-sync-checkpoint-metadata",
+      "invariant": "Stored checkpoint lifecycle fields, exact payload manifests, complete parent links, and the singleton HEAD reference fail closed under privileged corruption and are covered by bounded integrity verification.",
+      "coveredBy": "sync.test.ts"
+    },
+    {
+      "id": "validated-sync-commit-packs",
+      "invariant": "Every facade chunk write atomically carries exactly one deterministic random-access index per record; partial, index-only, duplicated, forged, or checksum-invalid packs fail before reaching a storage driver.",
+      "coveredBy": "sync.test.ts"
+    },
+    {
+      "id": "validated-sync-owner-reachability",
+      "invariant": "Every retained sync chunk and random-access index owner is reachable from a valid available or pruning checkpoint or an exact active/reclaiming session lifecycle; a self-consistent orphan pack fails integrity verification.",
+      "coveredBy": "sync.test.ts"
+    },
+    {
+      "id": "validated-sync-session-state",
+      "invariant": "Every durable sync session has a closed state-dependent shape, recomputable request and disclosure bindings, revision-safe counters, and exact receiver/plan ownership before a safe API discloses or resumes it.",
+      "coveredBy": "sync.test.ts"
+    },
+    {
+      "id": "sync-apply-recovery",
+      "invariant": "A partial sync apply is fail-closed, resumes before reopen, and can roll back to its retained local checkpoint.",
+      "coveredBy": "sync.test.ts"
+    },
+    {
+      "id": "sync-payload-retention",
+      "invariant": "Bounded checkpoint payload compaction retains immutable ancestry, keeps HEAD readable, and fails closed with an explicit reseed requirement when a divergent merge needs a pruned base.",
+      "coveredBy": "sync.test.ts"
+    },
+    {
+      "id": "sync-terminal-detail-retention",
+      "invariant": "Terminal session detail reclamation retains status, idempotency, and every checkpoint-owned payload, and interrupted physical cleanup finishes on reopen.",
+      "coveredBy": "sync.test.ts"
+    },
+    {
+      "id": "sync-bundle-portability",
+      "invariant": "Whole-memory offline export is frame-, header-, and payload-bounded, cursor-resumable, never falls back to whole-space materialization, commits indexed header and chunk sequences, and imports through the same reconciliation peer after a native mutation-detecting reader detaches each untrusted frame in one hard-bounded traversal before validation, hashing, or retention.",
+      "coveredBy": "sync.test.ts"
+    },
+    {
+      "id": "bounded-canonical-archive",
+      "invariant": "Selective format-v4 export scans only canonical tables in 16-row keysets under source and exact archive budgets, carries complete episode identity preimages, and import validates a closed nested schema, resource ceilings, and source identity before target reads plus target-local physical preparation before mutation; larger whole-memory portability routes through resumable sync bundles.",
+      "coveredBy": "management.test.ts + security-temporal.test.ts"
+    },
+    {
+      "id": "bounded-canonical-ingestion",
+      "invariant": "Canonical ingestion resolves identity, reconciles facts, and maintains affected derivation support through point reads and 16-row indexed keysets under exact public row, stable-byte, graph-node, and graph-edge ceilings; admission failure retains only the accepted episode and can be retried without whole-space export.",
+      "coveredBy": "ingestion.test.ts"
+    },
+    {
+      "id": "bounded-ingestion-context",
+      "invariant": "Provider inference context scans facade-visible canonical state through 16-row keysets under exact public row and stable-byte ceilings, fails before disclosure without returning partial context, and resumes the already accepted episode under a larger retry budget.",
+      "coveredBy": "providers.test.ts"
+    },
+    {
+      "id": "bounded-integrity-verification",
+      "invariant": "Integrity verification admits every distinct canonical, journal, projection, and sync row under caller-visible record and stable-byte ceilings, bounds derivation graph work and retained issue details, avoids whole-space export and recursion, and rejects a concurrent logical or metadata transition instead of certifying mixed state.",
+      "coveredBy": "management.test.ts"
+    },
+    {
+      "id": "bounded-retrieval-universe",
+      "invariant": "Recall, neighborhood, residual entity/fact/episode browse, and native episode pages admit every facade-visible storage row through exact caller-bounded record and stable-byte scan work, fail closed before returning a partial view, and expand graph adjacency in linear admitted work without whole-space export.",
+      "coveredBy": "management.test.ts"
+    },
+    {
+      "id": "bounded-personalized-analysis",
+      "invariant": "Seed-weighted PageRank cannot widen the visible graph, is deterministic under reordered inputs, record/graph/iteration/temporal ceilings fail instead of emitting partial analysis, and severity-first findings remain top-bounded with complete counts.",
+      "coveredBy": "management.test.ts"
+    },
+    {
+      "id": "bounded-projection-rebuild",
+      "invariant": "Full projection rebuild streams canonical targets and indexed dependencies through exact row/byte-admitted keysets, never exports the whole space, leaves the prior active generation searchable on admission failure, and reclaims inactive staged rows on a bounded retry.",
+      "coveredBy": "providers.test.ts"
+    },
+    {
+      "id": "bounded-signal-governance",
+      "invariant": "Current/history browse and logical-key selection advance through bounded storage pages while retaining only the requested page, full-set commitments are chunked, writes validate their complete temporal basis view through exact caller-bounded row and byte accounting before mutation while scanning only addressed signal keys, and purge counts revisions before one guarded atomic key-range deletion.",
+      "coveredBy": "signals.test.ts"
+    },
+    {
+      "id": "bounded-storage-statistics",
+      "invariant": "Simple whole-space statistics execute as native storage counts, while latest-per-key, distinct-conflict, stale-projection, and provider-call metrics use advancing keyset scans capped at 1,000 records per page without falling back to full export.",
+      "coveredBy": "management.test.ts"
+    }
+  ]
+}

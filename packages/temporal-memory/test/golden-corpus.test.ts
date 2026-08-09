@@ -1,0 +1,92 @@
+import { describe, expect, it } from 'vitest'
+
+import golden from './fixtures/golden-v1.json' with { type: 'json' }
+
+describe('versioned golden corpus', () => {
+  it('names every deterministic baseline edge case exactly once', () => {
+    const expected = [
+      'atomic-projection-set-cutover',
+      'atomic-schema-migration-resume',
+      'atomic-sync-apply-lifecycle',
+      'bounded-automatic-projection',
+      'bounded-canonical-archive',
+      'bounded-canonical-ingestion',
+      'bounded-change-compaction',
+      'bounded-destructive-reset',
+      'bounded-entity-reconciliation',
+      'bounded-ingestion-context',
+      'bounded-integrity-verification',
+      'bounded-operation-diagnostics',
+      'bounded-personalized-analysis',
+      'bounded-point-reads',
+      'bounded-projection-rebuild',
+      'bounded-provider-disclosure',
+      'bounded-retrieval-universe',
+      'bounded-signal-governance',
+      'bounded-storage-statistics',
+      'bounded-sync-conflict-pages',
+      'bounded-sync-session-diagnostics',
+      'cascading-derivation-invalidation',
+      'closed-construction-options',
+      'closed-core-read-requests',
+      'closed-facade-options',
+      'closed-mutation-control-plane',
+      'closed-sync-control-plane',
+      'coherent-sync-metadata-integrity',
+      'coherent-sync-snapshot-streams',
+      'complete-sync-ancestry-retention',
+      'cross-branch-semantic-conflict',
+      'dependency-derived-sensitivity',
+      'detached-public-outputs',
+      'explicit-correction',
+      'immutable-error-diagnostics',
+      'import-collisions',
+      'interrupted-purge',
+      'known-transaction-rollback',
+      'late-arriving-fact',
+      'maintained-derivation-support',
+      'operation-identity-sealing',
+      'partial-connection-cleanup',
+      'projection-generation-change',
+      'prompt-and-query-injection',
+      'purge-change-scrubbing',
+      'purge-operation-diagnostics',
+      'purge-revision-fencing',
+      'raw-query-post-response-reconciliation',
+      'raw-query-request-snapshot',
+      'repeated-aliases',
+      'resumable-whole-memory-sync',
+      'runtime-owner-recovery',
+      'same-name-distinct-identities',
+      'scoped-embeddings',
+      'scoped-semantic-change-feed',
+      'scoped-versioned-signals',
+      'shared-connection-unknown-outcome',
+      'shared-support-deletion',
+      'signal-dependency-purge',
+      'signal-target-action-contention',
+      'sync-apply-recovery',
+      'sync-bundle-portability',
+      'sync-payload-retention',
+      'sync-purge-dominance',
+      'sync-terminal-detail-retention',
+      'temporal-boundaries',
+      'unknown-transaction-reconciliation',
+      'unresolved-conflict',
+      'validated-sync-checkpoint-metadata',
+      'validated-sync-commit-packs',
+      'validated-sync-owner-reachability',
+      'validated-sync-purge-tombstones',
+      'validated-sync-random-indexes',
+      'validated-sync-session-state',
+    ]
+    const ids = golden.cases.map((item) => item.id)
+
+    expect(golden.version).toBe(1)
+    expect(new Set(ids).size).toBe(ids.length)
+    expect([...ids].sort()).toEqual(expected)
+    expect(
+      golden.cases.every((item) => item.invariant.length > 0 && item.coveredBy.endsWith('.ts')),
+    ).toBe(true)
+  })
+})

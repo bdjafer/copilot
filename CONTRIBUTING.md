@@ -13,6 +13,9 @@ pnpm install     # ALWAYS at the workspace root — never inside a package
 Requirements: Node ≥ 22, pnpm ≥ 10 (the repo pins `packageManager`, so `corepack` picks the
 right one for you).
 
+That is the workspace development floor. The published Temporal Memory runtime supports Node ≥ 20;
+CI verifies its packed Node consumer separately from the full Node 22 workspace gate.
+
 ---
 
 ## Tooling
@@ -27,7 +30,7 @@ formatting live.
 | `pnpm lint:fix` | `oxlint --fix .` |
 | `pnpm typecheck` | `tsgo --noEmit`, recursively |
 | `pnpm test` | `vitest run`, recursively |
-| `pnpm build` | each package's Vite lib build (ESM + IIFE) plus `tsgo -p tsconfig.build.json` for `.d.ts` |
+| `pnpm build` | workspace production builds plus `tsgo` declarations; the comment libraries emit ESM + IIFE, while Temporal Memory is ESM-only |
 | `pnpm format` | `oxfmt --write .` — **only before committing** |
 | `pnpm format:check` | `oxfmt --check .` |
 
@@ -57,7 +60,7 @@ Three kinds, three notations:
 |---|---|---|
 | Internal (another package in **this** repo) | `workspace:*` | `"@astrale-os/comment-core": "workspace:*"` |
 | Astrale-external (another repo, published) | a semver range `>=X.Y.Z <X+1.0.0` | `"@astrale-os/ox": ">=0.1.0 <1.0.0"` |
-| Third-party | normal caret | `"zod": "^4.4.3"` |
+| Third-party | normal caret unless a release contract pins a tested pair | `"zod": "^4.4.3"` |
 
 Adding a runtime dependency to `comment-core` or `browser-copilot` is a decision, not a
 detail — both are meant to be publishable and consumable standalone. `comment-core` currently
@@ -67,6 +70,12 @@ anchoring; `browser-copilot` ships three (`ai`, `nanoid`, and the types-only
 arktype) and messaging are the consumer's own dependency: this repo never declares them in a
 published package's `dependencies` and never imports them from `src/`. `zod` appears in
 `packages/copilot/devDependencies` because the tests use it as a Standard Schema fixture.
+
+Temporal Memory intentionally owns exact `@surrealdb/wasm` and `surrealdb` runtime versions as one
+tested compatibility pair. Do not widen either range independently. Upgrade both as an explicit
+release decision, then rerun the direct/worker Chromium harness and packed-consumer gates. The
+current pair includes an alpha SDK because newer published pairings fail those gates; this is a
+recorded prerelease exception, not permission to use loose prerelease ranges elsewhere.
 
 ---
 
@@ -79,6 +88,7 @@ extension       → { comment-core, comment-ui, browser-copilot }
 comment-ui      → comment-core
 comment-core    → nothing internal      ← never imports the copilot
 browser-copilot → nothing internal      ← never imports comment-core
+temporal-memory → nothing internal      ← independent package; exact Surreal pair
 ```
 
 And neither library ever names a platform:
@@ -101,6 +111,9 @@ library, for exactly this reason.
 `docs/SPEC-comment-core.md` and `docs/SPEC-copilot.md` are **locked implementation contracts**,
 not documentation. Every export, signature, default value, ordering rule and error path in them
 is normative.
+
+Temporal Memory changes are governed by `docs/PRODUCT-temporal-memory.md`,
+`docs/SPEC-temporal-memory.md`, and the evidence boundary in `docs/RELEASE-temporal-memory.md`.
 
 The workflow, in order:
 

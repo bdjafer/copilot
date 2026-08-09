@@ -2,17 +2,20 @@
 
 **Anchored comment threads on any web page, with an LLM copilot replying in the threads.**
 
-Built as **two libraries that know nothing about each other**, plus a Chrome extension whose
-only job is to introduce them.
+The comment system is built as **two libraries that know nothing about each other**, plus a Chrome
+extension whose only job is to introduce them. The repository also hosts an independent Temporal
+Memory evaluation alpha.
 
 | Module | Package | What it is on its own |
 |---|---|---|
 | **Comment engine** | [`@astrale-os/comment-core`](packages/comment-core) + [`@astrale-os/comment-ui`](packages/comment-ui) | Persistent, re-anchorable comment threads on any element of any HTML page: flat replies, resolve/reopen, robust to dynamic DOM. No extension, no AI, no server. |
 | **Copilot** | [`@astrale-os/browser-copilot`](packages/copilot) | A generic browser LLM agent runtime: trigger/listen, host-registered typed tools, a durable run queue that survives service-worker death. Zero knowledge of comments. |
+| **Temporal memory** | [`@astrale-os/temporal-memory`](packages/temporal-memory) | Headless, local-first temporal graph memory with scoped provenance, bitemporal views, hybrid retrieval, embedded SurrealDB persistence, and resumable replica reconciliation. Independent of the comment system. |
 
-That separation is not an aesthetic preference — it is the load-bearing constraint of the whole
-repo. Both libraries must make sense published standalone on npm, so anything that needs both
-halves lives in the extension (or in the demo's tiny glue).
+The comment engine/copilot separation is not an aesthetic preference — it is the load-bearing
+constraint of that system. Both libraries must make sense published standalone on npm, so anything
+that needs both halves lives in the extension (or in the demo's tiny glue). Temporal Memory is not
+part of that bridge or the architecture below.
 
 ---
 
@@ -101,19 +104,24 @@ exp-spec/
 │   ├── comment-core/    # headless engine: anchoring, domain, stores, events, placement
 │   ├── comment-ui/      # badges + composer + thread popover + panel, in one shadow root
 │   ├── copilot/         # @astrale-os/browser-copilot — the generic agent runtime
+│   ├── temporal-memory/ # independent headless temporal graph memory alpha
 │   └── extension/       # MV3 extension (WXT) — THE bridge, the only place both are imported
 ├── apps/
 │   └── demo/            # static pages loading the IIFE bundles via <script> — no extension
 ├── bench/               # agent-browser scenarios + site corpus for anchoring robustness (M2)
 └── docs/
-    ├── SPEC-comment-core.md   # locked implementation contract for modules 1 + 2
-    └── SPEC-copilot.md        # locked implementation contract for module 3
+    ├── SPEC-comment-core.md       # locked implementation contract for modules 1 + 2
+    ├── SPEC-copilot.md            # locked implementation contract for module 3
+    ├── PRODUCT-temporal-memory.md # Temporal Memory product contract
+    ├── SPEC-temporal-memory.md    # Temporal Memory alpha implementation contract
+    └── RELEASE-temporal-memory.md # Temporal Memory release evidence and open gates
 ```
 
-`PLAN.md` is the design document the specs were converged from. The two `docs/SPEC-*.md` files
-are **normative**: every export, signature, default, ordering rule and error path in them is the
-contract the code is tested against. If something looks underspecified there, that is a spec
-bug — fix the spec, then the code.
+`PLAN.md` is the design document the comment specs were converged from. `SPEC-comment-core.md` and
+`SPEC-copilot.md` are **normative**: every export, signature, default, ordering rule and error path
+in them is the contract the code is tested against. Temporal Memory has its own product,
+implementation, and release-evidence documents. If something looks underspecified in the governing
+contract, that is a spec bug — fix the spec, then the code.
 
 ---
 
@@ -121,8 +129,11 @@ bug — fix the spec, then the code.
 
 ```sh
 pnpm install          # ALWAYS at the workspace root, never in a subpackage
-pnpm build            # all packages: ESM + IIFE + .d.ts
+pnpm build            # all workspace production artifacts and declarations
 ```
+
+The comment libraries emit their specified ESM and IIFE artifacts. Temporal Memory is intentionally
+ESM-only.
 
 ### The gate
 
@@ -159,9 +170,11 @@ On every page: <kbd>C</kbd> places a comment, <kbd>A</kbd> asks, <kbd>Esc</kbd> 
 the corner panel lists open, resolved and unanchored threads. Threads live in `localStorage`,
 keyed by page URL.
 
-If the demo works, module 1 works. Each page loads exactly two script tags —
-`comment-core.iife.js` then `comment-ui.iife.js`, in that order, because `comment-ui` reads
-`comment-core` off `globalThis.Comments`.
+If the demo works, module 1 works. Each page loads exactly three script tags —
+`comment-core.iife.js`, then `comment-ui.iife.js` (which reads `comment-core` off
+`globalThis.Comments`), then `comment-ui-glass.iife.js` (the appearance, selected at mount).
+Every page mounts the glass appearance by default; `?theme=default` on any of them switches back
+to the frozen original in one reload.
 
 ### Develop the extension
 
@@ -192,8 +205,12 @@ Internal tool. Not intended for Chrome Web Store publication.
 | [`packages/comment-core/README.md`](packages/comment-core/README.md) | The comment engine: anchoring model, lifecycle, stores, events, headless/SW usage, custom strategies. |
 | [`packages/comment-ui/README.md`](packages/comment-ui/README.md) | Mounting, the CSS custom-property theming contract, `decorate()` recipes, accessibility. |
 | [`packages/copilot/README.md`](packages/copilot/README.md) | The agent runtime: typed tools, run lifecycle, MV3 survival, run stores, error taxonomy. |
+| [`packages/temporal-memory/README.md`](packages/temporal-memory/README.md) | Temporal Memory installation, quick start, runtime support, and security boundary. |
 | [`docs/SPEC-comment-core.md`](docs/SPEC-comment-core.md) | The normative contract, including the edge-case table and every ordering rule. |
 | [`docs/SPEC-copilot.md`](docs/SPEC-copilot.md) | The normative contract for the runtime, including the decision log. |
+| [`docs/PRODUCT-temporal-memory.md`](docs/PRODUCT-temporal-memory.md) | Temporal Memory's semantic locks, capability tiers, and production gates. |
+| [`docs/SPEC-temporal-memory.md`](docs/SPEC-temporal-memory.md) | The exact as-built Temporal Memory alpha contract and evidence boundaries. |
+| [`docs/RELEASE-temporal-memory.md`](docs/RELEASE-temporal-memory.md) | Reproducible release gates and the remaining production-readiness work. |
 | [`CONTRIBUTING.md`](CONTRIBUTING.md) | Tooling, dependency rules, and the TDD-from-spec workflow. |
 
 ---
