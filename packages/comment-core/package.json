@@ -71,12 +71,12 @@
     "nanoid": "^6.0.0"
   },
   "devDependencies": {
-    "happy-dom": "^20.11.1",
-    "vite": "^8.2.0",
+    "happy-dom": "^20.11.2",
+    "vite": "^8.2.1",
     "vitest": "^4.1.10"
   },
   "peerDependencies": {
-    "happy-dom": "^20.11.1"
+    "happy-dom": "^20.11.2"
   },
   "peerDependenciesMeta": {
     "happy-dom": {
