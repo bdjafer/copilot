@@ -15,9 +15,9 @@
   "devDependencies": {
     "@astrale-os/comment-core": "workspace:*",
     "@astrale-os/comment-ui": "workspace:*",
-    "happy-dom": "^20.11.1",
+    "happy-dom": "^20.11.12",
     "sirv-cli": "^3.0.1",
-    "vite": "^8.2.0",
-    "vitest": "^4.1.10"
+    "vite": "^8.2.2",
+    "vitest": "^4.1.11"
   }
 }
