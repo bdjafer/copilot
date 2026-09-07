@@ -18,7 +18,7 @@
     "@astrale-os/comment-ui": "workspace:*",
     "@astrale-os/swarm": "workspace:*",
     "@webext-core/messaging": "^4.0.0",
-    "zod": "^4.4.3"
+    "zod": "^4.5.4"
   },
   "devDependencies": {
     "happy-dom": "^20.11.1",
