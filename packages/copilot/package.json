@@ -58,7 +58,7 @@
   },
   "dependencies": {
     "@standard-schema/spec": "^1.1.0",
-    "ai": "^7.0.44",
+    "ai": "^7.0.92",
     "nanoid": "^6.0.0"
   },
   "devDependencies": {
