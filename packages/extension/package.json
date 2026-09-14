@@ -12,7 +12,7 @@
     "test:watch": "vitest"
   },
   "dependencies": {
-    "@ai-sdk/anthropic": "^4.0.25",
+    "@ai-sdk/anthropic": "^4.0.52",
     "@astrale-os/browser-copilot": "workspace:*",
     "@astrale-os/comment-core": "workspace:*",
     "@astrale-os/comment-ui": "workspace:*",
