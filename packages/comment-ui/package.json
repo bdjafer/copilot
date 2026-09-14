@@ -76,9 +76,9 @@
     "@floating-ui/dom": "^1.8.0"
   },
   "devDependencies": {
-    "happy-dom": "^20.11.1",
-    "vite": "^8.2.0",
-    "vitest": "^4.1.10"
+    "happy-dom": "^20.14.3",
+    "vite": "^8.3.0",
+    "vitest": "^5.0.0"
   },
   "engines": {
     "node": ">=22"
