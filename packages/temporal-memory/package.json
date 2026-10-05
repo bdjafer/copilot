@@ -66,7 +66,7 @@
   },
   "dependencies": {
     "@astrale-os/surrealdb-wasm": "https://github.com/astrale-os/surrealdb.js/releases/download/surrealdb-wasm-v3.0.4-astrale.1/astrale-os-surrealdb-wasm-3.0.4-astrale.1.tgz",
-    "surrealdb": "2.0.8"
+    "surrealdb": "2.0.9"
   },
   "devDependencies": {
     "playwright": "^1.59.0",
