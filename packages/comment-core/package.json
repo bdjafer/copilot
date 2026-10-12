@@ -68,7 +68,7 @@
   "dependencies": {
     "@medv/finder": "^4.0.2",
     "approx-string-match": "^2.0.0",
-    "nanoid": "^6.0.0"
+    "nanoid": "^6.0.2"
   },
   "devDependencies": {
     "happy-dom": "^20.11.1",
