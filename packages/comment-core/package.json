@@ -67,7 +67,7 @@
   },
   "dependencies": {
     "@medv/finder": "^4.0.2",
-    "approx-string-match": "^2.0.0",
+    "approx-string-match": "^2.0.1",
     "nanoid": "^6.0.0"
   },
   "devDependencies": {
