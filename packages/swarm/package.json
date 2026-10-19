@@ -72,7 +72,7 @@
     "demo:serve": "node src/testing/node/serve-mock.ts --port 7717"
   },
   "dependencies": {
-    "@1jehuang/jcode-sdk": "^1.1.0",
+    "@1jehuang/jcode-sdk": "^1.2.0",
     "ulid": "^3.0.1",
     "ws": "^8.19.0"
   },
